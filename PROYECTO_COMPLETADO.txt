@@ -1,0 +1,548 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                ║
+║                  🎉 ¡LINGUISTIKA - PROYECTO COMPLETADO! 🎉                   ║
+║                                                                                ║
+║              Gestor de Horarios y Tutorías para Centro de Idiomas             ║
+║                                                                                ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+📊 ESTADÍSTICAS DEL PROYECTO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ BACKEND (Node.js + Express + SQLite)
+   • 1 servidor principal              (server.js)
+   • 1 sistema de BD                   (database.js)
+   • 7 rutas API completas             (routes/)
+     - Tutores (CRUD)
+     - Cursos (CRUD)
+     - Estudiantes (CRUD)
+     - Matrículas (CRUD)
+     - Horarios (CRUD + Clases)
+     - Pagos (CRUD + Cálculo)
+     - Dashboard (Estadísticas)
+
+✅ FRONTEND (React + Vite)
+   • 1 componente Navbar               (navegación)
+   • 4 formularios reutilizables       (Forms)
+   • 6 páginas completas               (Pages)
+   • 1 servicio de API                 (api.js)
+   • Diseño responsivo con CSS         (estilos)
+
+✅ BASE DE DATOS
+   • 7 tablas relacionadas
+   • Validación referencial
+   • Soft delete habilitado
+
+✅ DOCUMENTACIÓN
+   • README.md                         (general)
+   • QUICKSTART.md                     (inicio rápido)
+   • GUIA_WINDOWS.md                   (específico para Windows)
+   • RESUMEN_PROYECTO.md               (resumen completo)
+   • backend/README.md                 (API docs)
+   • frontend/README.md                (frontend docs)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 CARACTERÍSTICAS IMPLEMENTADAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👨‍🏫 GESTIÓN DE TUTORES
+   ✓ Crear tutores con especialidad y tarifa
+   ✓ Editar información de tutores
+   ✓ Eliminar (desactivar) tutores
+   ✓ Ver tarifa por hora
+
+📚 GESTIÓN DE CURSOS
+   ✓ Crear cursos con niveles A1-C2
+   ✓ Establecer máximo de estudiantes
+   ✓ Editar datos de cursos
+   ✓ Desactivar cursos
+
+🎓 GESTIÓN DE ESTUDIANTES
+   ✓ Registrar nuevos estudiantes
+   ✓ Guardar datos de contacto
+   ✓ Editar información
+   ✓ Desactivar estudiantes
+
+✏️  SISTEMA DE MATRÍCULAS
+   ✓ Matricular estudiante en curso con tutor
+   ✓ Ver todas las matrículas activas
+   ✓ Cancelar matrículas
+   ✓ Historial de inscripciones
+
+📅 DASHBOARD DE HORARIOS
+   ✓ Vista de tutorías por día
+   ✓ Información detallada de clases
+   ✓ Resumen de tutores
+   ✓ Estadísticas generales del centro
+   ✓ Filtro por fecha
+
+💰 GESTIÓN DE PAGOS
+   ✓ Registrar pagos a tutores
+   ✓ Calcular por horas dictadas
+   ✓ Filtrar por tutor
+   ✓ Ver resumen de ingresos
+   ✓ Seguimiento de estado (pendiente/pagado)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🛠️  TECNOLOGÍAS UTILIZADAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+BACKEND:
+   • Node.js 16+
+   • Express.js 4.18
+   • SQLite3 5.1
+   • CORS 2.8
+   • Body Parser 1.20
+
+FRONTEND:
+   • React 18.2
+   • Vite 5.0
+   • React Router DOM 6.20
+   • Axios 1.6
+   • CSS3 (Responsive)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 CÓMO INICIAR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. INSTALAR DEPENDENCIAS:
+
+   PowerShell:
+   $ cd "C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika\backend"
+   $ npm install
+   
+   $ cd "..\frontend"
+   $ npm install
+
+2. EJECUTAR LA APLICACIÓN:
+
+   PowerShell (desde la raíz):
+   $ cd "C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika"
+   $ npm run dev
+
+   O manualmente:
+   Terminal 1: cd backend && npm run dev
+   Terminal 2: cd frontend && npm run dev
+
+3. ACCEDER EN EL NAVEGADOR:
+
+   http://localhost:3000
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📂 ESTRUCTURA DEL PROYECTO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+linguistika/
+│
+├── backend/
+│   ├── routes/
+│   │   ├── tutores.js            ✓ API de tutores
+│   │   ├── cursos.js             ✓ API de cursos
+│   │   ├── estudiantes.js        ✓ API de estudiantes
+│   │   ├── matriculas.js         ✓ API de matrículas
+│   │   ├── horarios.js           ✓ API de horarios/clases
+│   │   ├── pagos.js              ✓ API de pagos
+│   │   └── dashboard.js          ✓ API de estadísticas
+│   ├── database.js               ✓ Esquema de BD
+│   ├── server.js                 ✓ Servidor principal
+│   ├── .env                      ✓ Configuración
+│   └── package.json              ✓ Dependencias
+│
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Navbar.jsx        ✓ Navegación
+│   │   │   ├── FormTutor.jsx     ✓ Formulario tutores
+│   │   │   ├── FormEstudiante.jsx ✓ Formulario estudiantes
+│   │   │   ├── FormCurso.jsx     ✓ Formulario cursos
+│   │   │   └── FormMatricula.jsx ✓ Formulario matrículas
+│   │   ├── pages/
+│   │   │   ├── Dashboard.jsx     ✓ Panel principal
+│   │   │   ├── Tutores.jsx       ✓ Página tutores
+│   │   │   ├── Cursos.jsx        ✓ Página cursos
+│   │   │   ├── Estudiantes.jsx   ✓ Página estudiantes
+│   │   │   ├── Matriculas.jsx    ✓ Página matrículas
+│   │   │   └── Pagos.jsx         ✓ Página pagos
+│   │   ├── services/
+│   │   │   └── api.js            ✓ Servicio API
+│   │   ├── App.jsx               ✓ Componente principal
+│   │   ├── main.jsx              ✓ Punto de entrada
+│   │   ├── App.css               ✓ Estilos globales
+│   │   └── index.css             ✓ Variables CSS
+│   ├── index.html                ✓ HTML principal
+│   ├── vite.config.js            ✓ Config Vite
+│   └── package.json              ✓ Dependencias
+│
+├── package.json                  ✓ Scripts principales
+├── README.md                     ✓ Documentación general
+├── QUICKSTART.md                 ✓ Inicio rápido
+├── GUIA_WINDOWS.md              ✓ Guía para Windows
+├── RESUMEN_PROYECTO.md          ✓ Resumen detallado
+└── .gitignore                    ✓ Archivo git
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 TABLAS DE BASE DE DATOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+tutores
+├── id (PRIMARY KEY)
+├── nombre
+├── email
+├── telefono
+├── especialidad
+├── tarifa_por_hora
+├── estado
+└── created_at
+
+cursos
+├── id (PRIMARY KEY)
+├── nombre
+├── descripcion
+├── nivel
+├── max_estudiantes
+├── estado
+└── created_at
+
+estudiantes
+├── id (PRIMARY KEY)
+├── nombre
+├── email
+├── telefono
+├── fecha_inscripcion
+├── estado
+└── created_at
+
+matriculas
+├── id (PRIMARY KEY)
+├── estudiante_id (FK)
+├── curso_id (FK)
+├── tutor_id (FK)
+├── fecha_inscripcion
+├── estado
+└── created_at
+
+horarios_tutores
+├── id (PRIMARY KEY)
+├── tutor_id (FK)
+├── dia_semana
+├── hora_inicio
+├── hora_fin
+├── estado
+└── created_at
+
+clases
+├── id (PRIMARY KEY)
+├── matricula_id (FK)
+├── fecha
+├── hora_inicio
+├── hora_fin
+├── estado
+├── notas
+└── created_at
+
+pagos
+├── id (PRIMARY KEY)
+├── tutor_id (FK)
+├── clase_id (FK)
+├── cantidad_clases
+├── monto
+├── fecha_pago
+├── estado
+├── descripcion
+└── created_at
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📈 ENDPOINTS DE API
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TUTORES:
+   GET    /api/tutores              → Listar todos
+   POST   /api/tutores              → Crear tutor
+   GET    /api/tutores/:id          → Obtener uno
+   PUT    /api/tutores/:id          → Actualizar
+   DELETE /api/tutores/:id          → Eliminar
+
+CURSOS:
+   GET    /api/cursos               → Listar todos
+   POST   /api/cursos               → Crear curso
+   GET    /api/cursos/:id           → Obtener uno
+   PUT    /api/cursos/:id           → Actualizar
+   DELETE /api/cursos/:id           → Eliminar
+
+ESTUDIANTES:
+   GET    /api/estudiantes          → Listar todos
+   POST   /api/estudiantes          → Crear estudiante
+   GET    /api/estudiantes/:id      → Obtener uno
+   PUT    /api/estudiantes/:id      → Actualizar
+   DELETE /api/estudiantes/:id      → Eliminar
+
+MATRÍCULAS:
+   GET    /api/matriculas           → Listar todas
+   POST   /api/matriculas           → Crear matrícula
+   GET    /api/matriculas/:id       → Obtener una
+   PUT    /api/matriculas/:id       → Actualizar
+   DELETE /api/matriculas/:id       → Eliminar
+
+HORARIOS & CLASES:
+   GET    /api/horarios/tutor/:id   → Horarios del tutor
+   POST   /api/horarios             → Crear horario
+   PUT    /api/horarios/:id         → Actualizar
+   DELETE /api/horarios/:id         → Eliminar
+   POST   /api/horarios/clases/crear → Crear clase
+   GET    /api/horarios/clases/todas → Todas las clases
+
+PAGOS:
+   GET    /api/pagos                → Listar todos
+   POST   /api/pagos                → Registrar pago
+   GET    /api/pagos/tutor/:id      → Pagos del tutor
+   POST   /api/pagos/calcular       → Calcular automático
+   PUT    /api/pagos/:id            → Actualizar
+
+DASHBOARD:
+   GET    /api/dashboard/tutorías/:fecha        → Clases del día
+   GET    /api/dashboard/resumen-tutores/:fecha → Resumen tutores
+   GET    /api/dashboard/estadisticas/general   → Estadísticas
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✨ CARACTERÍSTICAS ESPECIALES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ Diseño Responsivo       → Funciona en desktop, tablet y móvil
+✓ Validación Dual        → Cliente y servidor
+✓ API RESTful            → Bien estructurada y documentada
+✓ Gestión de Errores     → Mensajes claros
+✓ Soft Delete            → Registros no se pierden
+✓ Relaciones Referencial → Integridad de datos
+✓ Autenticación Ready    → Preparado para agregar
+✓ Estadísticas           → Dashboard informativo
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎓 FLUJO DE USO TÍPICO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. CONFIGURACIÓN INICIAL:
+   → Agregar 2-3 tutores con sus especialidades
+   → Crear 3-4 cursos diferentes
+   → Registrar 5-10 estudiantes
+
+2. OPERACIÓN DIARIA:
+   → Crear matrículas para nuevos estudiantes
+   → Programar clases según horarios
+   → Registrar asistencia
+
+3. ADMINISTRACIÓN:
+   → Ver dashboard para supervisar actividad
+   → Registrar pagos a tutores
+   → Generar reportes de ingresos
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 ARCHIVOS DE CONFIGURACIÓN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+backend/.env:
+   PORT=5000
+   NODE_ENV=development
+   DATABASE=./linguistika.db
+
+backend/package.json:
+   - express: Framework web
+   - sqlite3: Base de datos
+   - cors: Comunicación
+   - body-parser: Parsing JSON
+
+frontend/vite.config.js:
+   - Puerto: 3000
+   - Proxy: Redirige /api a localhost:5000
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎨 INTERFAZ DE USUARIO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NAVBAR:
+   📚 Dashboard      → Panel principal con estadísticas
+   👨‍🏫 Tutores         → Gestión de tutores
+   📚 Cursos         → Gestión de cursos
+   🎓 Estudiantes    → Gestión de estudiantes
+   ✏️  Matrículas     → Gestión de matrículas
+   💰 Pagos          → Gestión de pagos
+
+COMPONENTES:
+   • Tarjetas de información
+   • Formularios validados
+   • Tablas interactivas
+   • Alertas visuales
+   • Botones de acción
+   • Filtros dinámicos
+
+COLORES:
+   Primario:  #3498db (Azul)
+   Secundario: #34495e (Gris oscuro)
+   Éxito:     #27ae60 (Verde)
+   Error:     #e74c3c (Rojo)
+   Fondo:     #ecf0f1 (Gris claro)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📚 DOCUMENTACIÓN DISPONIBLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. README.md
+   → Información general del proyecto
+   → Características principales
+   → Requisitos y instalación
+   → Descripción de tecnologías
+
+2. QUICKSTART.md
+   → Guía paso a paso de inicio
+   → Primeros pasos en la aplicación
+   → Troubleshooting básico
+
+3. GUIA_WINDOWS.md (⭐ RECOMENDADO PARA TI)
+   → Instrucciones específicas para Windows
+   → Comandos en PowerShell
+   → Solución de problemas comunes
+   → Checklist de verificación
+
+4. RESUMEN_PROYECTO.md
+   → Resumen ejecutivo del proyecto
+   → Listado de archivos creados
+   → Flujo de uso completo
+   → Próximas mejoras sugeridas
+
+5. backend/README.md
+   → Documentación de API
+   → Lista de endpoints
+   → Esquema de base de datos
+   → Ejemplos de requests
+
+6. frontend/README.md
+   → Documentación del frontend
+   → Estructura de componentes
+   → Guía de desarrollo
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚨 PRIMERAS COSAS A VERIFICAR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+☑ Node.js instalado:
+   $ node --version
+   
+☑ npm actualizado:
+   $ npm --version
+
+☑ Dependencias instaladas:
+   $ cd backend && npm install
+   $ cd ../frontend && npm install
+
+☑ Servidores corriendo:
+   Backend:  http://localhost:5000
+   Frontend: http://localhost:3000
+
+☑ Base de datos creada:
+   $ ls backend/linguistika.db
+
+☑ Navegador accedible:
+   http://localhost:3000
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💡 TIPS Y TRUCOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Guardar en BD:
+   Los datos se guardan en tiempo real. No necesitas guardar archivo.
+
+2. Respaldar datos:
+   Copia el archivo backend/linguistika.db regularmente.
+
+3. Reiniciar:
+   Presiona Ctrl+C en la terminal y ejecuta npm run dev nuevamente.
+
+4. Hot Reload:
+   Los cambios en código se reflejan automáticamente.
+
+5. Limpiar caché:
+   npm cache clean --force
+
+6. Debug:
+   Abre la consola del navegador (F12) para ver errores.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 PRÓXIMAS MEJORAS SUGERIDAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Fase 2:
+   [ ] Autenticación y login
+   [ ] Roles de usuario (Admin, Tutor, Estudiante)
+   [ ] Exportar reportes a PDF
+   [ ] Notificaciones por email
+
+Fase 3:
+   [ ] Horarios recurrentes automáticos
+   [ ] Integración Google Calendar
+   [ ] Gráficos de estadísticas
+   [ ] Sistema de backup automático
+
+Fase 4:
+   [ ] App móvil (React Native)
+   [ ] Multi-idioma
+   [ ] Modo oscuro
+   [ ] Sistema de calificaciones
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ ESTADO DEL PROYECTO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Versión:              1.0.0
+Estado:               ✅ COMPLETADO Y FUNCIONAL
+Ultimo Actualizado:   15 de Enero de 2026
+Sistema Operativo:    Windows 10/11 (PowerShell)
+Node.js Requerido:    16+
+npm Requerido:        8+
+
+Pronto para:          ✅ Desarrollo local
+                      ✅ Testeo de funcionalidades
+                      ✅ Agregar datos de prueba
+                      ⏳ Autenticación (próxima fase)
+                      ⏳ Despliegue a producción
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 ¡LISTO PARA COMENZAR!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Carpeta del Proyecto:
+📍 C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika
+
+Próximo paso:
+1. Abre PowerShell en la carpeta del proyecto
+2. Ejecuta: npm run dev
+3. Abre: http://localhost:3000
+
+¡Disfruta usando LINGUISTIKA! 🎉
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Para más información, consulta la guía específica para Windows:
+→ GUIA_WINDOWS.md
+
+Para troubleshooting:
+→ QUICKSTART.md (sección Troubleshooting)
+
+Documentación de API:
+→ backend/README.md
+
+╚════════════════════════════════════════════════════════════════════════════════╝

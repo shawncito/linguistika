@@ -1,0 +1,16 @@
+{
+  "name": "linguistika",
+  "version": "1.0.0",
+  "description": "Gestor de horarios y tutorías para centro de idiomas",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev:backend",
+    "dev:both": "powershell -Command \"Start-Process powershell -ArgumentList 'cd \\\"$((Get-Location))\\\" ; npm run dev:backend' ; npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "start": "cd backend && npm start"
+  }
+}
