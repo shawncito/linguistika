@@ -38,25 +38,21 @@ Tu aplicación **Linguistika** - un gestor completo de horarios y tutorías para
 
 ### 2. **Frontend (React + Vite)**
 
-**Ubicación**: `/frontend`
+**Ubicación**: `/LInguistika-Studio`
 
-**Componentes** (en `/src/components`):
-- `Navbar.jsx` - Barra de navegación
-- `FormTutor.jsx` - Formulario para crear/editar tutores
-- `FormEstudiante.jsx` - Formulario para estudiantes
-- `FormCurso.jsx` - Formulario para cursos
-- `FormMatricula.jsx` - Formulario para matrículas
+**Componentes** (en `/components`):
+- `UI.tsx` - Componentes reutilizables (Button/Card/Dialog/etc.)
 
-**Páginas** (en `/src/pages`):
-- `Dashboard.jsx` - Panel principal con estadísticas
-- `Tutores.jsx` - Gestión de tutores
-- `Cursos.jsx` - Gestión de cursos
-- `Estudiantes.jsx` - Gestión de estudiantes
-- `Matriculas.jsx` - Gestión de matrículas
-- `Pagos.jsx` - Gestión y cálculo de pagos
+**Vistas** (en `/views`):
+- `Dashboard.tsx`
+- `Tutores.tsx`
+- `Cursos.tsx`
+- `Estudiantes.tsx`
+- `Matriculas.tsx`
+- `Pagos.tsx`
 
-**Servicios** (en `/src/services`):
-- `api.js` - Configuración de axios y métodos API
+**Servicios** (en `/services`):
+- `api.ts` - Configuración de axios y métodos API
 
 ---
 
@@ -108,7 +104,7 @@ cd backend
 npm install
 
 # Frontend (en otra terminal)
-cd frontend
+cd LInguistika-Studio
 npm install
 ```
 
@@ -125,7 +121,7 @@ npm run dev
 cd backend && npm run dev
 
 # Terminal 2 - Frontend
-cd frontend && npm run dev
+npm run dev:frontend
 ```
 
 ### Paso 3: Acceder
@@ -155,31 +151,16 @@ linguistika/
 │   ├── .env
 │   └── README.md
 │
-├── 📁 frontend/
-│   ├── 📁 src/
-│   │   ├── 📁 components/
-│   │   │   ├── Navbar.jsx
-│   │   │   ├── FormTutor.jsx
-│   │   │   ├── FormEstudiante.jsx
-│   │   │   ├── FormCurso.jsx
-│   │   │   └── FormMatricula.jsx
-│   │   ├── 📁 pages/
-│   │   │   ├── Dashboard.jsx
-│   │   │   ├── Tutores.jsx
-│   │   │   ├── Cursos.jsx
-│   │   │   ├── Estudiantes.jsx
-│   │   │   ├── Matriculas.jsx
-│   │   │   └── Pagos.jsx
-│   │   ├── 📁 services/
-│   │   │   └── api.js
-│   │   ├── App.jsx
-│   │   ├── main.jsx
-│   │   ├── App.css
-│   │   └── index.css
+├── 📁 LInguistika-Studio/
+│   ├── App.tsx
 │   ├── index.html
-│   ├── vite.config.js
+│   ├── index.tsx
+│   ├── styles.css
+│   ├── vite.config.ts
 │   ├── package.json
-│   └── README.md
+│   ├── 📁 components/
+│   ├── 📁 views/
+│   └── 📁 services/
 │
 ├── package.json
 ├── README.md
@@ -280,7 +261,7 @@ Consulta los siguientes archivos:
 - `README.md` - Información general y características
 - `QUICKSTART.md` - Guía de inicio rápido paso a paso
 - `backend/README.md` - Documentación de API y endpoints
-- `frontend/README.md` - Documentación del frontend
+- `LInguistika-Studio/README.md` - Documentación del frontend
 
 ---
 
@@ -289,7 +270,7 @@ Consulta los siguientes archivos:
 Tu aplicación Linguistika está **completamente funcional** y lista para usar.
 
 **Próximos pasos**:
-1. Instala las dependencias (`npm install` en backend y frontend)
+1. Instala las dependencias (`npm install` en backend y LInguistika-Studio)
 2. Ejecuta ambos servidores (`npm run dev`)
 3. Abre `http://localhost:3000` en tu navegador
 4. ¡Comienza a registrar tutores, cursos y estudiantes!

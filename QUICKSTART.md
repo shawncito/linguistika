@@ -12,7 +12,7 @@ npm install
 ### Paso 2: Instalar Dependencias del Frontend
 
 ```bash
-cd frontend
+cd LInguistika-Studio
 npm install
 ```
 
@@ -38,8 +38,7 @@ npm run dev
 
 **Terminal 2 - Frontend:**
 ```bash
-cd frontend
-npm run dev
+npm run dev:frontend
 ```
 
 ## 3️⃣ Acceder a la Aplicación
@@ -59,7 +58,7 @@ http://localhost:3000
    - Email (opcional)
    - Teléfono (opcional)
    - Especialidad (Inglés, Francés, etc.)
-   - Tarifa por hora en €
+   - Tarifa por hora en ₡
 4. Haz clic en **"Guardar"**
 
 ### Paso 2: Crear Cursos
@@ -101,7 +100,7 @@ http://localhost:3000
 1. Ve a **"Pagos"**
 2. En el formulario de pago, completa:
    - Tutor
-   - Monto en €
+   - Monto en ₡
    - Descripción (opcional)
 3. Haz clic en **"Registrar Pago"**
 4. Verás un resumen de todos los pagos registrados

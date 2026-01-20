@@ -27,7 +27,7 @@ npm install
 ### 1.2 Instalar dependencias del Frontend
 
 ```powershell
-cd "C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika\frontend"
+cd "C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika\LInguistika-Studio"
 npm install
 ```
 
@@ -58,8 +58,8 @@ npm run dev
 
 **PowerShell 2 - Frontend** (abrir nueva ventana):
 ```powershell
-cd "C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika\frontend"
-npm run dev
+cd "C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika"
+npm run dev:frontend
 ```
 
 ---
@@ -85,6 +85,7 @@ http://localhost:3000
    - Nombre: `María García`
    - Especialidad: `Inglés`
    - Tarifa: `25` (€/hora)
+   - Tarifa: `25000` (₡/hora)
 4. Clic en **"Guardar"**
 
 ### 2. Crear un Curso
@@ -223,7 +224,7 @@ C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika\
 Los logs aparecen directamente en la terminal de PowerShell
 
 ### Editar código
-- Frontend: Edita archivos en `frontend\src\`
+- Frontend: Edita archivos en `LInguistika-Studio\views\` o `LInguistika-Studio\components\`
 - Backend: Edita archivos en `backend\routes\`
 - Los cambios se reflejan automáticamente (hot reload)
 
@@ -235,7 +236,7 @@ Los logs aparecen directamente en la terminal de PowerShell
 cd backend
 npm update
 
-cd ../frontend
+cd ../LInguistika-Studio
 npm update
 ```
 
@@ -248,7 +249,7 @@ cd "C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika"
 npm run build
 ```
 
-Esto crea carpetas `backend/dist` y `frontend/dist` listas para desplegar.
+Esto crea la carpeta `backend/dist` y el build del frontend dentro de `LInguistika-Studio/dist`.
 
 ---
 

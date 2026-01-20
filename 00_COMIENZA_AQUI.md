@@ -75,42 +75,15 @@ C:\Users\reysh\OneDrive - UNADECA\Desktop\linguistika\
 │       ├── 📄 pagos.js
 │       └── 📄 dashboard.js
 │
-├── 📁 frontend/
-│   ├── 📄 index.html                  (HTML principal)
-│   ├── 📄 vite.config.js              (Config Vite)
-│   ├── 📄 package.json                (Dependencias)
-│   ├── 📄 README.md                   (Frontend docs)
-│   └── 📁 src/
-│       ├── 📄 App.jsx                 (App principal)
-│       ├── 📄 main.jsx                (Punto entrada)
-│       ├── 📄 App.css                 (Estilos globales)
-│       ├── 📄 index.css               (Variables CSS)
-│       ├── 📁 components/
-│       │   ├── 📄 Navbar.jsx
-│       │   ├── 📄 Navbar.css
-│       │   ├── 📄 FormTutor.jsx
-│       │   ├── 📄 FormTutor.css
-│       │   ├── 📄 FormEstudiante.jsx
-│       │   ├── 📄 FormEstudiante.css
-│       │   ├── 📄 FormCurso.jsx
-│       │   ├── 📄 FormCurso.css
-│       │   ├── 📄 FormMatricula.jsx
-│       │   └── 📄 FormMatricula.css
-│       ├── 📁 pages/
-│       │   ├── 📄 Dashboard.jsx
-│       │   ├── 📄 Dashboard.css
-│       │   ├── 📄 Tutores.jsx
-│       │   ├── 📄 Tutores.css
-│       │   ├── 📄 Cursos.jsx
-│       │   ├── 📄 Cursos.css
-│       │   ├── 📄 Estudiantes.jsx
-│       │   ├── 📄 Estudiantes.css
-│       │   ├── 📄 Matriculas.jsx
-│       │   ├── 📄 Matriculas.css
-│       │   ├── 📄 Pagos.jsx
-│       │   └── 📄 Pagos.css
-│       └── 📁 services/
-│           └── 📄 api.js
+├── 📁 LInguistika-Studio/              (Frontend activo React/Vite)
+│   ├── 📄 index.html
+│   ├── 📄 index.tsx
+│   ├── 📄 styles.css
+│   ├── 📄 vite.config.ts
+│   ├── 📄 package.json
+│   ├── 📁 views/
+│   ├── 📁 components/
+│   └── 📁 services/
 │
 └── 📁 .github/
 ```
@@ -133,7 +106,7 @@ cd backend
 npm install
 
 # Frontend
-cd ../frontend
+cd ../LInguistika-Studio
 npm install
 ```
 
@@ -352,7 +325,7 @@ taskkill /PID <número> /F
 - `GUIA_WINDOWS.md` - Para tu sistema
 - `QUICKSTART.md` - Inicio rápido
 - `backend/README.md` - API
-- `frontend/README.md` - React
+- `LInguistika-Studio/README.md` - Frontend
 
 ---
 
