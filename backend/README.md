@@ -1,255 +1,175 @@
-# Linguistika Backend
+# 🔧 Backend - Linguistika v2.0
 
-Backend API REST para la aplicación de gestión de horarios y tutorías.
+Backend Node.js + Express + Supabase para el sistema de gestión de tutorías Linguistika.
 
-## 🚀 MIGRACIÓN A SUPABASE COMPLETADA
+## 📁 Estructura del Proyecto
 
-✅ El proyecto ha sido **migrado completamente de SQLite a Supabase (PostgreSQL)**
+```
+backend/
+├── docs/                      # 📚 Documentación completa
+│   ├── guias/                # Guías de configuración y uso
+│   ├── migraciones/          # Scripts SQL para base de datos
+│   ├── MIGRACION-COMPLETADA.md
+│   └── RESUMEN-FINAL.md
+├── middleware/               # Middleware de autenticación
+│   └── auth.js
+├── routes/                   # Rutas de la API
+│   ├── auth.js              # Login/registro
+│   ├── cursos.js            # Gestión de cursos
+│   ├── dashboard.js         # Estadísticas
+│   ├── estudiantes.js       # Gestión de estudiantes
+│   ├── horarios.js          # Horarios
+│   ├── horas-trabajo.js     # Registro de horas
+│   ├── matriculas.js        # Matrículas
+│   ├── pagos.js             # Gestión de pagos
+│   └── tutores.js           # Gestión de tutores
+├── .env                      # Variables de entorno (NO SUBIR)
+├── .env.example             # Ejemplo de configuración
+├── database.js              # Conexión SQLite (legacy)
+├── migrate-data.js          # Script de migración
+├── server.js                # Servidor Express
+├── supabase.js              # Cliente Supabase
+└── package.json             # Dependencias
 
-### 📖 Guías de Configuración
+```
 
-1. **[MIGRACION-COMPLETADA.md](./MIGRACION-COMPLETADA.md)** - Resumen de la migración y próximos pasos
-2. **[GUIA-SUPABASE.md](./GUIA-SUPABASE.md)** - Guía detallada paso a paso
+## 🚀 Inicio Rápido
 
-### ⚡ Quick Start (15 minutos)
-
+### 1. Instalar dependencias
 ```bash
-# 1. Crear proyecto en Supabase (https://app.supabase.com)
-# 2. Ejecutar schema SQL (copiar contenido de supabase-schema.sql al SQL Editor)
-# 3. Configurar variables de entorno en .env
-# 4. Instalar dependencias
 npm install
+```
 
-# 5. Iniciar servidor
+### 2. Configurar variables de entorno
+Copia `.env.example` a `.env` y configura:
+```env
+SUPABASE_URL=tu-url-de-supabase
+SUPABASE_ANON_KEY=tu-clave-anonima
+JWT_SECRET=tu-secreto-jwt
+PORT=3000
+```
+
+### 3. Ejecutar migraciones SQL
+Ve a Supabase SQL Editor y ejecuta en orden:
+1. `docs/migraciones/supabase-schema.sql` - Schema base
+2. `docs/migraciones/MIGRACION_CURSOS_COMPLETA.sql` - Actualización de cursos
+3. `docs/migraciones/MIGRACION_SESIONES_MOVIMIENTOS.sql` - Tablas de sesiones y pagos
+
+### 4. Iniciar servidor
+```bash
 npm run dev
 ```
 
-**Credenciales de prueba:**
-- Usuario: `admin`
-- Contraseña: `admin123`
+Servidor corriendo en: `http://localhost:3000`
+
+## 📡 Endpoints Disponibles
+
+### Autenticación
+- `POST /api/auth/login` - Iniciar sesión
+- `POST /api/auth/register` - Registrar usuario
+
+### Tutores
+- `GET /api/tutores` - Listar todos los tutores
+- `POST /api/tutores` - Crear tutor
+- `PUT /api/tutores/:id` - Actualizar tutor
+- `DELETE /api/tutores/:id` - Eliminar tutor
+
+### Cursos
+- `GET /api/cursos` - Listar todos los cursos
+- `GET /api/cursos/:id` - Obtener curso específico
+- `POST /api/cursos` - Crear curso (con dias_schedule)
+- `PUT /api/cursos/:id` - Actualizar curso
+- `DELETE /api/cursos/:id` - Eliminar curso
+
+### Estudiantes
+- `GET /api/estudiantes` - Listar estudiantes
+- `POST /api/estudiantes` - Crear estudiante
+- `PUT /api/estudiantes/:id` - Actualizar estudiante
+- `DELETE /api/estudiantes/:id` - Eliminar estudiante
+
+### Matrículas
+- `GET /api/matriculas` - Listar matrículas
+- `POST /api/matriculas` - Crear matrícula
+- `PUT /api/matriculas/:id` - Actualizar matrícula
+- `DELETE /api/matriculas/:id` - Eliminar matrícula
+
+### Pagos
+- `GET /api/pagos` - Listar pagos
+- `POST /api/pagos` - Registrar pago
+- `PUT /api/pagos/:id` - Actualizar pago
+- `DELETE /api/pagos/:id` - Eliminar pago
+
+### Dashboard
+- `GET /api/dashboard/stats` - Estadísticas generales
+
+## 🔐 Seguridad
+
+- **JWT Authentication**: Todas las rutas protegidas requieren token JWT
+- **RLS Policies**: Row Level Security habilitado en Supabase
+- **CORS**: Configurado para frontend en desarrollo y producción
+
+## 🗄️ Base de Datos
+
+### Tablas Principales
+- `tutores` - Información de tutores (sin tarifa_por_hora)
+- `cursos` - Cursos con horarios personalizados (dias_schedule)
+- `estudiantes` - Estudiantes registrados
+- `matriculas` - Relación estudiante-curso
+- `pagos` - Pagos de estudiantes
+- `sesiones_clases` - Sesiones programadas/dadas ⚠️ PENDIENTE IMPLEMENTAR
+- `movimientos_dinero` - Flujo de ingresos/egresos ⚠️ PENDIENTE IMPLEMENTAR
+
+### Nuevos Campos (v2.0)
+- `cursos.dias_schedule` (JSONB) - Horarios personalizados por día
+  ```json
+  {
+    "Lunes": {
+      "turno": "Tarde",
+      "hora_inicio": "14:00",
+      "hora_fin": "17:00",
+      "duracion_horas": 3
+    }
+  }
+  ```
+- `cursos.costo_curso` - Costo total del curso
+- `cursos.pago_tutor` - Pago al tutor por curso
+
+## 📚 Documentación Adicional
+
+- **[GUIA-SUPABASE.md](docs/guias/GUIA-SUPABASE.md)** - Configuración de Supabase
+- **[CHECKLIST-SUPABASE.md](docs/guias/CHECKLIST-SUPABASE.md)** - Checklist de migración
+- **[MIGRACION-COMPLETADA.md](docs/MIGRACION-COMPLETADA.md)** - Resumen de migración
+- **[docs/migraciones/](docs/migraciones/)** - Scripts SQL completos
+
+## 🛠️ Scripts Disponibles
+
+```bash
+npm run dev    # Iniciar en modo desarrollo (nodemon)
+npm start      # Iniciar en producción
+```
+
+## 🐛 Troubleshooting
+
+### Error: "connect ECONNREFUSED"
+- Verifica que las variables SUPABASE_URL y SUPABASE_ANON_KEY estén correctas
+- Asegúrate de tener conexión a internet
+
+### Error: "JWT malformed"
+- Verifica JWT_SECRET en .env
+- Regenera el token desde el login
+
+### Error: "relation does not exist"
+- Ejecuta las migraciones SQL en Supabase SQL Editor
+
+## 📝 Cambios Recientes (19 Enero 2026)
+
+✅ Eliminado `tarifa_por_hora` de tutores  
+✅ Agregado `dias_schedule` a cursos  
+✅ Agregado `costo_curso` y `pago_tutor` a cursos  
+✅ Creadas tablas `sesiones_clases` y `movimientos_dinero` (SQL listo)  
+⏳ Pendiente: Endpoints para sesiones y movimientos
 
 ---
 
-## Instalación
-
-```bash
-npm install
-```
-
-## Desarrollo
-
-```bash
-npm run dev
-```
-
-El servidor estará disponible en `http://localhost:5000`
-
-## Endpoints de la API
-
-### Tutores
-- `GET /api/tutores` - Obtener todos los tutores
-- `GET /api/tutores/:id` - Obtener un tutor por ID
-- `POST /api/tutores` - Crear nuevo tutor
-- `PUT /api/tutores/:id` - Actualizar tutor
-- `DELETE /api/tutores/:id` - Desactivar tutor
-
-### Cursos
-- `GET /api/cursos` - Obtener todos los cursos
-- `GET /api/cursos/:id` - Obtener un curso por ID
-- `POST /api/cursos` - Crear nuevo curso
-- `PUT /api/cursos/:id` - Actualizar curso
-- `DELETE /api/cursos/:id` - Desactivar curso
-
-### Estudiantes
-- `GET /api/estudiantes` - Obtener todos los estudiantes
-- `GET /api/estudiantes/:id` - Obtener un estudiante por ID
-- `POST /api/estudiantes` - Crear nuevo estudiante
-- `PUT /api/estudiantes/:id` - Actualizar estudiante
-- `DELETE /api/estudiantes/:id` - Desactivar estudiante
-
-### Matrículas
-- `GET /api/matriculas` - Obtener todas las matrículas
-- `GET /api/matriculas/:id` - Obtener una matrícula por ID
-- `POST /api/matriculas` - Crear nueva matrícula
-- `PUT /api/matriculas/:id` - Actualizar matrícula
-- `DELETE /api/matriculas/:id` - Desactivar matrícula
-
-### Horarios
-- `GET /api/horarios/tutor/:tutor_id` - Obtener horarios de un tutor
-- `POST /api/horarios` - Crear nuevo horario
-- `PUT /api/horarios/:id` - Actualizar horario
-- `DELETE /api/horarios/:id` - Desactivar horario
-- `GET /api/horarios/clases/todas` - Obtener todas las clases
-- `POST /api/horarios/clases/crear` - Crear nueva clase (tutoría)
-
-### Pagos
-- `GET /api/pagos` - Obtener todos los pagos
-- `GET /api/pagos/tutor/:tutor_id` - Obtener pagos de un tutor
-- `POST /api/pagos` - Registrar nuevo pago
-- `POST /api/pagos/calcular` - Calcular pago automático
-- `PUT /api/pagos/:id` - Actualizar pago
-
-### Dashboard
-- `GET /api/dashboard/tutorías/:fecha` - Obtener tutorías del día
-- `GET /api/dashboard/resumen-tutores/:fecha` - Resumen de tutores
-- `GET /api/dashboard/estadisticas/general` - Estadísticas generales
-
-## Estructura de Base de Datos
-
-### Tabla: tutores
-```sql
-- id (INTEGER PRIMARY KEY)
-- nombre (TEXT)
-- email (TEXT)
-- telefono (TEXT)
-- especialidad (TEXT)
-- tarifa_por_hora (REAL)
-- estado (BOOLEAN)
-- created_at (DATETIME)
-```
-
-### Tabla: cursos
-```sql
-- id (INTEGER PRIMARY KEY)
-- nombre (TEXT)
-- descripcion (TEXT)
-- nivel (TEXT)
-- max_estudiantes (INTEGER)
-- estado (BOOLEAN)
-- created_at (DATETIME)
-```
-
-### Tabla: estudiantes
-```sql
-- id (INTEGER PRIMARY KEY)
-- nombre (TEXT)
-- email (TEXT)
-- telefono (TEXT)
-- fecha_inscripcion (DATETIME)
-- estado (BOOLEAN)
-- created_at (DATETIME)
-```
-
-### Tabla: matriculas
-```sql
-- id (INTEGER PRIMARY KEY)
-- estudiante_id (FK)
-- curso_id (FK)
-- tutor_id (FK)
-- fecha_inscripcion (DATETIME)
-- estado (BOOLEAN)
-- created_at (DATETIME)
-```
-
-### Tabla: horarios_tutores
-```sql
-- id (INTEGER PRIMARY KEY)
-- tutor_id (FK)
-- dia_semana (TEXT)
-- hora_inicio (TEXT)
-- hora_fin (TEXT)
-- estado (BOOLEAN)
-- created_at (DATETIME)
-```
-
-### Tabla: clases
-```sql
-- id (INTEGER PRIMARY KEY)
-- matricula_id (FK)
-- fecha (DATE)
-- hora_inicio (TEXT)
-- hora_fin (TEXT)
-- estado (TEXT)
-- notas (TEXT)
-- created_at (DATETIME)
-```
-
-### Tabla: pagos
-```sql
-- id (INTEGER PRIMARY KEY)
-- tutor_id (FK)
-- clase_id (FK)
-- cantidad_clases (INTEGER)
-- monto (REAL)
-- fecha_pago (DATETIME)
-- estado (TEXT)
-- descripcion (TEXT)
-- created_at (DATETIME)
-```
-
-## Variables de Entorno (.env)
-
-```
-PORT=5000
-NODE_ENV=development
-DATABASE=./linguistika.db
-```
-
-## Ejemplos de Requests
-
-### Crear Tutor
-```bash
-curl -X POST http://localhost:5000/api/tutores \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nombre": "María García",
-    "email": "maria@example.com",
-    "telefono": "+34 123456789",
-    "especialidad": "Inglés",
-    "tarifa_por_hora": 25
-  }'
-```
-
-### Crear Matrícula
-```bash
-curl -X POST http://localhost:5000/api/matriculas \
-  -H "Content-Type: application/json" \
-  -d '{
-    "estudiante_id": 1,
-    "curso_id": 1,
-    "tutor_id": 1
-  }'
-```
-
-### Registrar Pago
-```bash
-curl -X POST http://localhost:5000/api/pagos \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tutor_id": 1,
-    "monto": 100,
-    "descripcion": "Clases semana 1"
-  }'
-```
-
-## Respuestas de Error
-
-La API devuelve códigos de estado HTTP apropiados:
-
-- `200` - Éxito
-- `201` - Creado
-- `400` - Solicitud incorrecta
-- `404` - No encontrado
-- `500` - Error del servidor
-
-Las respuestas de error incluyen un mensaje descriptivo:
-```json
-{
-  "error": "Descripción del error"
-}
-```
-
-## Tecnologías
-
-- Node.js
-- Express.js
-- SQLite3
-- CORS
-- Body Parser
-
-## Notas
-
-- La base de datos SQLite se crea automáticamente al iniciar el servidor
-- Las claves foráneas están habilitadas
-- Se validan los datos requeridos en cada endpoint
-- Los registros pueden desactivarse (soft delete) en lugar de eliminarse
+**Versión:** 2.0  
+**Última actualización:** 19 Enero 2026
