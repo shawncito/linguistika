@@ -1,14 +1,27 @@
 import express from 'express';
-import Database from '../database.js';
+import { supabase } from '../supabase.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
-const db = new Database();
 
 // GET - Listar todos los tutores
 router.get('/', async (req, res) => {
   try {
-    const tutores = await db.all('SELECT * FROM tutores WHERE estado = 1');
-    res.json(tutores);
+    const { data: tutores, error } = await supabase
+      .from('tutores')
+      .select('*')
+      .eq('estado', true)
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    
+    // Parse JSON fields
+    const tutoresResponse = tutores.map(t => ({
+      ...t,
+      dias_turno: t.dias_turno ? JSON.parse(t.dias_turno) : null
+    }));
+
+    res.json(tutoresResponse);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -17,11 +30,24 @@ router.get('/', async (req, res) => {
 // GET - Obtener un tutor por ID
 router.get('/:id', async (req, res) => {
   try {
-    const tutor = await db.get('SELECT * FROM tutores WHERE id = ?', [req.params.id]);
+    const { data: tutor, error } = await supabase
+      .from('tutores')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+    
+    if (error) throw error;
     if (!tutor) {
       return res.status(404).json({ error: 'Tutor no encontrado' });
     }
-    res.json(tutor);
+
+    // Parse JSON fields
+    const tutorResponse = {
+      ...tutor,
+      dias_turno: tutor.dias_turno ? JSON.parse(tutor.dias_turno) : null
+    };
+
+    res.json(tutorResponse);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -30,20 +56,51 @@ router.get('/:id', async (req, res) => {
 // POST - Crear nuevo tutor
 router.post('/', async (req, res) => {
   try {
-    const { nombre, email, telefono, especialidad, tarifa_por_hora } = req.body;
+    const { 
+      nombre, email, telefono, especialidad, tarifa_por_hora,
+      dias_turno = null
+    } = req.body;
+    const userId = req.user?.id;
     
     if (!nombre || !especialidad || !tarifa_por_hora) {
       return res.status(400).json({ error: 'Campos requeridos: nombre, especialidad, tarifa_por_hora' });
     }
 
-    const result = await db.run(
-      'INSERT INTO tutores (nombre, email, telefono, especialidad, tarifa_por_hora) VALUES (?, ?, ?, ?, ?)',
-      [nombre, email, telefono, especialidad, tarifa_por_hora]
-    );
+    // Validar formato de teléfono si se proporciona
+    const phoneRegex = /^(\+506\s?)?\d{4}-\d{4}$/;
+    if (telefono && !phoneRegex.test(telefono.trim())) {
+      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +506 8888-8888' });
+    }
+
+    const { data: tutor, error } = await supabase
+      .from('tutores')
+      .insert({
+        nombre,
+        email: email || null,
+        telefono: telefono || null,
+        especialidad,
+        tarifa_por_hora,
+        dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
+        created_by: userId,
+        estado: true
+      })
+      .select()
+      .single();
     
-    const tutor = await db.get('SELECT * FROM tutores WHERE id = ?', [result.id]);
-    res.status(201).json(tutor);
+    if (error) {
+      console.error('Error en Supabase:', error);
+      throw error;
+    }
+
+    // Parse JSON fields for response
+    const tutorResponse = {
+      ...tutor,
+      dias_turno: tutor.dias_turno ? JSON.parse(tutor.dias_turno) : null
+    };
+
+    res.status(201).json(tutorResponse);
   } catch (error) {
+    console.error('Error al crear tutor:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -51,15 +108,44 @@ router.post('/', async (req, res) => {
 // PUT - Actualizar tutor
 router.put('/:id', async (req, res) => {
   try {
-    const { nombre, email, telefono, especialidad, tarifa_por_hora, estado } = req.body;
+    const { 
+      nombre, email, telefono, especialidad, tarifa_por_hora,
+      dias_turno = null, estado 
+    } = req.body;
+    const userId = req.user?.id;
     
-    await db.run(
-      'UPDATE tutores SET nombre = ?, email = ?, telefono = ?, especialidad = ?, tarifa_por_hora = ?, estado = ? WHERE id = ?',
-      [nombre, email, telefono, especialidad, tarifa_por_hora, estado, req.params.id]
-    );
+    // Validar formato de teléfono si se proporciona
+    const phoneRegex = /^(\+506\s?)?\d{4}-\d{4}$/;
+    if (telefono && !phoneRegex.test(telefono.trim())) {
+      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +506 8888-8888' });
+    }
+
+    const { data: tutor, error } = await supabase
+      .from('tutores')
+      .update({
+        nombre,
+        email: email || null,
+        telefono: telefono || null,
+        especialidad,
+        tarifa_por_hora,
+        dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
+        estado,
+        updated_by: userId,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single();
     
-    const tutor = await db.get('SELECT * FROM tutores WHERE id = ?', [req.params.id]);
-    res.json(tutor);
+    if (error) throw error;
+
+    // Parse JSON fields for response
+    const tutorResponse = {
+      ...tutor,
+      dias_turno: tutor.dias_turno ? JSON.parse(tutor.dias_turno) : null
+    };
+
+    res.json(tutorResponse);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -68,7 +154,17 @@ router.put('/:id', async (req, res) => {
 // DELETE - Desactivar tutor
 router.delete('/:id', async (req, res) => {
   try {
-    await db.run('UPDATE tutores SET estado = 0 WHERE id = ?', [req.params.id]);
+    const userId = req.user?.id;
+    const { error } = await supabase
+      .from('tutores')
+      .update({
+        estado: false,
+        updated_by: userId,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.params.id);
+    
+    if (error) throw error;
     res.json({ message: 'Tutor desactivado correctamente' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -76,3 +172,4 @@ router.delete('/:id', async (req, res) => {
 });
 
 export default router;
+

@@ -1,14 +1,26 @@
 import express from 'express';
-import Database from '../database.js';
+import { supabase } from '../supabase.js';
 
 const router = express.Router();
-const db = new Database();
 
 // GET - Listar todos los cursos
 router.get('/', async (req, res) => {
   try {
-    const cursos = await db.all('SELECT * FROM cursos WHERE estado = 1');
-    res.json(cursos);
+    const { data: cursos, error } = await supabase
+      .from('cursos')
+      .select('*')
+      .eq('estado', true)
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+
+    // Parse JSON fields
+    const cursosResponse = cursos.map(c => ({
+      ...c,
+      dias_turno: c.dias_turno ? JSON.parse(c.dias_turno) : null
+    }));
+
+    res.json(cursosResponse);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -17,11 +29,24 @@ router.get('/', async (req, res) => {
 // GET - Obtener un curso por ID
 router.get('/:id', async (req, res) => {
   try {
-    const curso = await db.get('SELECT * FROM cursos WHERE id = ?', [req.params.id]);
+    const { data: curso, error } = await supabase
+      .from('cursos')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+    
+    if (error) throw error;
     if (!curso) {
       return res.status(404).json({ error: 'Curso no encontrado' });
     }
-    res.json(curso);
+
+    // Parse JSON fields
+    const cursoResponse = {
+      ...curso,
+      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null
+    };
+
+    res.json(cursoResponse);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -30,20 +55,48 @@ router.get('/:id', async (req, res) => {
 // POST - Crear nuevo curso
 router.post('/', async (req, res) => {
   try {
-    const { nombre, descripcion, nivel, max_estudiantes } = req.body;
+    const { 
+      nombre, descripcion, nivel, max_estudiantes = null,
+      tipo_clase = 'grupal', dias_turno = null
+    } = req.body;
+    const userId = req.user?.id;
     
     if (!nombre) {
       return res.status(400).json({ error: 'Campo requerido: nombre' });
     }
 
-    const result = await db.run(
-      'INSERT INTO cursos (nombre, descripcion, nivel, max_estudiantes) VALUES (?, ?, ?, ?)',
-      [nombre, descripcion, nivel, max_estudiantes || 10]
-    );
+    // Si es tutoría, max_estudiantes debe ser null
+    const maxEstudiantes = tipo_clase === 'tutoria' ? null : (max_estudiantes || 10);
+
+    const { data: curso, error } = await supabase
+      .from('cursos')
+      .insert({
+        nombre,
+        descripcion,
+        nivel: nivel || 'None',
+        max_estudiantes: maxEstudiantes,
+        tipo_clase,
+        dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
+        created_by: userId,
+        estado: true
+      })
+      .select()
+      .single();
     
-    const curso = await db.get('SELECT * FROM cursos WHERE id = ?', [result.id]);
-    res.status(201).json(curso);
+    if (error) {
+      console.error('Error en Supabase:', error);
+      throw error;
+    }
+
+    // Parse JSON fields for response
+    const cursoResponse = {
+      ...curso,
+      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null
+    };
+
+    res.status(201).json(cursoResponse);
   } catch (error) {
+    console.error('Error al crear curso:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -51,15 +104,41 @@ router.post('/', async (req, res) => {
 // PUT - Actualizar curso
 router.put('/:id', async (req, res) => {
   try {
-    const { nombre, descripcion, nivel, max_estudiantes, estado } = req.body;
+    const { 
+      nombre, descripcion, nivel, max_estudiantes = null,
+      tipo_clase = 'grupal', dias_turno = null, estado 
+    } = req.body;
+    const userId = req.user?.id;
     
-    await db.run(
-      'UPDATE cursos SET nombre = ?, descripcion = ?, nivel = ?, max_estudiantes = ?, estado = ? WHERE id = ?',
-      [nombre, descripcion, nivel, max_estudiantes, estado, req.params.id]
-    );
+    // Si es tutoría, max_estudiantes debe ser null
+    const maxEstudiantes = tipo_clase === 'tutoria' ? null : max_estudiantes;
+
+    const { data: curso, error } = await supabase
+      .from('cursos')
+      .update({
+        nombre,
+        descripcion,
+        nivel,
+        max_estudiantes: maxEstudiantes,
+        tipo_clase,
+        dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
+        estado,
+        updated_by: userId,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single();
     
-    const curso = await db.get('SELECT * FROM cursos WHERE id = ?', [req.params.id]);
-    res.json(curso);
+    if (error) throw error;
+
+    // Parse JSON fields for response
+    const cursoResponse = {
+      ...curso,
+      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null
+    };
+
+    res.json(cursoResponse);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -68,7 +147,17 @@ router.put('/:id', async (req, res) => {
 // DELETE - Desactivar curso
 router.delete('/:id', async (req, res) => {
   try {
-    await db.run('UPDATE cursos SET estado = 0 WHERE id = ?', [req.params.id]);
+    const userId = req.user?.id;
+    const { error } = await supabase
+      .from('cursos')
+      .update({
+        estado: false,
+        updated_by: userId,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.params.id);
+    
+    if (error) throw error;
     res.json({ message: 'Curso desactivado correctamente' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -76,3 +165,4 @@ router.delete('/:id', async (req, res) => {
 });
 
 export default router;
+
