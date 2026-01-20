@@ -57,13 +57,13 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { 
-      nombre, email, telefono, especialidad, tarifa_por_hora,
+      nombre, email, telefono, especialidad,
       dias_turno = null
     } = req.body;
     const userId = req.user?.id;
     
-    if (!nombre || !especialidad || !tarifa_por_hora) {
-      return res.status(400).json({ error: 'Campos requeridos: nombre, especialidad, tarifa_por_hora' });
+    if (!nombre || !especialidad) {
+      return res.status(400).json({ error: 'Campos requeridos: nombre, especialidad' });
     }
 
     // Validar formato de teléfono si se proporciona
@@ -79,7 +79,6 @@ router.post('/', async (req, res) => {
         email: email || null,
         telefono: telefono || null,
         especialidad,
-        tarifa_por_hora,
         dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
         created_by: userId,
         estado: true
@@ -109,7 +108,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { 
-      nombre, email, telefono, especialidad, tarifa_por_hora,
+      nombre, email, telefono, especialidad,
       dias_turno = null, estado 
     } = req.body;
     const userId = req.user?.id;
@@ -127,7 +126,6 @@ router.put('/:id', async (req, res) => {
         email: email || null,
         telefono: telefono || null,
         especialidad,
-        tarifa_por_hora,
         dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
         estado,
         updated_by: userId,

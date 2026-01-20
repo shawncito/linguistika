@@ -17,7 +17,9 @@ router.get('/', async (req, res) => {
     // Parse JSON fields
     const cursosResponse = cursos.map(c => ({
       ...c,
-      dias_turno: c.dias_turno ? JSON.parse(c.dias_turno) : null
+      dias: c.dias ? JSON.parse(c.dias) : null,
+      dias_turno: c.dias_turno ? JSON.parse(c.dias_turno) : null,
+      dias_schedule: c.dias_schedule ? JSON.parse(c.dias_schedule) : null
     }));
 
     res.json(cursosResponse);
@@ -43,7 +45,9 @@ router.get('/:id', async (req, res) => {
     // Parse JSON fields
     const cursoResponse = {
       ...curso,
-      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null
+      dias: curso.dias ? JSON.parse(curso.dias) : null,
+      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null,
+      dias_schedule: curso.dias_schedule ? JSON.parse(curso.dias_schedule) : null
     };
 
     res.json(cursoResponse);
@@ -57,7 +61,8 @@ router.post('/', async (req, res) => {
   try {
     const { 
       nombre, descripcion, nivel, max_estudiantes = null,
-      tipo_clase = 'grupal', dias_turno = null
+      tipo_clase = 'grupal', dias = null, dias_turno = null, dias_schedule = null,
+      costo_curso = 0, pago_tutor = 0
     } = req.body;
     const userId = req.user?.id;
     
@@ -76,7 +81,11 @@ router.post('/', async (req, res) => {
         nivel: nivel || 'None',
         max_estudiantes: maxEstudiantes,
         tipo_clase,
+        dias: dias ? JSON.stringify(dias) : null,
         dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
+        dias_schedule: dias_schedule ? JSON.stringify(dias_schedule) : null,
+        costo_curso: parseFloat(costo_curso) || 0,
+        pago_tutor: parseFloat(pago_tutor) || 0,
         created_by: userId,
         estado: true
       })
@@ -91,7 +100,9 @@ router.post('/', async (req, res) => {
     // Parse JSON fields for response
     const cursoResponse = {
       ...curso,
-      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null
+      dias: curso.dias ? JSON.parse(curso.dias) : null,
+      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null,
+      dias_schedule: curso.dias_schedule ? JSON.parse(curso.dias_schedule) : null
     };
 
     res.status(201).json(cursoResponse);
@@ -106,7 +117,8 @@ router.put('/:id', async (req, res) => {
   try {
     const { 
       nombre, descripcion, nivel, max_estudiantes = null,
-      tipo_clase = 'grupal', dias_turno = null, estado 
+      tipo_clase = 'grupal', dias = null, dias_turno = null, dias_schedule = null, estado,
+      costo_curso = 0, pago_tutor = 0
     } = req.body;
     const userId = req.user?.id;
     
@@ -121,7 +133,11 @@ router.put('/:id', async (req, res) => {
         nivel,
         max_estudiantes: maxEstudiantes,
         tipo_clase,
+        dias: dias ? JSON.stringify(dias) : null,
         dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
+        dias_schedule: dias_schedule ? JSON.stringify(dias_schedule) : null,
+        costo_curso: parseFloat(costo_curso) || 0,
+        pago_tutor: parseFloat(pago_tutor) || 0,
         estado,
         updated_by: userId,
         updated_at: new Date().toISOString()
@@ -135,7 +151,9 @@ router.put('/:id', async (req, res) => {
     // Parse JSON fields for response
     const cursoResponse = {
       ...curso,
-      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null
+      dias: curso.dias ? JSON.parse(curso.dias) : null,
+      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null,
+      dias_schedule: curso.dias_schedule ? JSON.parse(curso.dias_schedule) : null
     };
 
     res.json(cursoResponse);

@@ -49,7 +49,7 @@ Una aplicación web completa para gestionar eficientemente un centro de idiomas.
 - **CORS** - Para comunicación entre frontend y backend
 
 ### Frontend
-- **React 18** - Librería de UI
+- **React** - Librería de UI
 - **Vite** - Build tool y dev server
 - **React Router** - Enrutamiento
 - **Axios** - Cliente HTTP
@@ -72,27 +72,12 @@ linguistika/
 │   ├── .env                 # Variables de entorno
 │   └── package.json
 │
-├── frontend/
-│   ├── src/
-│   │   ├── components/      # Componentes reutilizables
-│   │   │   ├── Navbar.jsx
-│   │   │   ├── FormTutor.jsx
-│   │   │   ├── FormEstudiante.jsx
-│   │   │   ├── FormCurso.jsx
-│   │   │   └── FormMatricula.jsx
-│   │   ├── pages/          # Páginas principales
-│   │   │   ├── Dashboard.jsx
-│   │   │   ├── Tutores.jsx
-│   │   │   ├── Cursos.jsx
-│   │   │   ├── Estudiantes.jsx
-│   │   │   ├── Matriculas.jsx
-│   │   │   └── Pagos.jsx
-│   │   ├── services/       # Servicios de API
-│   │   │   └── api.js
-│   │   ├── App.jsx
-│   │   └── main.jsx
+├── LInguistika-Studio/      # Frontend activo (React/Vite)
+│   ├── views/
+│   ├── components/
+│   ├── services/
 │   ├── index.html
-│   ├── vite.config.js
+│   ├── index.tsx
 │   └── package.json
 │
 └── README.md
@@ -114,7 +99,7 @@ npm install
 ### Instalación del Frontend
 
 ```bash
-cd frontend
+cd LInguistika-Studio
 npm install
 ```
 
@@ -135,8 +120,7 @@ npm run dev
 
 Terminal 2 - Frontend:
 ```bash
-cd frontend
-npm run dev
+npm run dev:frontend
 ```
 
 El frontend estará disponible en: `http://localhost:3000`
