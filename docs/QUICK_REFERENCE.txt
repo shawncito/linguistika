@@ -1,0 +1,87 @@
+## ⚡ QUICK START - Tutores Horarios por Día
+
+### 🔴 BLOQUEANTE: Primero Ejecuta SQL en Supabase
+
+1. Abre: https://supabase.com → Tu Proyecto → SQL Editor → New Query
+2. Copia esto: (ver `SQL_MIGRATIONS_QUICK.md`)
+3. Click "Run" → Espera "Executed successfully"
+
+**Dos scripts:**
+- `FIX_RLS_POLICIES` (primero)
+- `MIGRACION_TUTORES_DIAS_TURNO` (segundo)
+
+---
+
+### ✅ CÓDIGO LISTO (No necesita cambios más)
+
+| Archivo | Status |
+|---------|--------|
+| `backend/routes/tutores.js` | ✅ Usa `dias_turno` |
+| `backend/routes/cursos.js` | ✅ Usa `dias_turno` |
+| `LInguistika-Studio/views/Tutores.tsx` | ✅ Nuevo UI |
+| `LInguistika-Studio/types.ts` | ✅ Actualizado |
+
+---
+
+### 🧪 TESTING (Después de ejecutar SQL)
+
+```
+1. Recarga App (F5)
+2. Click "Nuevo Docente"
+3. Nombre: "Test"
+4. Teléfono: 8888-8888
+5. Especialidad: Inglés
+6. Tarifa: 25000
+7. Selecciona: Lunes, Martes
+   → Verás radios para cada día
+8. Lunes → Tarde
+9. Martes → Noche
+10. Click "Guardar"
+11. Verifica: Tarjeta muestra [Lun • Tarde] [Mar • Noche]
+```
+
+---
+
+### 📊 DATOS = JSON
+
+```javascript
+// Cómo se guarda
+dias_turno = {
+  "Lunes": "Tarde",
+  "Martes": "Noche",
+  "Jueves": "Tarde"
+}
+```
+
+---
+
+### 🎯 RESUMEN DE CAMBIOS
+
+**Backend:**
+- ✅ tutores.js: POST/PUT recibe `dias_turno`
+- ✅ tutores.js: GET devuelve `dias_turno`
+- ✅ cursos.js: Mismo patrón
+
+**Frontend:**
+- ✅ Tutores.tsx: Checkboxes días + Radios turno por día
+- ✅ Tarjetas: Muestran "Día • Turno"
+- ✅ Types: `dias_turno?: Record<string, 'Tarde' | 'Noche'>`
+
+**DB:**
+- ⏳ Ejecutar: FIX_RLS_POLICIES.sql
+- ⏳ Ejecutar: MIGRACION_TUTORES_DIAS_TURNO.sql
+
+---
+
+### 📝 NOTA IMPORTANTE
+
+El campo `dias_turno` reemplaza:
+- ❌ `horario_preferido`
+- ❌ `dias` (array)
+- ❌ `turno` (string global)
+
+Ahora es un JSON donde cada día tiene su turno.
+
+---
+
+**Más info:** Ver `README_TUTORES_DIAS_TURNO.md`
