@@ -2,6 +2,34 @@
 
 Backend API REST para la aplicación de gestión de horarios y tutorías.
 
+## 🚀 MIGRACIÓN A SUPABASE COMPLETADA
+
+✅ El proyecto ha sido **migrado completamente de SQLite a Supabase (PostgreSQL)**
+
+### 📖 Guías de Configuración
+
+1. **[MIGRACION-COMPLETADA.md](./MIGRACION-COMPLETADA.md)** - Resumen de la migración y próximos pasos
+2. **[GUIA-SUPABASE.md](./GUIA-SUPABASE.md)** - Guía detallada paso a paso
+
+### ⚡ Quick Start (15 minutos)
+
+```bash
+# 1. Crear proyecto en Supabase (https://app.supabase.com)
+# 2. Ejecutar schema SQL (copiar contenido de supabase-schema.sql al SQL Editor)
+# 3. Configurar variables de entorno en .env
+# 4. Instalar dependencias
+npm install
+
+# 5. Iniciar servidor
+npm run dev
+```
+
+**Credenciales de prueba:**
+- Usuario: `admin`
+- Contraseña: `admin123`
+
+---
+
 ## Instalación
 
 ```bash
