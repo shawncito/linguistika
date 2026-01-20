@@ -1,25 +1,33 @@
 import express from 'express';
-import Database from '../database.js';
+import { supabase } from '../supabase.js';
 
 const router = express.Router();
-const db = new Database();
 
 // GET - Listar todas las matrículas
 router.get('/', async (req, res) => {
   try {
-    const matriculas = await db.all(`
-      SELECT 
-        m.*,
-        e.nombre as estudiante_nombre,
-        c.nombre as curso_nombre,
-        t.nombre as tutor_nombre
-      FROM matriculas m
-      JOIN estudiantes e ON m.estudiante_id = e.id
-      JOIN cursos c ON m.curso_id = c.id
-      JOIN tutores t ON m.tutor_id = t.id
-      WHERE m.estado = 1
-    `);
-    res.json(matriculas);
+    const { data: matriculas, error } = await supabase
+      .from('matriculas')
+      .select(`
+        *,
+        estudiantes:estudiante_id (nombre),
+        cursos:curso_id (nombre),
+        tutores:tutor_id (nombre)
+      `)
+      .eq('estado', true)
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    
+    // Reformatear respuesta para compatibilidad
+    const formatted = matriculas.map(m => ({
+      ...m,
+      estudiante_nombre: m.estudiantes?.nombre,
+      curso_nombre: m.cursos?.nombre,
+      tutor_nombre: m.tutores?.nombre
+    }));
+    
+    res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -28,24 +36,32 @@ router.get('/', async (req, res) => {
 // GET - Obtener una matrícula por ID
 router.get('/:id', async (req, res) => {
   try {
-    const matricula = await db.get(`
-      SELECT 
-        m.*,
-        e.nombre as estudiante_nombre,
-        c.nombre as curso_nombre,
-        t.nombre as tutor_nombre,
-        t.tarifa_por_hora
-      FROM matriculas m
-      JOIN estudiantes e ON m.estudiante_id = e.id
-      JOIN cursos c ON m.curso_id = c.id
-      JOIN tutores t ON m.tutor_id = t.id
-      WHERE m.id = ?
-    `, [req.params.id]);
+    const { data: matricula, error } = await supabase
+      .from('matriculas')
+      .select(`
+        *,
+        estudiantes:estudiante_id (nombre),
+        cursos:curso_id (nombre),
+        tutores:tutor_id (nombre, tarifa_por_hora)
+      `)
+      .eq('id', req.params.id)
+      .single();
     
+    if (error) throw error;
     if (!matricula) {
       return res.status(404).json({ error: 'Matrícula no encontrada' });
     }
-    res.json(matricula);
+    
+    // Reformatear respuesta
+    const formatted = {
+      ...matricula,
+      estudiante_nombre: matricula.estudiantes?.nombre,
+      curso_nombre: matricula.cursos?.nombre,
+      tutor_nombre: matricula.tutores?.nombre,
+      tarifa_por_hora: matricula.tutores?.tarifa_por_hora
+    };
+    
+    res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -55,39 +71,50 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { estudiante_id, curso_id, tutor_id } = req.body;
+    const userId = req.user?.id;
     
     if (!estudiante_id || !curso_id || !tutor_id) {
       return res.status(400).json({ error: 'Campos requeridos: estudiante_id, curso_id, tutor_id' });
     }
 
     // Verificar que estudiante, curso y tutor existan
-    const estudiante = await db.get('SELECT * FROM estudiantes WHERE id = ?', [estudiante_id]);
-    const curso = await db.get('SELECT * FROM cursos WHERE id = ?', [curso_id]);
-    const tutor = await db.get('SELECT * FROM tutores WHERE id = ?', [tutor_id]);
+    const [estudianteCheck, cursoCheck, tutorCheck] = await Promise.all([
+      supabase.from('estudiantes').select('id').eq('id', estudiante_id).single(),
+      supabase.from('cursos').select('id').eq('id', curso_id).single(),
+      supabase.from('tutores').select('id').eq('id', tutor_id).single()
+    ]);
 
-    if (!estudiante || !curso || !tutor) {
+    if (estudianteCheck.error || cursoCheck.error || tutorCheck.error) {
       return res.status(400).json({ error: 'Estudiante, curso o tutor no existen' });
     }
 
-    const result = await db.run(
-      'INSERT INTO matriculas (estudiante_id, curso_id, tutor_id) VALUES (?, ?, ?)',
-      [estudiante_id, curso_id, tutor_id]
-    );
+    const { data: nuevaMatricula, error } = await supabase
+      .from('matriculas')
+      .insert({
+        estudiante_id,
+        curso_id,
+        tutor_id,
+        created_by: userId,
+        estado: true
+      })
+      .select(`
+        *,
+        estudiantes:estudiante_id (nombre),
+        cursos:curso_id (nombre),
+        tutores:tutor_id (nombre)
+      `)
+      .single();
     
-    const matricula = await db.get(`
-      SELECT 
-        m.*,
-        e.nombre as estudiante_nombre,
-        c.nombre as curso_nombre,
-        t.nombre as tutor_nombre
-      FROM matriculas m
-      JOIN estudiantes e ON m.estudiante_id = e.id
-      JOIN cursos c ON m.curso_id = c.id
-      JOIN tutores t ON m.tutor_id = t.id
-      WHERE m.id = ?
-    `, [result.id]);
+    if (error) throw error;
     
-    res.status(201).json(matricula);
+    const formatted = {
+      ...nuevaMatricula,
+      estudiante_nombre: nuevaMatricula.estudiantes?.nombre,
+      curso_nombre: nuevaMatricula.cursos?.nombre,
+      tutor_nombre: nuevaMatricula.tutores?.nombre
+    };
+    
+    res.status(201).json(formatted);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -97,26 +124,37 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { estudiante_id, curso_id, tutor_id, estado } = req.body;
+    const userId = req.user?.id;
     
-    await db.run(
-      'UPDATE matriculas SET estudiante_id = ?, curso_id = ?, tutor_id = ?, estado = ? WHERE id = ?',
-      [estudiante_id, curso_id, tutor_id, estado, req.params.id]
-    );
+    const { data: matricula, error } = await supabase
+      .from('matriculas')
+      .update({
+        estudiante_id,
+        curso_id,
+        tutor_id,
+        estado,
+        updated_by: userId,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.params.id)
+      .select(`
+        *,
+        estudiantes:estudiante_id (nombre),
+        cursos:curso_id (nombre),
+        tutores:tutor_id (nombre)
+      `)
+      .single();
     
-    const matricula = await db.get(`
-      SELECT 
-        m.*,
-        e.nombre as estudiante_nombre,
-        c.nombre as curso_nombre,
-        t.nombre as tutor_nombre
-      FROM matriculas m
-      JOIN estudiantes e ON m.estudiante_id = e.id
-      JOIN cursos c ON m.curso_id = c.id
-      JOIN tutores t ON m.tutor_id = t.id
-      WHERE m.id = ?
-    `, [req.params.id]);
+    if (error) throw error;
     
-    res.json(matricula);
+    const formatted = {
+      ...matricula,
+      estudiante_nombre: matricula.estudiantes?.nombre,
+      curso_nombre: matricula.cursos?.nombre,
+      tutor_nombre: matricula.tutores?.nombre
+    };
+    
+    res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -125,7 +163,17 @@ router.put('/:id', async (req, res) => {
 // DELETE - Desactivar matrícula
 router.delete('/:id', async (req, res) => {
   try {
-    await db.run('UPDATE matriculas SET estado = 0 WHERE id = ?', [req.params.id]);
+    const userId = req.user?.id;
+    const { error } = await supabase
+      .from('matriculas')
+      .update({
+        estado: false,
+        updated_by: userId,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.params.id);
+    
+    if (error) throw error;
     res.json({ message: 'Matrícula desactivada correctamente' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -133,3 +181,4 @@ router.delete('/:id', async (req, res) => {
 });
 
 export default router;
+

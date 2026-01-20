@@ -1,22 +1,28 @@
 import express from 'express';
-import Database from '../database.js';
+import { supabase } from '../supabase.js';
 
 const router = express.Router();
-const db = new Database();
 
 // GET - Listar todos los pagos
 router.get('/', async (req, res) => {
   try {
-    const pagos = await db.all(`
-      SELECT 
-        p.*,
-        t.nombre as tutor_nombre,
-        t.email as tutor_email
-      FROM pagos p
-      JOIN tutores t ON p.tutor_id = t.id
-      ORDER BY p.fecha_pago DESC
-    `);
-    res.json(pagos);
+    const { data: pagos, error } = await supabase
+      .from('pagos')
+      .select(`
+        *,
+        tutores:tutor_id (nombre, email)
+      `)
+      .order('fecha_pago', { ascending: false });
+    
+    if (error) throw error;
+    
+    const formatted = pagos.map(p => ({
+      ...p,
+      tutor_nombre: p.tutores?.nombre,
+      tutor_email: p.tutores?.email
+    }));
+    
+    res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -25,11 +31,13 @@ router.get('/', async (req, res) => {
 // GET - Pagos de un tutor
 router.get('/tutor/:tutor_id', async (req, res) => {
   try {
-    const pagos = await db.all(`
-      SELECT * FROM pagos
-      WHERE tutor_id = ?
-      ORDER BY fecha_pago DESC
-    `, [req.params.tutor_id]);
+    const { data: pagos, error } = await supabase
+      .from('pagos')
+      .select('*')
+      .eq('tutor_id', req.params.tutor_id)
+      .order('fecha_pago', { ascending: false });
+    
+    if (error) throw error;
     res.json(pagos);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -40,26 +48,37 @@ router.get('/tutor/:tutor_id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { tutor_id, clase_id, cantidad_clases, monto, descripcion } = req.body;
+    const userId = req.user?.id;
     
     if (!tutor_id || !monto) {
       return res.status(400).json({ error: 'Campos requeridos: tutor_id, monto' });
     }
 
-    const result = await db.run(
-      'INSERT INTO pagos (tutor_id, clase_id, cantidad_clases, monto, descripcion) VALUES (?, ?, ?, ?, ?)',
-      [tutor_id, clase_id, cantidad_clases, monto, descripcion]
-    );
+    const { data: pago, error } = await supabase
+      .from('pagos')
+      .insert({
+        tutor_id,
+        clase_id,
+        cantidad_clases,
+        monto,
+        descripcion,
+        created_by: userId,
+        estado: 'pendiente'
+      })
+      .select(`
+        *,
+        tutores:tutor_id (nombre)
+      `)
+      .single();
     
-    const pago = await db.get(`
-      SELECT 
-        p.*,
-        t.nombre as tutor_nombre
-      FROM pagos p
-      JOIN tutores t ON p.tutor_id = t.id
-      WHERE p.id = ?
-    `, [result.id]);
+    if (error) throw error;
     
-    res.status(201).json(pago);
+    const formatted = {
+      ...pago,
+      tutor_nombre: pago.tutores?.nombre
+    };
+    
+    res.status(201).json(formatted);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -74,50 +93,55 @@ router.post('/calcular', async (req, res) => {
       return res.status(400).json({ error: 'Campo requerido: tutor_id' });
     }
 
-    // Obtener todas las clases del tutor en el período
-    let query = `
-      SELECT 
-        c.id,
-        c.fecha,
-        c.hora_inicio,
-        c.hora_fin,
-        t.tarifa_por_hora,
-        t.nombre as tutor_nombre
-      FROM clases c
-      JOIN matriculas m ON c.matricula_id = m.id
-      JOIN tutores t ON m.tutor_id = t.id
-      WHERE m.tutor_id = ? AND c.estado = 'programada'
-    `;
-    
-    const params = [tutor_id];
+    // Construir query con filtros opcionales
+    let query = supabase
+      .from('clases')
+      .select(`
+        id,
+        fecha,
+        hora_inicio,
+        hora_fin,
+        matriculas!inner (
+          tutor_id,
+          tutores (tarifa_por_hora, nombre)
+        )
+      `)
+      .eq('matriculas.tutor_id', tutor_id)
+      .eq('estado', 'programada');
     
     if (fecha_inicio) {
-      query += ' AND c.fecha >= ?';
-      params.push(fecha_inicio);
+      query = query.gte('fecha', fecha_inicio);
     }
     
     if (fecha_fin) {
-      query += ' AND c.fecha <= ?';
-      params.push(fecha_fin);
+      query = query.lte('fecha', fecha_fin);
     }
 
-    const clases = await db.all(query, params);
+    const { data: clases, error } = await query;
+    
+    if (error) throw error;
 
     // Calcular monto total
     let monto_total = 0;
-    clases.forEach(clase => {
-      // Calcular duración en horas
+    const clases_procesadas = clases.map(clase => {
       const [hi, mi] = clase.hora_inicio.split(':').map(Number);
       const [hf, mf] = clase.hora_fin.split(':').map(Number);
       const duracion = ((hf - hi) + (mf - mi) / 60);
-      monto_total += duracion * clase.tarifa_por_hora;
+      const tarifa = clase.matriculas?.tutores?.tarifa_por_hora || 0;
+      monto_total += duracion * tarifa;
+      
+      return {
+        ...clase,
+        tarifa_por_hora: tarifa,
+        tutor_nombre: clase.matriculas?.tutores?.nombre
+      };
     });
 
     res.json({
       tutor_id,
-      cantidad_clases: clases.clases,
+      cantidad_clases: clases.length,
       monto_total,
-      clases_detalles: clases
+      clases_detalles: clases_procesadas
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -128,22 +152,34 @@ router.post('/calcular', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { estado } = req.body;
+    const userId = req.user?.id;
     
-    await db.run('UPDATE pagos SET estado = ? WHERE id = ?', [estado, req.params.id]);
+    const { data: pago, error } = await supabase
+      .from('pagos')
+      .update({
+        estado,
+        updated_by: userId,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.params.id)
+      .select(`
+        *,
+        tutores:tutor_id (nombre)
+      `)
+      .single();
     
-    const pago = await db.get(`
-      SELECT 
-        p.*,
-        t.nombre as tutor_nombre
-      FROM pagos p
-      JOIN tutores t ON p.tutor_id = t.id
-      WHERE p.id = ?
-    `, [req.params.id]);
+    if (error) throw error;
     
-    res.json(pago);
+    const formatted = {
+      ...pago,
+      tutor_nombre: pago.tutores?.nombre
+    };
+    
+    res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 export default router;
+
