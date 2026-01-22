@@ -43,10 +43,33 @@ Una aplicación web completa para gestionar eficientemente un centro de idiomas.
 ## 🛠️ Tecnologías Utilizadas
 
 ### Backend
-- **Node.js** - Runtime de JavaScript
-- **Express.js** - Framework web
-- **SQLite3** - Base de datos relacional
-- **CORS** - Para comunicación entre frontend y backend
++ **Node.js** - Runtime de JavaScript
++ **Express.js** - Framework web
++ **Supabase** - Base de datos PostgreSQL y autenticación
++ **CORS** - Para comunicación entre frontend y backend
++
++### Frontend
++ **React 18** - Librería UI
++ **TypeScript** - Tipado estático
++ **Vite** - Build tool y dev server
++ **Tailwind CSS** - Framework CSS
++
++## 📁 Estructura del Proyecto
++
++```
++linguistika/
++├── backend/                 # API Node.js + Express
++│   ├── routes/             # Endpoints por entidad
++│   ├── middleware/         # Auth y validaciones
++│   ├── migrate.js          # Herramienta de migración DB
++│   └── server.js           # Punto de entrada
++├── LInguistika-Studio/     # Frontend React + TypeScript
++│   ├── components/         # Componentes reutilizables
++│   ├── views/              # Vistas principales
++│   ├── services/           # API client
++│   └── types.ts            # Tipos TypeScript
++└── CHANGELOG.md            # Historial de cambios
++```
 
 ### Frontend
 - **React** - Librería de UI
