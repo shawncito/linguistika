@@ -4,67 +4,84 @@
 
 /**
  * Verifica si un tutor es compatible con un curso
+ * Valida que CADA día del curso esté en la disponibilidad del tutor
+ * Y que el rango de horas del curso esté COMPLETAMENTE dentro del rango del tutor
  * @param {Object} tutor - Objeto tutor con dias_horarios
- * @param {Object} curso - Objeto curso con dias_schedule o dias_turno
+ * @param {Object} curso - Objeto curso con dias_schedule
  * @returns {Object} { compatible: boolean, issues: string[] }
  */
 export function validateTutorCourseSchedule(tutor, curso) {
   const issues = [];
   let compatible = true;
 
-  // Si no hay información de horarios, asumimos compatibilidad
+  // Validación básica
   if (!tutor || !curso) {
-    return { compatible: false, issues: ['Datos de tutor o curso no encontrados'] };
+    return { compatible: false, issues: ['❌ Datos de tutor o curso no encontrados'] };
   }
 
-  // Si el tutor no tiene dias_horarios definido, es compatible por defecto
+  // Si el tutor no tiene dias_horarios definido, NO es compatible
   if (!tutor.dias_horarios || Object.keys(tutor.dias_horarios).length === 0) {
-    return { compatible: true, issues: [] };
+    return { compatible: false, issues: ['❌ El tutor no tiene horarios definidos'] };
   }
 
-  // Determinar qué horario del curso usar (preferir dias_schedule)
-  const cursoSchedule = curso.dias_schedule || curso.dias_turno;
+  // Obtener el horario del curso (debe ser dias_schedule)
+  const cursoSchedule = curso.dias_schedule;
   if (!cursoSchedule || Object.keys(cursoSchedule).length === 0) {
-    return { compatible: true, issues: [] };
+    return { compatible: false, issues: ['❌ El curso no tiene horarios definidos'] };
   }
 
-  // Verificar que el tutor tenga disponibilidad en cada día del curso
+  // Validar CADA día y horario del curso
   const diasCurso = Object.keys(cursoSchedule);
   const diasTutor = Object.keys(tutor.dias_horarios);
 
   for (const dia of diasCurso) {
+    // ✅ VALIDACIÓN 1: ¿Existe el día en la disponibilidad del tutor?
     if (!diasTutor.includes(dia)) {
       compatible = false;
-      issues.push(`❌ Tutor no disponible el ${dia}`);
+      issues.push(`❌ El tutor NO está disponible el ${dia}`);
       continue;
     }
 
-    // Verificar horarios detallados si existen
-    if (curso.dias_schedule && curso.dias_schedule[dia]) {
-      const cursoHora = curso.dias_schedule[dia];
-      const tutorSlots = tutor.dias_horarios[dia];
+    // ✅ VALIDACIÓN 2: ¿El rango de horas del curso está dentro del rango del tutor?
+    const tutorHorario = tutor.dias_horarios[dia];
+    const cursoHorario = cursoSchedule[dia];
 
-      if (Array.isArray(tutorSlots) && tutorSlots.length > 0) {
-        const hasMatch = tutorSlots.some(slot => {
-          // Comparar horarios (simplificado: verificar que se solapan)
-          const tutorStart = timeToMinutes(slot.hora_inicio);
-          const tutorEnd = timeToMinutes(slot.hora_fin);
-          const cursoStart = timeToMinutes(cursoHora.hora_inicio);
-          const cursoEnd = timeToMinutes(cursoHora.hora_fin);
+    if (!tutorHorario || !cursoHorario) {
+      compatible = false;
+      issues.push(`❌ Horarios incompletos para ${dia}`);
+      continue;
+    }
 
-          return !(tutorEnd <= cursoStart || tutorStart >= cursoEnd);
-        });
+    // Convertir a minutos para comparación
+    const tutorInicio = timeToMinutes(tutorHorario.hora_inicio);
+    const tutorFin = timeToMinutes(tutorHorario.hora_fin);
+    const cursoInicio = timeToMinutes(cursoHorario.hora_inicio);
+    const cursoFin = timeToMinutes(cursoHorario.hora_fin);
 
-        if (!hasMatch) {
-          compatible = false;
-          issues.push(`❌ Horario del tutor no disponible el ${dia} a las ${cursoHora.hora_inicio}`);
-        }
-      }
+    // Validación lógica empresarial:
+    // El curso DEBE estar COMPLETAMENTE dentro del rango del tutor
+    if (cursoInicio < tutorInicio) {
+      compatible = false;
+      issues.push(`❌ ${dia}: Curso comienza a las ${cursoHorario.hora_inicio}, pero tutor disponible desde ${tutorHorario.hora_inicio}`);
+      continue;
+    }
+
+    if (cursoFin > tutorFin) {
+      compatible = false;
+      issues.push(`❌ ${dia}: Curso termina a las ${cursoHorario.hora_fin}, pero tutor disponible hasta ${tutorHorario.hora_fin}`);
+      continue;
+    }
+
+    // Validación adicional: no puede ser justo a la frontera (necesita 5 minutos de buffer)
+    if (cursoInicio === tutorInicio || cursoFin === tutorFin) {
+      // Esta es una advertencia, no un error bloqueador
+      // Comentado por ahora, pero podría usarse para validación más estricta
+      // issues.push(`⚠️ ${dia}: El curso no tiene margen de tiempo`);
     }
   }
 
   if (compatible && issues.length === 0) {
-    issues.push('✅ Tutor compatible con el curso');
+    issues.push('✅ Horarios compatibles: El tutor puede enseñar este curso');
   }
 
   return { compatible, issues };

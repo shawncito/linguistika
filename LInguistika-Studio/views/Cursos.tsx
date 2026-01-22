@@ -9,7 +9,6 @@ import { Plus, Edit, Trash2, BookOpen, Users as UsersIcon, Clock } from 'lucide-
 
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const NIVELES = ['None', 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
-const TURNOS = ['Tarde', 'Noche'];
 
 const Cursos: React.FC = () => {
   const [cursos, setCursos] = useState<Curso[]>([]);
@@ -18,6 +17,7 @@ const Cursos: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [tutorCompatibilidad, setTutorCompatibilidad] = useState<Record<number, { compatible: boolean; detalles: string }>>({});
   const [formData, setFormData] = useState({
     nombre: '',
     descripcion: '',
@@ -25,9 +25,7 @@ const Cursos: React.FC = () => {
     tipo_clase: 'grupal',
     max_estudiantes: 10,
     dias: [] as string[],
-    dias_turno: {} as Record<string, 'Tarde' | 'Noche'>,
     dias_schedule: {} as Record<string, {
-      turno: 'Tarde' | 'Noche';
       hora_inicio: string;
       hora_fin: string;
       duracion_horas?: number;
@@ -74,10 +72,10 @@ const Cursos: React.FC = () => {
     if (!formData.nombre.trim()) newErrors.nombre = 'Nombre requerido';
     if (formData.dias.length === 0) newErrors.dias = 'Selecciona al menos un día';
     
-    // Validar que todos los días tengan turno asignado
+    // Validar que todos los días tengan horas asignadas
     for (const dia of formData.dias) {
-      if (!formData.dias_turno[dia]) {
-        newErrors.dias = 'Todos los días deben tener un turno asignado';
+      if (!formData.dias_schedule[dia]?.hora_inicio || !formData.dias_schedule[dia]?.hora_fin) {
+        newErrors.dias = 'Todos los días deben tener horas de inicio y fin';
         break;
       }
     }
@@ -106,7 +104,6 @@ const Cursos: React.FC = () => {
         tipo_clase: formData.tipo_clase,
         max_estudiantes: formData.tipo_clase === 'tutoria' ? null : formData.max_estudiantes,
         dias: formData.dias,
-        dias_turno: formData.dias_turno,
         dias_schedule: formData.dias_schedule,
         costo_curso: formData.costo_curso,
         pago_tutor: formData.pago_tutor,
@@ -125,8 +122,16 @@ const Cursos: React.FC = () => {
       setShowModal(false);
       resetForm();
       loadData();
-    } catch (error) {
-      setErrors({ submit: 'Error al guardar curso' });
+    } catch (error: any) {
+      // Manejar error de conflicto de horarios
+      if (error.response?.status === 409) {
+        setErrors({ 
+          submit: '⚠️ CONFLICTO DE HORARIOS: El tutor seleccionado no está disponible en los días y horarios del curso. Por favor, selecciona otro tutor o ajusta el horario del curso.',
+          tutor: error.response?.data?.details?.join(', ') || 'Horarios incompatibles'
+        });
+      } else {
+        setErrors({ submit: 'Error al guardar curso: ' + (error.response?.data?.error || error.message) });
+      }
     }
   };
 
@@ -139,7 +144,6 @@ const Cursos: React.FC = () => {
       tipo_clase: 'grupal',
       max_estudiantes: 10,
       dias: [],
-      dias_turno: {},
       dias_schedule: {},
       costo_curso: 0,
       pago_tutor: 0,
@@ -278,20 +282,58 @@ const Cursos: React.FC = () => {
               {/* Tutor Asignado */}
               <div>
                 <Label>Asignar Tutor (opcional)</Label>
-                <Select 
-                  value={formData.tutor_id || 0} 
-                  onChange={(e) => setFormData(prev => ({ ...prev, tutor_id: parseInt(e.target.value) || 0 }))}
-                >
-                  <option value={0}>Sin tutor asignado</option>
-                  {tutores.map(tutor => (
-                    <option key={tutor.id} value={tutor.id}>
-                      {tutor.nombre} - {tutor.especialidad}
-                    </option>
-                  ))}
-                </Select>
-                <p className="text-xs text-slate-500 mt-1">
-                  Se validará la compatibilidad de horarios automáticamente
-                </p>
+                <div className="space-y-3">
+                  {tutores.map(tutor => {
+                    const diasHorarios = tutor.dias_horarios || {};
+                    const tieneDias = Object.keys(diasHorarios).length > 0;
+                    return (
+                      <label key={tutor.id} className="flex items-start gap-3 p-3 border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="tutor_id"
+                          value={tutor.id}
+                          checked={formData.tutor_id === tutor.id}
+                          onChange={(e) => setFormData(prev => ({ ...prev, tutor_id: parseInt(e.target.value) }))}
+                          className="mt-1"
+                        />
+                        <div className="flex-1">
+                          <div className="font-semibold text-slate-900">{tutor.nombre}</div>
+                          <div className="text-sm text-slate-600">{tutor.especialidad}</div>
+                          {tieneDias ? (
+                            <div className="mt-2 space-y-1">
+                              {Object.entries(diasHorarios).map(([dia, horario]: [string, any]) => (
+                                <div key={dia} className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded inline-block mr-1">
+                                  {dia.slice(0,3)}: {horario.hora_inicio}-{horario.hora_fin}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-amber-600 mt-1">⚠️ Sin horarios definidos</div>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                  <label className="flex items-start gap-3 p-3 border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="tutor_id"
+                      value={0}
+                      checked={formData.tutor_id === 0}
+                      onChange={() => setFormData(prev => ({ ...prev, tutor_id: 0 }))}
+                      className="mt-1"
+                    />
+                    <div>
+                      <div className="font-semibold text-slate-900">Sin tutor asignado</div>
+                      <div className="text-sm text-slate-600">Se asignará manualmente después</div>
+                    </div>
+                  </label>
+                </div>
+                {errors.tutor && (
+                  <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-sm text-red-700 font-semibold">❌ {errors.tutor}</p>
+                  </div>
+                )}
               </div>
 
               {/* Límite de Estudiantes */}
@@ -333,16 +375,19 @@ const Cursos: React.FC = () => {
                             setFormData(prev => ({ 
                               ...prev, 
                               dias: [...prev.dias, dia],
-                              dias_turno: { ...prev.dias_turno, [dia]: 'Tarde' }
+                              dias_schedule: {
+                                ...prev.dias_schedule,
+                                [dia]: { hora_inicio: '09:00', hora_fin: '11:00', duracion_horas: 2 }
+                              }
                             }));
                           } else {
                             setFormData(prev => {
-                              const newDiasTurno = { ...prev.dias_turno };
-                              delete newDiasTurno[dia];
+                              const newSchedule = { ...prev.dias_schedule };
+                              delete newSchedule[dia];
                               return {
                                 ...prev,
                                 dias: prev.dias.filter(d => d !== dia),
-                                dias_turno: newDiasTurno
+                                dias_schedule: newSchedule
                               };
                             });
                           }
@@ -356,10 +401,10 @@ const Cursos: React.FC = () => {
                 {errors.dias && <p className="text-red-500 text-sm mt-2">{errors.dias}</p>}
               </div>
 
-              {/* Selección de turnos y horarios por día */}
+              {/* Horarios específicos por día */}
               {formData.dias.length > 0 && (
                 <div>
-                  <Label>Turnos y Horarios por Día *</Label>
+                  <Label>Horarios por Día *</Label>
                   <div className="space-y-4 mt-2">
                     {formData.dias.map(dia => (
                       <div key={dia} className="p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
@@ -370,36 +415,6 @@ const Cursos: React.FC = () => {
                               {formData.dias_schedule[dia].duracion_horas}h
                             </span>
                           )}
-                        </div>
-                        
-                        {/* Selección de turno */}
-                        <div className="flex gap-2">
-                          {TURNOS.map(turno => (
-                            <label
-                              key={turno}
-                              className="flex items-center gap-2 p-2 border border-slate-300 rounded hover:border-blue-400 cursor-pointer flex-1 text-sm"
-                              style={{ borderColor: formData.dias_schedule[dia]?.turno === turno ? '#2563eb' : undefined, backgroundColor: formData.dias_schedule[dia]?.turno === turno ? '#eff6ff' : undefined }}
-                            >
-                              <input
-                                type="radio"
-                                name={`turno-${dia}`}
-                                value={turno}
-                                checked={formData.dias_schedule[dia]?.turno === turno}
-                                onChange={(e) => {
-                                  const schedule = formData.dias_schedule[dia] || { turno: 'Tarde', hora_inicio: '14:00', hora_fin: '17:00' };
-                                  setFormData(prev => ({
-                                    ...prev,
-                                    dias_schedule: {
-                                      ...prev.dias_schedule,
-                                      [dia]: { ...schedule, turno: e.target.value as 'Tarde' | 'Noche' }
-                                    }
-                                  }));
-                                }}
-                                className="w-4 h-4"
-                              />
-                              <span className="font-semibold text-slate-900">{turno}</span>
-                            </label>
-                          ))}
                         </div>
                         
                         {/* Selección de horas */}
@@ -529,6 +544,13 @@ const Cursos: React.FC = () => {
                 )}
               </div>
 
+              {/* Mensaje de error general */}
+              {errors.submit && (
+                <div className="p-4 bg-red-50 border-2 border-red-300 rounded-lg">
+                  <p className="text-sm text-red-800 font-bold leading-relaxed">{errors.submit}</p>
+                </div>
+              )}
+
               {/* Botones */}
               <div className="flex gap-4 justify-end pt-6 border-t border-slate-200">
                 <Button
@@ -550,7 +572,6 @@ const Cursos: React.FC = () => {
                   {editingId ? 'Actualizar' : 'Crear'}
                 </Button>
               </div>
-              {errors.submit && <p className="text-red-500 text-sm">{errors.submit}</p>}
             </form>
           </Card>
         </div>
@@ -628,9 +649,11 @@ const Cursos: React.FC = () => {
                 <div className="flex items-center gap-2 text-slate-600">
                   <Clock className="w-4 h-4 text-blue-500" />
                   <span className="text-sm font-semibold">
-                    {curso.dias_turno && typeof curso.dias_turno === 'object' 
-                      ? Object.values(curso.dias_turno).join(', ') 
-                      : 'N/A'}
+                    {curso.dias_schedule && typeof curso.dias_schedule === 'object' && Object.keys(curso.dias_schedule).length > 0
+                      ? Object.entries(curso.dias_schedule).map(([dia, schedule]: [string, any]) => 
+                          `${dia.slice(0,3)} ${schedule.hora_inicio}-${schedule.hora_fin}`
+                        ).join(', ')
+                      : 'Sin horario'}
                   </span>
                 </div>
               </div>
@@ -659,11 +682,14 @@ const Cursos: React.FC = () => {
 
               {Array.isArray(curso.dias) && curso.dias.length > 0 && (
                 <div className="flex flex-wrap gap-1">
-                  {curso.dias.map((dia) => (
-                    <span key={dia} className="text-xs bg-blue-50 text-blue-700 font-semibold px-2 py-1 rounded">
-                      {dia.slice(0, 3)} - {curso.dias_turno?.[dia] || 'N/A'}
-                    </span>
-                  ))}
+                  {curso.dias.map((dia) => {
+                    const schedule = curso.dias_schedule?.[dia];
+                    return (
+                      <span key={dia} className="text-xs bg-blue-50 text-blue-700 font-semibold px-2 py-1 rounded">
+                        {dia.slice(0, 3)}: {schedule?.hora_inicio || '?'}-{schedule?.hora_fin || '?'}
+                      </span>
+                    );
+                  })}
                 </div>
               )}
             </div>

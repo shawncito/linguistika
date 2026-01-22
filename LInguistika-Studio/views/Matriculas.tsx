@@ -22,16 +22,12 @@ const Matriculas: React.FC = () => {
   const [tutores, setTutores] = useState<Tutor[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-  const [viewMode, setViewMode] = useState<'tabla' | 'tarjetas'>('tabla');
+    const [viewMode, setViewMode] = useState<'tabla' | 'tarjetas'>('tarjetas');
   const [detailOpen, setDetailOpen] = useState(false);
   const [detalle, setDetalle] = useState<Matricula | null>(null);
   const [filterCursoId, setFilterCursoId] = useState<number>(0);
   const [filterGrupo, setFilterGrupo] = useState<string>('');
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [compatibilityStatus, setCompatibilityStatus] = useState<{
-    compatible: boolean;
-    issues: string[];
-  }>({ compatible: true, issues: [] });
   const [formData, setFormData] = useState({
     estudiante_id: 0,
     curso_id: 0,
@@ -60,93 +56,31 @@ const Matriculas: React.FC = () => {
     loadData();
   }, []);
 
-  // Función para verificar compatibilidad de horarios
-  const checkCompatibility = (estudianteId: number, cursoId: number, tutorId: number) => {
-    const issues: string[] = [];
-    let compatible = true;
-
-    if (!estudianteId || !cursoId || !tutorId) {
-      setCompatibilityStatus({ compatible: false, issues: ['Selecciona todos los campos'] });
-      return;
-    }
-
-
-    const estudiante = estudiantes.find(e => e.id === estudianteId);
-    const curso = cursos.find(c => c.id === cursoId);
-    const tutor = tutores.find(t => t.id === tutorId);
-
-    if (!estudiante || !curso || !tutor) {
-      setCompatibilityStatus({ compatible: false, issues: ['Datos no encontrados'] });
-      return;
-    }
-
-    // Verificar días del estudiante
-    if (Array.isArray(estudiante.dias) && estudiante.dias.length > 0) {
-      const diasEstudiante = estudiante.dias;
-      
-      // Verificar días del curso
-      if (Array.isArray(curso.dias) && curso.dias.length > 0) {
-        const diasCurso = curso.dias;
-        const diasComunes = diasEstudiante.filter(d => diasCurso.includes(d));
-        if (diasComunes.length === 0) {
-          compatible = false;
-          issues.push('❌ Horarios de estudiante y curso no coinciden');
-        }
-      }
-
-      // Verificar días del tutor
-      if (Array.isArray(tutor.dias) && tutor.dias.length > 0) {
-        const diasTutor = tutor.dias;
-        const diasComunes = diasEstudiante.filter(d => diasTutor.includes(d));
-        if (diasComunes.length === 0) {
-          compatible = false;
-          issues.push('❌ Horarios de estudiante y tutor no coinciden');
-        }
-      }
-    }
-
-    // Verificar que los tres compartan al menos un día
-    if (Array.isArray(estudiante.dias) && Array.isArray(curso.dias) && Array.isArray(tutor.dias)) {
-      if (estudiante.dias.length > 0 && curso.dias.length > 0 && tutor.dias.length > 0) {
-        const diasComunes = estudiante.dias.filter(d => 
-          curso.dias.includes(d) && tutor.dias.includes(d)
-        );
-        if (diasComunes.length === 0) {
-          compatible = false;
-          issues.push('⚠️ No hay días hábiles compartidos entre los tres');
-        }
-      }
-    }
-
-    if (compatible && issues.length === 0) {
-      issues.push('✅ Horarios compatibles');
-    }
-
-    setCompatibilityStatus({ compatible, issues });
-  };
-
-  const validateTutorCourseOnServer = async (tutorId: number, cursoId: number) => {
-    try {
-      const validation = await api.matriculas.validateTutorCourse(tutorId, cursoId);
-      setCompatibilityStatus(validation);
-    } catch (error) {
-      console.error('Error validating tutor-course schedule:', error);
-      setCompatibilityStatus({ compatible: false, issues: ['Error al validar horarios'] });
-    }
-  };
-
   const handleSelectChange = (field: string, value: any) => {
     const newFormData = { ...formData, [field]: parseInt(value) } as any;
     setFormData(newFormData);
     
-    if (field === 'estudiante_id' || field === 'curso_id' || field === 'tutor_id') {
-      checkCompatibility(newFormData.estudiante_id, newFormData.curso_id, newFormData.tutor_id);
+    // Si se selecciona un curso, obtener el tutor_id del curso
+    if (field === 'curso_id' || newFormData.curso_id) {
+      const cursoSeleccionado = cursos.find(c => c.id === newFormData.curso_id);
+      if (cursoSeleccionado && cursoSeleccionado.tutor_id) {
+        newFormData.tutor_id = cursoSeleccionado.tutor_id;
+        setFormData(newFormData);
+      }
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.curso_id || !formData.tutor_id) return alert('Selecciona curso y tutor.');
+    
+    // Obtener tutor_id del curso seleccionado
+    const cursoSeleccionado = cursos.find(c => c.id === formData.curso_id);
+    if (!formData.curso_id || !cursoSeleccionado || !cursoSeleccionado.tutor_id) {
+      return alert('El curso seleccionado no tiene un tutor asignado.');
+    }
+    
+    const tutorId = cursoSeleccionado.tutor_id;
+    
     if (formData.es_grupo) {
       if (!formData.estudiante_ids || formData.estudiante_ids.length === 0) return alert('Selecciona al menos un alumno para el grupo.');
     } else if (!formData.estudiante_id) {
@@ -157,13 +91,13 @@ const Matriculas: React.FC = () => {
       const payload = formData.es_grupo ? {
         estudiante_ids: formData.estudiante_ids,
         curso_id: formData.curso_id,
-        tutor_id: formData.tutor_id,
+        tutor_id: tutorId,
         es_grupo: true,
         grupo_nombre: formData.grupo_nombre || null,
       } : {
         estudiante_id: formData.estudiante_id,
         curso_id: formData.curso_id,
-        tutor_id: formData.tutor_id,
+        tutor_id: tutorId,
         es_grupo: false,
         grupo_nombre: null,
       };
@@ -181,10 +115,12 @@ const Matriculas: React.FC = () => {
     setFormData({
       estudiante_id: matricula.estudiante_id,
       curso_id: matricula.curso_id,
-      tutor_id: matricula.tutor_id
+      tutor_id: matricula.tutor_id,
+      es_grupo: matricula.es_grupo,
+      grupo_nombre: matricula.grupo_nombre || '',
+      estudiante_ids: []
     });
     setShowModal(true);
-    checkCompatibility(matricula.estudiante_id, matricula.curso_id, matricula.tutor_id);
   };
 
   const handleCancel = async (id: number) => {
@@ -201,7 +137,6 @@ const Matriculas: React.FC = () => {
   const resetForm = () => {
     setEditingId(null);
     setFormData({ estudiante_id: 0, curso_id: 0, tutor_id: 0, es_grupo: false, grupo_nombre: '', estudiante_ids: [] });
-    setCompatibilityStatus({ compatible: true, issues: [] });
     setShowModal(false);
   };
 
@@ -217,6 +152,39 @@ const Matriculas: React.FC = () => {
     const byGrupo = filterGrupo ? (m.grupo_nombre || '').toLowerCase().includes(filterGrupo.toLowerCase()) : true;
     return byCurso && byGrupo;
   });
+
+  // Mapa rápido de estudiantes para resolver nombres por id
+  const estudiantesMap = new Map<number, string>(
+    estudiantes.map((e) => [e.id, e.nombre])
+  );
+
+  // Agrupar matrículas por grupo_id si es grupo, si no por id individual
+  const groupedMatriculas = matriculas.reduce((acc, m) => {
+    if (m.es_grupo && m.grupo_id) {
+      const key = `grupo-${m.grupo_id}`;
+      if (!acc[key]) {
+        acc[key] = { ...m, students: [] };
+      }
+      const detalle = (m as any).estudiantes_detalle;
+      const idsArr = (m as any).estudiante_ids;
+      if (Array.isArray(detalle) && detalle.length > 0) {
+        detalle.forEach((est: any) => {
+          acc[key].students.push({ id: est.id, nombre: est.nombre });
+        });
+      } else if (Array.isArray(idsArr) && idsArr.length > 0) {
+        idsArr.forEach((id: number) => {
+          acc[key].students.push({ id, nombre: estudiantesMap.get(id) || `Alumno ${id}` });
+        });
+      } else if (m.estudiante_nombre) {
+        acc[key].students.push({ id: m.estudiante_id, nombre: m.estudiante_nombre });
+      }
+    } else {
+      acc[`individual-${m.id}`] = m;
+    }
+    return acc;
+  }, {} as Record<string, any>);
+
+  const displayMatriculas = Object.values(groupedMatriculas);
 
   // Utilidades para renderizar horarios
   const renderHorarioBadges = (m: Matricula) => {
@@ -272,16 +240,23 @@ const Matriculas: React.FC = () => {
     };
 
     if (schedule && Object.keys(schedule).length > 0) {
+      const diasConFechas = Object.keys(schedule).filter(dia => {
+        const fechas = fechasPorDia(dia);
+        return fechas.length > 0; // Solo mostrar si tiene fechas en este mes
+      });
+
+      if (diasConFechas.length === 0) return null;
+
       return (
-        <div className="mt-2 space-y-1">
-          {Object.keys(schedule).map((dia) => {
+        <div className="mt-3 space-y-1">
+          {diasConFechas.map((dia) => {
             const fechas = fechasPorDia(dia);
             const info = schedule[dia];
             return (
-              <div key={dia} className="text-[11px] text-slate-600">
-                <span className="font-bold text-slate-700">{dia.slice(0,3)}:</span> {fechas.join(', ')}
-                <span className="text-slate-400"> • </span>
-                <span className="font-semibold">{info?.hora_inicio} - {info?.hora_fin}</span>
+              <div key={dia} className="text-xs text-slate-600 flex items-center justify-between">
+                <span className="font-bold text-slate-700">{dia.slice(0,3)}</span>
+                <span className="text-slate-500">{fechas.join(', ')}</span>
+                <span className="font-semibold text-slate-700">{info?.hora_inicio} - {info?.hora_fin}</span>
               </div>
             );
           })}
@@ -290,16 +265,23 @@ const Matriculas: React.FC = () => {
     }
 
     if (turnos && Object.keys(turnos).length > 0) {
+      const diasConFechas = Object.keys(turnos).filter(dia => {
+        const fechas = fechasPorDia(dia);
+        return fechas.length > 0; // Solo mostrar si tiene fechas en este mes
+      });
+
+      if (diasConFechas.length === 0) return null;
+
       return (
-        <div className="mt-2 space-y-1">
-          {Object.keys(turnos).map((dia) => {
+        <div className="mt-3 space-y-1">
+          {diasConFechas.map((dia) => {
             const fechas = fechasPorDia(dia);
             const turno = turnos[dia];
             return (
-              <div key={dia} className="text-[11px] text-slate-600">
-                <span className="font-bold text-slate-700">{dia.slice(0,3)}:</span> {fechas.join(', ')}
-                <span className="text-slate-400"> • </span>
-                <span className="font-semibold">{turno}</span>
+              <div key={dia} className="text-xs text-slate-600 flex items-center justify-between">
+                <span className="font-bold text-slate-700">{dia.slice(0,3)}</span>
+                <span className="text-slate-500">{fechas.join(', ')}</span>
+                <span className="font-semibold text-slate-700">{turno}</span>
               </div>
             );
           })}
@@ -482,12 +464,13 @@ const Matriculas: React.FC = () => {
               <Label>Filtrar por curso</Label>
               <Select value={filterCursoId} onChange={(e) => setFilterCursoId(parseInt(e.target.value) || 0)} className="mt-2">
                 <option value={0}>Todos los cursos</option>
-                {Array.from(new Set(matriculas.map(m => m.curso_id))).map(cid => {
+                  {Array.from(new Set(displayMatriculas.map(m => m.curso_id))).map(cid => {
                   const c = cursos.find(cu => cu.id === cid);
                   return <option key={cid} value={cid}>{c?.nombre || `Curso ${cid}`}</option>;
                 })}
               </Select>
             </div>
+
             <div className="flex-1">
               <Label>Filtrar por grupo</Label>
               <Input value={filterGrupo} onChange={(e) => setFilterGrupo(e.target.value)} placeholder="Nombre del grupo" className="mt-2" />
@@ -497,70 +480,99 @@ const Matriculas: React.FC = () => {
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
-            {matriculas.length === 0 ? (
+            {displayMatriculas.length === 0 ? (
               <div className="col-span-full flex flex-col items-center justify-center py-24 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
                 <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Sin matrículas</p>
               </div>
             ) : (
-              filteredMatriculas.length === 0 ? (
+              displayMatriculas.filter(m => {
+                const byCurso = filterCursoId ? m.curso_id === filterCursoId : true;
+                const byGrupo = filterGrupo ? (m.grupo_nombre || '').toLowerCase().includes(filterGrupo.toLowerCase()) : true;
+                return byCurso && byGrupo;
+              }).length === 0 ? (
                 <div className="col-span-full flex flex-col items-center justify-center py-24 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
                   <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Sin resultados para estos filtros</p>
                 </div>
               ) : (
-                filteredMatriculas.map((m) => (
+                displayMatriculas.filter(m => {
+                  const byCurso = filterCursoId ? m.curso_id === filterCursoId : true;
+                  const byGrupo = filterGrupo ? (m.grupo_nombre || '').toLowerCase().includes(filterGrupo.toLowerCase()) : true;
+                  return byCurso && byGrupo;
+                }).map((m) => (
               <div 
                 key={m.id} 
                 className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 hover:shadow-md transition cursor-pointer"
                 onClick={() => { setDetalle(m); setDetailOpen(true); }}
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 font-black">
-                      {m.estudiante_nombre?.charAt(0)}
-                    </div>
-                    <div>
-                      <div className="text-lg font-bold text-slate-900">{m.estudiante_nombre}</div>
-                      <div className="text-sm text-slate-600 flex items-center gap-2">
-                        <span>{m.curso_nombre}</span>
-                        <span className="text-slate-400">•</span>
-                        <span className="italic">Docente: {m.tutor_nombre}</span>
-                      </div>
-                    </div>
-                  </div>
-                  {m.es_grupo ? (
-                    <Badge variant="info">{m.grupo_nombre || 'Grupo'}</Badge>
-                  ) : null}
+                {/* NOMBRE DEL CURSO - GRANDE */}
+                <div className="mb-4">
+                  <div className="text-2xl font-black text-slate-900">{m.curso_nombre}</div>
+                  <div className="text-sm text-slate-600 mt-1">Docente: <span className="font-semibold text-slate-900">{m.tutor_nombre}</span></div>
                 </div>
-                {renderHorarioBadges(m)}
+
+                {/* HORARIOS DEL MES */}
                 {renderFechasMes(m)}
-                <div className="flex items-center justify-between mt-4 text-sm text-slate-600">
-                  <div className="flex items-center gap-2">
-                    <Calendar className="w-4 h-4" />
-                    <span>{new Date(m.fecha_inscripcion).toLocaleDateString('es-ES')}</span>
+
+                {/* ESTUDIANTES MATRICULADOS */}
+                <div className="mt-4 pt-4 border-t border-slate-200">
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-2">Alumnos Matriculados</p>
+                  <div className="space-y-2">
+                    {m.students && m.students.length > 0 ? (
+                      m.students.map((student: any) => (
+                        <div key={student.id} className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs">
+                            {student.nombre?.charAt(0)}
+                          </div>
+                          <span className="font-semibold text-slate-900">{student.nombre}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs">
+                          {m.estudiante_nombre?.charAt(0)}
+                        </div>
+                        <span className="font-semibold text-slate-900">{m.estudiante_nombre}</span>
+                      </div>
+                    )}
                   </div>
+                </div>
+
+                {/* TIPO Y GRUPO */}
+                <div className="mt-4 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
-                      onClick={(e) => { e.stopPropagation(); handleEdit(m); }} 
-                      className="h-9 w-9 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-100"
-                    >
-                      <Edit className="w-4 h-4" />
-                    </Button>
-                    <Button 
-                      variant="destructive" 
-                      size="icon" 
-                      onClick={(e) => { e.stopPropagation(); handleCancel(m.id); }} 
-                      className="h-9 w-9 bg-red-700 hover:bg-red-800 text-white border-0"
-                    >
-                      <XCircle className="w-4 h-4" />
-                    </Button>
+                    {m.es_grupo && (
+                      <Badge variant="info">{m.grupo_nombre || 'Grupo'}</Badge>
+                    )}
+                    <Badge variant="secondary">{m.curso_tipo_clase === 'tutoria' ? 'Tutoría' : 'Grupal'}</Badge>
                   </div>
+                  <div className="text-xs text-slate-500">
+                    {new Date(m.fecha_inscripcion).toLocaleDateString('es-ES')}
+                  </div>
+                </div>
+
+                {/* ACCIONES */}
+                <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-200 justify-end">
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={(e) => { e.stopPropagation(); handleEdit(m); }} 
+                    className="h-9 w-9 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-100"
+                  >
+                    <Edit className="w-4 h-4" />
+                  </Button>
+                  <Button 
+                    variant="destructive" 
+                    size="icon" 
+                    onClick={(e) => { e.stopPropagation(); handleCancel(m.id); }} 
+                    className="h-9 w-9 bg-red-700 hover:bg-red-800 text-white border-0"
+                  >
+                    <XCircle className="w-4 h-4" />
+                  </Button>
                 </div>
               </div>
             ))
-            )
-          )}
+          )
+        )}
           </div>
         </div>
       )}
@@ -588,6 +600,32 @@ const Matriculas: React.FC = () => {
             </div>
 
             <form onSubmit={handleSubmit} className="p-8 space-y-8">
+              {/* Matrícula grupal */}
+              <div className="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                <div className="flex items-center gap-3">
+                  <input
+                    id="es_grupo"
+                    type="checkbox"
+                    checked={!!formData.es_grupo}
+                    onChange={(e) => setFormData(prev => ({ ...prev, es_grupo: e.target.checked }))}
+                    className="w-4 h-4"
+                  />
+                  <Label htmlFor="es_grupo" className="m-0">Matrícula en grupo</Label>
+                </div>
+                {formData.es_grupo && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                    <div className="md:col-span-2">
+                      <Label>Nombre del grupo</Label>
+                      <Input
+                        value={formData.grupo_nombre}
+                        onChange={(e) => setFormData(prev => ({ ...prev, grupo_nombre: e.target.value }))}
+                        placeholder="Ej: Grupo A1 Nocturno"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Campos de Selección */}
               <div className="space-y-6">
                 {!formData.es_grupo ? (
@@ -650,74 +688,7 @@ const Matriculas: React.FC = () => {
                   </Select>
                 </div>
 
-                <div>
-                  <Label>Asignar Tutor *</Label>
-                  <Select 
-                    value={formData.tutor_id} 
-                    onChange={(e) => handleSelectChange('tutor_id', e.target.value)}
-                    className="mt-2"
-                  >
-                    <option value={0}>Elegir tutor...</option>
-                    {tutores.map(t => (
-                      <option key={t.id} value={t.id}>
-                        {t.nombre} - {t.especialidad}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
               </div>
-
-              {/* Matrícula grupal */}
-              <div className="p-4 border border-slate-200 rounded-lg bg-slate-50">
-                <div className="flex items-center gap-3">
-                  <input
-                    id="es_grupo"
-                    type="checkbox"
-                    checked={!!formData.es_grupo}
-                    onChange={(e) => setFormData(prev => ({ ...prev, es_grupo: e.target.checked }))}
-                    className="w-4 h-4"
-                  />
-                  <Label htmlFor="es_grupo" className="m-0">Matrícula en grupo</Label>
-                </div>
-                {formData.es_grupo && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-                    <div className="md:col-span-2">
-                      <Label>Nombre del grupo</Label>
-                      <Input
-                        value={formData.grupo_nombre}
-                        onChange={(e) => setFormData(prev => ({ ...prev, grupo_nombre: e.target.value }))}
-                        placeholder="Ej: Grupo A1 Nocturno"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Estado de Compatibilidad */}
-              {(formData.estudiante_id && formData.curso_id && formData.tutor_id) && (
-                <div className={`p-5 rounded-lg border-2 ${
-                  compatibilityStatus.compatible 
-                    ? 'bg-green-50 border-green-200' 
-                    : 'bg-amber-50 border-amber-200'
-                }`}>
-                  <div className="flex items-start gap-3">
-                    {compatibilityStatus.compatible ? (
-                      <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-                    ) : (
-                      <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-                    )}
-                    <div>
-                      {compatibilityStatus.issues.map((issue, idx) => (
-                        <p key={idx} className={`text-sm font-semibold ${
-                          compatibilityStatus.compatible ? 'text-green-700' : 'text-amber-700'
-                        }`}>
-                          {issue}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
 
               {/* Mensaje de Advertencia */}
               <div className="bg-blue-50/50 p-5 rounded-lg border border-blue-200 flex items-start gap-3 text-blue-700 text-sm leading-relaxed font-semibold">
@@ -741,7 +712,7 @@ const Matriculas: React.FC = () => {
                 <Button
                   type="submit"
                   variant="primary"
-                  disabled={!formData.estudiante_id || !formData.curso_id || !formData.tutor_id}
+                  disabled={!formData.curso_id || (formData.es_grupo ? formData.estudiante_ids.length === 0 : !formData.estudiante_id)}
                   className="px-8 bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
                 >
                   {editingId ? 'Actualizar Matrícula' : 'Matricular Alumno'}

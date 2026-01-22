@@ -96,7 +96,7 @@ router.post('/', async (req, res) => {
       // Validar compatibilidad de horarios
       const tutorObj = {
         ...tutor,
-        dias_horarios: tutor.dias_horarios ? JSON.parse(tutor.dias_horarios) : null
+        dias_horarios: tutor.dias_horarios // Ya viene como objeto desde Supabase JSONB
       };
       const cursoObj = {
         dias_schedule: dias_schedule,
@@ -124,7 +124,6 @@ router.post('/', async (req, res) => {
         max_estudiantes: maxEstudiantes,
         tipo_clase,
         dias: dias ? JSON.stringify(dias) : null,
-        dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
         dias_schedule: dias_schedule ? JSON.stringify(dias_schedule) : null,
         costo_curso: parseFloat(costo_curso) || 0,
         pago_tutor: parseFloat(pago_tutor) || 0,
@@ -186,7 +185,6 @@ router.put('/:id', async (req, res) => {
         max_estudiantes: maxEstudiantes,
         tipo_clase,
         dias: dias ? JSON.stringify(dias) : null,
-        dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
         dias_schedule: dias_schedule ? JSON.stringify(dias_schedule) : null,
         costo_curso: parseFloat(costo_curso) || 0,
         pago_tutor: parseFloat(pago_tutor) || 0,

@@ -1,7 +1,6 @@
 import express from 'express';
 import { randomUUID } from 'crypto';
 import { supabase } from '../supabase.js';
-import { validateTutorCourseSchedule } from '../utils/scheduleValidator.js';
 
 const router = express.Router();
 
@@ -113,24 +112,6 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Curso o tutor no existen' });
     }
 
-    // Validar compatibilidad de horarios del tutor con el curso
-    const tutorObj = {
-      ...tutorCheck.data,
-      dias_horarios: tutorCheck.data.dias_horarios ? JSON.parse(tutorCheck.data.dias_horarios) : null
-    };
-    const cursoObj = {
-      dias_schedule: cursoCheck.data.dias_schedule ? JSON.parse(cursoCheck.data.dias_schedule) : null,
-      dias_turno: cursoCheck.data.dias_turno ? JSON.parse(cursoCheck.data.dias_turno) : null
-    };
-
-    const validation = validateTutorCourseSchedule(tutorObj, cursoObj);
-    if (!validation.compatible) {
-      return res.status(409).json({
-        error: 'Horarios incompatibles entre tutor y curso',
-        details: validation.issues
-      });
-    }
-
     // Normalizar lista de estudiantes
     let listaEstudiantes = [];
     if (Array.isArray(estudiante_ids) && estudiante_ids.length > 0) {
@@ -154,42 +135,89 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: `Estudiantes no encontrados: ${faltantes.join(', ')}` });
     }
 
-    const nuevoGrupoId = grupo_id || randomUUID();
+    // Determinar si es grupo
+    const esGrupo = !!es_grupo || listaEstudiantes.length > 1;
+    
+    if (esGrupo) {
+      // UNA SOLA matrícula grupal con array de estudiantes
+      const registro = {
+        estudiante_id: null,
+        estudiante_ids: listaEstudiantes,
+        curso_id,
+        tutor_id,
+        es_grupo: true,
+        grupo_id: grupo_id || randomUUID(),
+        grupo_nombre: grupo_nombre || null,
+        created_by: userId,
+        estado: true
+      };
 
-    // Insertar 1..N matrículas (grupal cuando hay múltiples)
-    const registros = listaEstudiantes.map((eid) => ({
-      estudiante_id: eid,
-      curso_id,
-      tutor_id,
-      es_grupo: !!es_grupo || listaEstudiantes.length > 1,
-      grupo_id: nuevoGrupoId,
-      grupo_nombre: grupo_nombre || null,
-      created_by: userId,
-      estado: true
-    }));
+      const { data: nueva, error } = await supabase
+        .from('matriculas')
+        .insert([registro])
+        .select(`
+          *,
+          cursos:curso_id (nombre),
+          tutores:tutor_id (nombre)
+        `);
+      if (error) throw error;
 
-    const { data: nuevas, error } = await supabase
-      .from('matriculas')
-      .insert(registros)
-      .select(`
-        *,
-        estudiantes:estudiante_id (nombre),
-        cursos:curso_id (nombre),
-        tutores:tutor_id (nombre)
-      `);
-    if (error) throw error;
+      const m = nueva[0];
+      
+      // Obtener nombres de estudiantes para respuesta
+      const { data: estRows } = await supabase
+        .from('estudiantes')
+        .select('id, nombre')
+        .in('id', listaEstudiantes);
+      
+      const formatted = {
+        ...m,
+        curso_nombre: m.cursos?.nombre,
+        tutor_nombre: m.tutores?.nombre,
+        es_grupo: true,
+        grupo_id: m.grupo_id,
+        grupo_nombre: m.grupo_nombre,
+        estudiante_ids: m.estudiante_ids,
+        estudiantes_detalle: estRows || []
+      };
 
-    const formatted = (nuevas || []).map((m) => ({
-      ...m,
-      estudiante_nombre: m.estudiantes?.nombre,
-      curso_nombre: m.cursos?.nombre,
-      tutor_nombre: m.tutores?.nombre,
-      es_grupo: m.es_grupo,
-      grupo_id: m.grupo_id,
-      grupo_nombre: m.grupo_nombre
-    }));
+      res.status(201).json(formatted);
+    } else {
+      // UNA matrícula individual
+      const registro = {
+        estudiante_id: listaEstudiantes[0],
+        estudiante_ids: null,
+        curso_id,
+        tutor_id,
+        es_grupo: false,
+        grupo_id: null,
+        grupo_nombre: null,
+        created_by: userId,
+        estado: true
+      };
 
-    res.status(201).json(formatted.length === 1 ? formatted[0] : formatted);
+      const { data: nueva, error } = await supabase
+        .from('matriculas')
+        .insert([registro])
+        .select(`
+          *,
+          estudiantes:estudiante_id (nombre),
+          cursos:curso_id (nombre),
+          tutores:tutor_id (nombre)
+        `);
+      if (error) throw error;
+
+      const m = nueva[0];
+      const formatted = {
+        ...m,
+        estudiante_nombre: m.estudiantes?.nombre,
+        curso_nombre: m.cursos?.nombre,
+        tutor_nombre: m.tutores?.nombre,
+        es_grupo: false
+      };
+
+      res.status(201).json(formatted);
+    }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -261,35 +289,4 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// GET - Validar compatibilidad de horarios entre tutor y curso
-router.get('/validate/tutor-course/:tutor_id/:curso_id', async (req, res) => {
-  try {
-    const { tutor_id, curso_id } = req.params;
-
-    const [{ data: tutor, error: tutorError }, { data: curso, error: cursoError }] = await Promise.all([
-      supabase.from('tutores').select('*').eq('id', tutor_id).single(),
-      supabase.from('cursos').select('*').eq('id', curso_id).single()
-    ]);
-
-    if (tutorError || !tutor || cursoError || !curso) {
-      return res.status(404).json({ error: 'Tutor o curso no encontrado' });
-    }
-
-    const tutorObj = {
-      ...tutor,
-      dias_horarios: tutor.dias_horarios ? JSON.parse(tutor.dias_horarios) : null
-    };
-    const cursoObj = {
-      dias_schedule: curso.dias_schedule ? JSON.parse(curso.dias_schedule) : null,
-      dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null
-    };
-
-    const validation = validateTutorCourseSchedule(tutorObj, cursoObj);
-    res.json(validation);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 export default router;
-
