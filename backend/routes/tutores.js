@@ -14,14 +14,8 @@ router.get('/', async (req, res) => {
       .order('created_at', { ascending: false });
     
     if (error) throw error;
-    
-    // Parse JSON fields
-    const tutoresResponse = tutores.map(t => ({
-      ...t,
-      dias_turno: t.dias_turno ? JSON.parse(t.dias_turno) : null
-    }));
-
-    res.json(tutoresResponse);
+    // No parse: devolver como viene (jsonb llega como objeto)
+    res.json(tutores);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -41,13 +35,7 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Tutor no encontrado' });
     }
 
-    // Parse JSON fields
-    const tutorResponse = {
-      ...tutor,
-      dias_turno: tutor.dias_turno ? JSON.parse(tutor.dias_turno) : null
-    };
-
-    res.json(tutorResponse);
+    res.json(tutor);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -79,7 +67,10 @@ router.post('/', async (req, res) => {
         email: email || null,
         telefono: telefono || null,
         especialidad,
-        dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
+        // La columna en DB es NOT NULL: aseguramos valor por defecto
+        tarifa_por_hora: 0,
+        // si la columna es json/jsonb, enviar objeto; si es text, Supabase lo convertirá
+        dias_turno: dias_turno || null,
         created_by: userId,
         estado: true
       })
@@ -91,13 +82,7 @@ router.post('/', async (req, res) => {
       throw error;
     }
 
-    // Parse JSON fields for response
-    const tutorResponse = {
-      ...tutor,
-      dias_turno: tutor.dias_turno ? JSON.parse(tutor.dias_turno) : null
-    };
-
-    res.status(201).json(tutorResponse);
+    res.status(201).json(tutor);
   } catch (error) {
     console.error('Error al crear tutor:', error);
     res.status(500).json({ error: error.message });
@@ -126,7 +111,7 @@ router.put('/:id', async (req, res) => {
         email: email || null,
         telefono: telefono || null,
         especialidad,
-        dias_turno: dias_turno ? JSON.stringify(dias_turno) : null,
+        dias_turno: dias_turno || null,
         estado,
         updated_by: userId,
         updated_at: new Date().toISOString()
@@ -137,13 +122,7 @@ router.put('/:id', async (req, res) => {
     
     if (error) throw error;
 
-    // Parse JSON fields for response
-    const tutorResponse = {
-      ...tutor,
-      dias_turno: tutor.dias_turno ? JSON.parse(tutor.dias_turno) : null
-    };
-
-    res.json(tutorResponse);
+    res.json(tutor);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
