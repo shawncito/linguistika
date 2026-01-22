@@ -11,6 +11,8 @@ import { Plus, Edit, Trash2, Mail, Phone, Briefcase, Star, MoreVertical, Search,
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const ESPECIALIDADES = ['Inglés', 'Francés', 'Alemán', 'Portugués', 'Chino', 'Japonés', 'Español'];
 
+const NIVELES = ['A1','A2','B1','B2','C1','C2'];
+
 const Tutores: React.FC = () => {
   const [tutores, setTutores] = useState<Tutor[]>([]);
   const [loading, setLoading] = useState(true);
@@ -21,9 +23,12 @@ const Tutores: React.FC = () => {
     email: '',
     telefono: '',
     especialidad: 'Inglés',
-    horario_tipo: 'predefinido',
+    horario_tipo: 'personalizado',
     dias: [] as string[],
-    dias_turno: {} as Record<string, 'Tarde' | 'Noche'>
+    dias_turno: {} as Record<string, 'Tarde' | 'Noche'>,
+    dias_horarios: {} as Record<string, { hora_inicio: string; hora_fin: string }>,
+    es_especializado: false,
+    niveles_apto: [] as string[]
   });
   const [customHoras, setCustomHoras] = useState({ hora_inicio: '', hora_fin: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -68,7 +73,14 @@ const Tutores: React.FC = () => {
       newErrors.telefono = 'Teléfono inválido';
     }
     if (formData.dias.length === 0) newErrors.dias = 'Selecciona al menos un día';
-    if (Object.keys(formData.dias_turno).length === 0) newErrors.dias_turno = 'Selecciona turno para cada día';
+    
+    // Validar que todos los días tengan horas
+    for (const dia of formData.dias) {
+      if (!formData.dias_horarios[dia] || !formData.dias_horarios[dia].hora_inicio || !formData.dias_horarios[dia].hora_fin) {
+        newErrors.dias_horarios = 'Especifica hora de inicio y fin para cada día';
+        break;
+      }
+    }
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -81,8 +93,10 @@ const Tutores: React.FC = () => {
         email: formData.email.trim() || null,
         telefono: formData.telefono.trim(),
         especialidad: formData.especialidad,
-        horario_tipo: formData.horario_tipo,
-        dias_turno: formData.dias_turno
+        horario_tipo: 'personalizado',
+        dias_horarios: formData.dias_horarios,
+        es_especializado: !!formData.es_especializado,
+        niveles_apto: Array.isArray(formData.niveles_apto) ? formData.niveles_apto : []
       };
 
       if (editingId) {
@@ -106,9 +120,12 @@ const Tutores: React.FC = () => {
       email: '',
       telefono: '',
       especialidad: 'Inglés',
-      horario_tipo: 'predefinido',
+      horario_tipo: 'personalizado',
       dias: [],
-      dias_turno: {}
+      dias_turno: {},
+      dias_horarios: {},
+      es_especializado: false,
+      niveles_apto: []
     });
     setCustomHoras({ hora_inicio: '', hora_fin: '' });
     setErrors({});
@@ -121,9 +138,12 @@ const Tutores: React.FC = () => {
       email: tutor.email || '',
       telefono: tutor.telefono || '',
       especialidad: tutor.especialidad,
-      horario_tipo: tutor.horario_tipo || 'predefinido',
-      dias: [],
-      dias_turno: tutor.dias_turno || {}
+      horario_tipo: 'personalizado',
+      dias: Object.keys(tutor.dias_horarios || {}),
+      dias_turno: {},
+      dias_horarios: tutor.dias_horarios || {},
+      es_especializado: !!tutor.es_especializado,
+      niveles_apto: (tutor.niveles_apto as any) || []
     });
     setShowModal(true);
   };
@@ -179,6 +199,45 @@ const Tutores: React.FC = () => {
             </CardHeader>
 
             <form onSubmit={handleSubmit} className="p-8 space-y-6">
+              {/* Especialización */}
+              <div className="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                <div className="flex items-center gap-3">
+                  <input
+                    id="es_especializado"
+                    type="checkbox"
+                    checked={!!formData.es_especializado}
+                    onChange={(e) => setFormData(prev => ({ ...prev, es_especializado: e.target.checked }))}
+                    className="w-4 h-4"
+                  />
+                  <Label htmlFor="es_especializado" className="m-0">Tutor especializado / apto por nivel</Label>
+                </div>
+                {formData.es_especializado && (
+                  <div className="mt-3">
+                    <Label>Niveles en los que es apto</Label>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {NIVELES.map(n => (
+                        <label key={n} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.niveles_apto.includes(n)}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setFormData(prev => ({
+                                ...prev,
+                                niveles_apto: checked
+                                  ? [...prev.niveles_apto, n]
+                                  : prev.niveles_apto.filter(x => x !== n)
+                              }));
+                            }}
+                            className="w-4 h-4"
+                          />
+                          <span className="text-sm font-semibold text-slate-700">{n}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
               {/* Nombre */}
               <div>
                 <Label>Nombre *</Label>
@@ -250,48 +309,50 @@ const Tutores: React.FC = () => {
                 {errors.dias && <p className="text-red-500 text-sm mt-2">{errors.dias}</p>}
               </div>
 
-              {/* Horario - Turno por Día */}
+              {/* Horario - Horas específicas por Día */}
               {formData.dias.length > 0 && (
                 <div>
-                  <Label>Turno por Día *</Label>
+                  <Label>Horas por Día *</Label>
                   <div className="space-y-4 mt-3">
                     {formData.dias.map(dia => (
                       <div key={dia} className="p-4 border border-slate-200 rounded-lg bg-slate-50">
                         <p className="text-sm font-semibold text-slate-900 mb-3">{dia}</p>
                         <div className="flex gap-4">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name={`turno-${dia}`}
-                              value="Tarde"
-                              checked={formData.dias_turno[dia] === 'Tarde'}
+                          <div className="flex-1">
+                            <Label className="text-xs">Inicio</Label>
+                            <Input
+                              type="time"
+                              value={formData.dias_horarios[dia]?.hora_inicio || ''}
                               onChange={(e) => setFormData(prev => ({
                                 ...prev,
-                                dias_turno: { ...prev.dias_turno, [dia]: e.target.value as 'Tarde' | 'Noche' }
+                                dias_horarios: {
+                                  ...prev.dias_horarios,
+                                  [dia]: { ...prev.dias_horarios[dia], hora_inicio: e.target.value }
+                                }
                               }))}
-                              className="w-4 h-4"
+                              className="mt-1"
                             />
-                            <span className="text-sm text-slate-700">Tarde (2:00 - 6:00 PM)</span>
-                          </label>
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="radio"
-                              name={`turno-${dia}`}
-                              value="Noche"
-                              checked={formData.dias_turno[dia] === 'Noche'}
+                          </div>
+                          <div className="flex-1">
+                            <Label className="text-xs">Fin</Label>
+                            <Input
+                              type="time"
+                              value={formData.dias_horarios[dia]?.hora_fin || ''}
                               onChange={(e) => setFormData(prev => ({
                                 ...prev,
-                                dias_turno: { ...prev.dias_turno, [dia]: e.target.value as 'Tarde' | 'Noche' }
+                                dias_horarios: {
+                                  ...prev.dias_horarios,
+                                  [dia]: { ...prev.dias_horarios[dia], hora_fin: e.target.value }
+                                }
                               }))}
-                              className="w-4 h-4"
+                              className="mt-1"
                             />
-                            <span className="text-sm text-slate-700">Noche (6:00 - 9:00 PM)</span>
-                          </label>
+                          </div>
                         </div>
                       </div>
                     ))}
                   </div>
-                  {errors.dias_turno && <p className="text-red-500 text-sm mt-2">{errors.dias_turno}</p>}
+                  {errors.dias_horarios && <p className="text-red-500 text-sm mt-2">{errors.dias_horarios}</p>}
                 </div>
               )}
 
@@ -383,13 +444,30 @@ const Tutores: React.FC = () => {
                 </div>
               )}
               
-              {tutor.dias_turno && Object.keys(tutor.dias_turno).length > 0 && (
+              {tutor.dias_horarios && Object.keys(tutor.dias_horarios).length > 0 && (
                 <div className="mt-4 pt-4 border-t border-slate-200">
                   <p className="text-xs font-bold text-slate-400 uppercase mb-2">Horario</p>
-                  <div className="flex flex-wrap gap-2">
-                    {Object.entries(tutor.dias_turno).map(([dia, turno]) => (
-                      <span key={dia} className="text-xs bg-blue-50 text-blue-700 px-3 py-1 rounded-full border border-blue-200 font-semibold">
-                        {dia.slice(0, 3)} • {turno}
+                  <div className="space-y-2">
+                    {Object.entries(tutor.dias_horarios).map(([dia, horario]: [string, any]) => (
+                      <div key={dia} className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-lg border border-blue-200 font-semibold flex justify-between">
+                        <span>{dia.slice(0, 3)}</span>
+                        <span>{horario.hora_inicio} - {horario.hora_fin}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(tutor.es_especializado || (tutor.niveles_apto && (tutor.niveles_apto as any[]).length > 0)) && (
+                <div className="mt-4 pt-4 border-t border-slate-200">
+                  <p className="text-xs font-bold text-slate-400 uppercase mb-2">Especialización</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {tutor.es_especializado && (
+                      <Badge variant="success">Especializado</Badge>
+                    )}
+                    {Array.isArray(tutor.niveles_apto) && tutor.niveles_apto.map((n) => (
+                      <span key={n} className="text-xs bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-200 font-semibold">
+                        Nivel {n}
                       </span>
                     ))}
                   </div>

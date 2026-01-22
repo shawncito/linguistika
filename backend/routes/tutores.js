@@ -46,7 +46,10 @@ router.post('/', async (req, res) => {
   try {
     const { 
       nombre, email, telefono, especialidad,
-      dias_turno = null
+      dias_turno = null,
+      dias_horarios = null,
+      es_especializado = false,
+      niveles_apto = []
     } = req.body;
     const userId = req.user?.id;
     
@@ -71,6 +74,9 @@ router.post('/', async (req, res) => {
         tarifa_por_hora: 0,
         // si la columna es json/jsonb, enviar objeto; si es text, Supabase lo convertirá
         dias_turno: dias_turno || null,
+        dias_horarios: dias_horarios || null,
+        es_especializado: !!es_especializado,
+        niveles_apto: Array.isArray(niveles_apto) ? niveles_apto : [],
         created_by: userId,
         estado: true
       })
@@ -94,7 +100,9 @@ router.put('/:id', async (req, res) => {
   try {
     const { 
       nombre, email, telefono, especialidad,
-      dias_turno = null, estado 
+      dias_turno = null, dias_horarios = null, estado,
+      es_especializado = false,
+      niveles_apto = []
     } = req.body;
     const userId = req.user?.id;
     
@@ -112,6 +120,9 @@ router.put('/:id', async (req, res) => {
         telefono: telefono || null,
         especialidad,
         dias_turno: dias_turno || null,
+        dias_horarios: dias_horarios || null,
+        es_especializado: !!es_especializado,
+        niveles_apto: Array.isArray(niveles_apto) ? niveles_apto : [],
         estado,
         updated_by: userId,
         updated_at: new Date().toISOString()

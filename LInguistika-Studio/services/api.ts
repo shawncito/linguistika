@@ -9,6 +9,8 @@ import {
   EstadoPago,
   Clase,
   HorasTrabajo,
+  ResumenTutorEstudiantes,
+  ResumenCursoGrupos,
 } from '../types';
 
 const TOKEN_KEY = 'linguistika_token';
@@ -141,6 +143,10 @@ export const api = {
     delete: async (id: number): Promise<void> => {
       await http.delete(`/matriculas/${id}`);
     },
+    validateTutorCourse: async (tutor_id: number, curso_id: number): Promise<{ compatible: boolean; issues: string[] }> => {
+      const res = await http.get<{ compatible: boolean; issues: string[] }>(`/matriculas/validate/tutor-course/${tutor_id}/${curso_id}`);
+      return res.data;
+    },
   },
 
   pagos: {
@@ -197,6 +203,14 @@ export const api = {
         cursos: t.cursos,
         estudiantes: t.estudiantes,
       }));
+    },
+    getResumenTutoresEstudiantes: async (): Promise<ResumenTutorEstudiantes[]> => {
+      const res = await http.get('/dashboard/resumen-tutores-estudiantes');
+      return res.data as ResumenTutorEstudiantes[];
+    },
+    getResumenCursosGrupos: async (): Promise<ResumenCursoGrupos[]> => {
+      const res = await http.get('/dashboard/resumen-cursos-grupos');
+      return res.data as ResumenCursoGrupos[];
     },
     completarSesion: async (matriculaId: number, fecha: string): Promise<any> => {
       const res = await http.post(`/dashboard/sesion/${matriculaId}/${fecha}/completar`);

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
-import { Curso } from '../types';
+import { Curso, Tutor } from '../types';
 import { 
   Button, Card, CardHeader, CardTitle, CardDescription, 
   Badge, Input, Label, Select
@@ -13,6 +13,7 @@ const TURNOS = ['Tarde', 'Noche'];
 
 const Cursos: React.FC = () => {
   const [cursos, setCursos] = useState<Curso[]>([]);
+  const [tutores, setTutores] = useState<Tutor[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -21,7 +22,7 @@ const Cursos: React.FC = () => {
     nombre: '',
     descripcion: '',
     nivel: 'None',
-    tipo_clase: 'grupal', // 'grupal' o 'tutoria'
+    tipo_clase: 'grupal',
     max_estudiantes: 10,
     dias: [] as string[],
     dias_turno: {} as Record<string, 'Tarde' | 'Noche'>,
@@ -32,7 +33,11 @@ const Cursos: React.FC = () => {
       duracion_horas?: number;
     }>,
     costo_curso: 0,
-    pago_tutor: 0
+    pago_tutor: 0,
+    tutor_id: 0,
+    grado_activo: false,
+    grado_nombre: '',
+    grado_color: '#2563eb'
   });
 
   // Función para calcular duración en horas
@@ -49,8 +54,12 @@ const Cursos: React.FC = () => {
 
   const loadData = async () => {
     setLoading(true);
-    const data = await api.cursos.getAll();
-    setCursos(data);
+    const [cursos, tutores] = await Promise.all([
+      api.cursos.getAll(),
+      api.tutores.getAll()
+    ]);
+    setCursos(cursos);
+    setTutores(tutores);
     setLoading(false);
   };
 
@@ -100,7 +109,11 @@ const Cursos: React.FC = () => {
         dias_turno: formData.dias_turno,
         dias_schedule: formData.dias_schedule,
         costo_curso: formData.costo_curso,
-        pago_tutor: formData.pago_tutor
+        pago_tutor: formData.pago_tutor,
+        tutor_id: formData.tutor_id || null,
+        grado_activo: !!formData.grado_activo,
+        grado_nombre: formData.grado_activo ? (formData.grado_nombre || null) : null,
+        grado_color: formData.grado_activo ? (formData.grado_color || '#2563eb') : null
       };
 
       if (editingId) {
@@ -129,7 +142,11 @@ const Cursos: React.FC = () => {
       dias_turno: {},
       dias_schedule: {},
       costo_curso: 0,
-      pago_tutor: 0
+      pago_tutor: 0,
+      tutor_id: 0,
+      grado_activo: false,
+      grado_nombre: '',
+      grado_color: '#2563eb'
     });
     setErrors({});
   };
@@ -146,7 +163,11 @@ const Cursos: React.FC = () => {
       dias_turno: curso.dias_turno || {},
       dias_schedule: curso.dias_schedule || {},
       costo_curso: curso.costo_curso || 0,
-      pago_tutor: curso.pago_tutor || 0
+      pago_tutor: curso.pago_tutor || 0,
+      tutor_id: curso.tutor_id || 0,
+      grado_activo: !!curso.grado_activo,
+      grado_nombre: curso.grado_nombre || '',
+      grado_color: curso.grado_color || '#2563eb'
     });
     setShowModal(true);
   };
@@ -252,6 +273,25 @@ const Cursos: React.FC = () => {
                     <option value="tutoria">Tutoría (Infinito)</option>
                   </Select>
                 </div>
+              </div>
+
+              {/* Tutor Asignado */}
+              <div>
+                <Label>Asignar Tutor (opcional)</Label>
+                <Select 
+                  value={formData.tutor_id || 0} 
+                  onChange={(e) => setFormData(prev => ({ ...prev, tutor_id: parseInt(e.target.value) || 0 }))}
+                >
+                  <option value={0}>Sin tutor asignado</option>
+                  {tutores.map(tutor => (
+                    <option key={tutor.id} value={tutor.id}>
+                      {tutor.nombre} - {tutor.especialidad}
+                    </option>
+                  ))}
+                </Select>
+                <p className="text-xs text-slate-500 mt-1">
+                  Se validará la compatibilidad de horarios automáticamente
+                </p>
               </div>
 
               {/* Límite de Estudiantes */}
@@ -454,6 +494,41 @@ const Cursos: React.FC = () => {
                 </div>
               </div>
 
+              {/* Etiqueta de Grado / Color */}
+              <div className="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                <div className="flex items-center gap-3">
+                  <input
+                    id="grado_activo"
+                    type="checkbox"
+                    checked={!!formData.grado_activo}
+                    onChange={(e) => setFormData(prev => ({ ...prev, grado_activo: e.target.checked }))}
+                    className="w-4 h-4"
+                  />
+                  <Label htmlFor="grado_activo" className="m-0">Mostrar etiqueta de grado en tarjetas</Label>
+                </div>
+                {formData.grado_activo && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+                    <div className="md:col-span-2">
+                      <Label>Nombre de la etiqueta</Label>
+                      <Input
+                        value={formData.grado_nombre}
+                        onChange={(e) => setFormData(prev => ({ ...prev, grado_nombre: e.target.value }))}
+                        placeholder="Ej: Primaria, Bachillerato, C1, etc."
+                      />
+                    </div>
+                    <div>
+                      <Label>Color</Label>
+                      <Input
+                        type="color"
+                        value={formData.grado_color}
+                        onChange={(e) => setFormData(prev => ({ ...prev, grado_color: e.target.value }))}
+                        className="h-12 p-1"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Botones */}
               <div className="flex gap-4 justify-end pt-6 border-t border-slate-200">
                 <Button
@@ -500,6 +575,18 @@ const Cursos: React.FC = () => {
                       <Badge className={`${curso.tipo_clase === 'tutoria' ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'} font-bold`}>
                         {curso.tipo_clase === 'tutoria' ? '1:1' : 'Grupal'}
                       </Badge>
+                      {curso.grado_activo && curso.grado_nombre && (
+                        <span
+                          className="text-[11px] font-bold px-3 py-1 rounded-full border"
+                          style={{
+                            backgroundColor: (curso.grado_color || '#e5e7eb') + '33',
+                            color: curso.grado_color || '#111827',
+                            borderColor: (curso.grado_color || '#e5e7eb')
+                          }}
+                        >
+                          {curso.grado_nombre}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -547,6 +634,16 @@ const Cursos: React.FC = () => {
                   </span>
                 </div>
               </div>
+
+              {/* Tutor Asignado */}
+              {curso.tutor_id && (
+                <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-200">
+                  <p className="text-xs text-indigo-700 font-bold uppercase mb-1">Tutor Asignado</p>
+                  <p className="text-sm font-black text-indigo-900">
+                    {tutores.find(t => t.id === curso.tutor_id)?.nombre || `Tutor #${curso.tutor_id}`}
+                  </p>
+                </div>
+              )}
 
               {/* Costos */}
               <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-100">

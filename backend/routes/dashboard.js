@@ -241,6 +241,78 @@ router.get('/resumen-tutores/:fecha', async (req, res) => {
   }
 });
 
+// GET - Resumen por tutor: conteo de estudiantes activos
+router.get('/resumen-tutores-estudiantes', async (_req, res) => {
+  try {
+    const { data: matriculas, error } = await supabase
+      .from('matriculas')
+      .select('tutor_id, estudiante_id')
+      .eq('estado', true);
+    if (error) throw error;
+
+    const { data: tutores, error: tErr } = await supabase
+      .from('tutores')
+      .select('id, nombre')
+      .eq('estado', true);
+    if (tErr) throw tErr;
+
+    const mapa = new Map();
+    for (const m of matriculas || []) {
+      const key = m.tutor_id;
+      if (!mapa.has(key)) mapa.set(key, new Set());
+      mapa.get(key).add(m.estudiante_id);
+    }
+
+    const resultado = (tutores || []).map(t => ({
+      tutor_id: t.id,
+      tutor_nombre: t.nombre,
+      total_estudiantes: mapa.get(t.id)?.size || 0
+    })).sort((a, b) => b.total_estudiantes - a.total_estudiantes);
+
+    res.json(resultado);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET - Resumen por curso: conteo de estudiantes y grupos
+router.get('/resumen-cursos-grupos', async (_req, res) => {
+  try {
+    const { data: matriculas, error } = await supabase
+      .from('matriculas')
+      .select('curso_id, estudiante_id, grupo_id, es_grupo, grupo_nombre')
+      .eq('estado', true);
+    if (error) throw error;
+
+    const { data: cursos, error: cErr } = await supabase
+      .from('cursos')
+      .select('id, nombre, grado_activo, grado_nombre, grado_color, tipo_clase, max_estudiantes')
+      .eq('estado', true);
+    if (cErr) throw cErr;
+
+    const resultado = (cursos || []).map(curso => {
+      const mats = (matriculas || []).filter(m => m.curso_id === curso.id);
+      const estudiantesSet = new Set(mats.map(m => m.estudiante_id));
+      const gruposSet = new Set(mats.filter(m => m.es_grupo).map(m => m.grupo_id));
+      return {
+        curso_id: curso.id,
+        curso_nombre: curso.nombre,
+        grado_activo: curso.grado_activo,
+        grado_nombre: curso.grado_nombre,
+        grado_color: curso.grado_color,
+        tipo_clase: curso.tipo_clase,
+        max_estudiantes: curso.max_estudiantes,
+        total_estudiantes: estudiantesSet.size,
+        total_grupos: gruposSet.size,
+      };
+    }).sort((a, b) => b.total_estudiantes - a.total_estudiantes);
+
+    res.json(resultado);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // DEBUG (SIN AUTENTICACIÓN): Ver qué cursos tienen las matrículas activas
 router.get('/debug/matriculas-cursos', async (req, res) => {
   try {

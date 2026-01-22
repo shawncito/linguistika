@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
-import { Matricula, Curso, Tutor, Estudiante } from '../types';
+import { Matricula, Curso, Tutor, Estudiante, ResumenTutorEstudiantes, ResumenCursoGrupos } from '../types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Input, Button } from '../components/UI';
 import { formatCRC } from '../lib/format';
 import { 
@@ -39,6 +39,8 @@ const Dashboard: React.FC = () => {
   const [sesionesDelDia, setSesionesDelDia] = useState<SesionDelDia[]>([]);
   const [sesionesHoy, setSesionesHoy] = useState<SesionDelDia[]>([]);
   const [loading, setLoading] = useState(true);
+  const [resumenTutores, setResumenTutores] = useState<ResumenTutorEstudiantes[]>([]);
+  const [resumenCursos, setResumenCursos] = useState<ResumenCursoGrupos[]>([]);
 
   // Función para obtener el día de la semana en español
   const getDiaSemana = (fecha: string): string => {
@@ -147,6 +149,14 @@ const Dashboard: React.FC = () => {
       if (selectedDate) {
         await calcularSesionesDelDia(selectedDate, setSesionesDelDia);
       }
+
+      // Resúmenes
+      const [rt, rc] = await Promise.all([
+        api.dashboard.getResumenTutoresEstudiantes().catch(() => []),
+        api.dashboard.getResumenCursosGrupos().catch(() => [])
+      ]);
+      setResumenTutores(rt);
+      setResumenCursos(rc);
     } catch (err) {
       console.error('Error en dashboard:', err);
     } finally {
@@ -265,6 +275,84 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 gap-10">
+        {/* Resúmenes */}
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Estudiantes por Tutor */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Alumnos por Tutor</CardTitle>
+              <CardDescription>Conteo de estudiantes activos por docente</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {resumenTutores.length === 0 ? (
+                <div className="text-sm text-slate-400 font-bold uppercase tracking-widest py-6">Sin datos</div>
+              ) : (
+                <div className="space-y-3">
+                  {resumenTutores.map((r) => (
+                    <div key={r.tutor_id} className="flex items-center justify-between p-3 rounded-lg border border-slate-200">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-700 font-bold">
+                          {r.tutor_nombre.charAt(0)}
+                        </div>
+                        <span className="font-semibold text-slate-800">{r.tutor_nombre}</span>
+                      </div>
+                      <span className="text-sm font-bold text-blue-700 bg-blue-50 px-3 py-1 rounded-full border border-blue-200">
+                        {r.total_estudiantes} alumnos
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Grupos/Estudiantes por Curso */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Grupos por Curso</CardTitle>
+              <CardDescription>Estudiantes y grupos activos por programa</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {resumenCursos.length === 0 ? (
+                <div className="text-sm text-slate-400 font-bold uppercase tracking-widest py-6">Sin datos</div>
+              ) : (
+                <div className="space-y-3">
+                  {resumenCursos.map((c) => (
+                    <div key={c.curso_id} className="p-3 rounded-lg border border-slate-200">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-700 font-bold">
+                            {c.curso_nombre.charAt(0)}
+                          </div>
+                          <div>
+                            <div className="font-semibold text-slate-800">{c.curso_nombre}</div>
+                            {c.grado_activo && c.grado_nombre && (
+                              <div
+                                className="text-[10px] inline-flex font-bold px-2 py-0.5 rounded-full border mt-1"
+                                style={{
+                                  backgroundColor: (c.grado_color || '#e5e7eb') + '33',
+                                  color: c.grado_color || '#111827',
+                                  borderColor: c.grado_color || '#e5e7eb'
+                                }}
+                              >
+                                {c.grado_nombre}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-full border border-emerald-200">{c.total_estudiantes} alumnos</span>
+                          <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded-full border border-indigo-200">{c.total_grupos} grupos</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
         {/* Sesiones de Hoy */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">

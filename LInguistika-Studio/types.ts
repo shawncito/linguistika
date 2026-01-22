@@ -28,7 +28,10 @@ export interface Tutor {
   horario_preferido?: string | null;
   dias?: string[] | null;
   dias_turno?: Record<string, 'Tarde' | 'Noche'> | null;
-  horario_tipo?: 'predefinido' | 'custom';
+  dias_horarios?: Record<string, { hora_inicio: string; hora_fin: string }> | null;
+  horario_tipo?: 'personalizado' | 'predefinido';
+  es_especializado?: boolean;
+  niveles_apto?: string[] | null;
   estado: number;
   created_at: string;
 }
@@ -51,6 +54,10 @@ export interface Curso {
   dias_semana?: string | string[] | null;
   costo_curso?: number;
   pago_tutor?: number;
+  tutor_id?: number | null;
+  grado_activo?: boolean;
+  grado_nombre?: string | null;
+  grado_color?: string | null;
   estado: number;
   created_at: string;
 }
@@ -100,11 +107,29 @@ export interface Matricula {
   fecha_inscripcion: string;
   estado: number;
   created_at: string;
+  es_grupo?: boolean;
+  grupo_id?: string;
+  grupo_nombre?: string | null;
   // Joined fields
   estudiante_nombre?: string;
   curso_nombre?: string;
   tutor_nombre?: string;
   tarifa_por_hora?: number;
+  // Curso horario y metadatos
+  curso_dias_turno?: Record<string, 'Tarde' | 'Noche'> | null;
+  curso_dias_schedule?: Record<string, {
+    turno: 'Tarde' | 'Noche';
+    hora_inicio: string;
+    hora_fin: string;
+    duracion_horas?: number;
+  }> | null;
+  curso_tipo_clase?: string | null;
+  curso_max_estudiantes?: number | null;
+  curso_grado_activo?: boolean | null;
+  curso_grado_nombre?: string | null;
+  curso_grado_color?: string | null;
+  curso_costo_curso?: number | null;
+  curso_pago_tutor?: number | null;
 }
 
 export interface Clase {
@@ -179,4 +204,22 @@ export interface Stats {
   matriculas_activas: number;
   total_clases: number;
   ingresos_pendientes: number;
+}
+
+export interface ResumenTutorEstudiantes {
+  tutor_id: number;
+  tutor_nombre: string;
+  total_estudiantes: number;
+}
+
+export interface ResumenCursoGrupos {
+  curso_id: number;
+  curso_nombre: string;
+  grado_activo?: boolean;
+  grado_nombre?: string | null;
+  grado_color?: string | null;
+  tipo_clase?: string | null;
+  max_estudiantes?: number | null;
+  total_estudiantes: number;
+  total_grupos: number;
 }
