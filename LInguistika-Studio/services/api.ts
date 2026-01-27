@@ -224,6 +224,14 @@ export const api = {
       const res = await http.post(`/dashboard/sesion/${matriculaId}/cancelar-permanente`);
       return res.data as any;
     },
+    actualizarEstadoSesion: async (matriculaId: number, fecha: string, datos: { avisado?: boolean; confirmado?: boolean; motivo_cancelacion?: string }): Promise<any> => {
+      const res = await http.patch(`/dashboard/sesion/${matriculaId}/${fecha}/estado`, datos);
+      return res.data as any;
+    },
+    obtenerEstadosClases: async (fecha: string): Promise<any[]> => {
+      const res = await http.get<any[]>(`/dashboard/estados-clases/${fecha}`);
+      return res.data as any[];
+    },
   },
 
   horasTrabajo: {

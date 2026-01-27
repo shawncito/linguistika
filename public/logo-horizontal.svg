@@ -1,0 +1,24 @@
+<svg width="400" height="120" viewBox="0 0 400 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Yellow half of smile icon -->
+  <path d="M310 20 C310 20, 310 50, 322 65 C322 65, 322 30, 310 30 Z" fill="#FFC800"/>
+  <rect x="316" y="35" width="4" height="12" rx="2" fill="#051026"/>
+  <path d="M310 65 C310 65, 316 72, 322 65" stroke="#051026" stroke-width="6" stroke-linecap="round" fill="none"/>
+  
+  <!-- Cyan half of smile icon -->
+  <path d="M334 20 C334 20, 334 50, 322 65 C322 65, 322 30, 334 30 Z" fill="#00AEEF"/>
+  <rect x="324" y="35" width="4" height="12" rx="2" fill="#051026"/>
+  <path d="M334 65 C334 65, 328 72, 322 65" stroke="#051026" stroke-width="6" stroke-linecap="round" fill="none"/>
+  
+  <!-- Text "Linguistika" -->
+  <text x="10" y="75" font-family="'Arial Black', sans-serif" font-weight="900" font-size="48" fill="#051026">Linguistika</text>
+  
+  <!-- Dots -->
+  <circle cx="80" cy="40" r="5" fill="#00AEEF"/>
+  <circle cx="120" cy="40" r="5" fill="#FFC800"/>
+  <circle cx="140" cy="40" r="5" fill="#FFC800"/>
+  <circle cx="160" cy="40" r="5" fill="#00AEEF"/>
+  <circle cx="220" cy="40" r="5" fill="#00AEEF"/>
+  
+  <!-- Subtitle -->
+  <text x="10" y="105" font-family="Arial, sans-serif" font-weight="700" font-size="16" fill="#00AEEF" letter-spacing="2">UNADECA LANGUAGE CENTER</text>
+</svg>

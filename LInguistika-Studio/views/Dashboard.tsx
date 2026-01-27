@@ -1,5 +1,7 @@
+// Dashboard con calendario interactivo mejorado
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
+import { supabase } from '../services/supabaseClient';
 import { Matricula, Curso, Tutor, Estudiante, ResumenTutorEstudiantes, ResumenCursoGrupos } from '../types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Input, Button } from '../components/UI';
 import { formatCRC } from '../lib/format';
@@ -28,6 +30,12 @@ interface SesionDelDia {
   hora_fin: string;
   duracion_horas: number;
   turno: string;
+  tutor_id?: number;
+  estudiante_id?: number;
+  curso_id?: number;
+  avisado?: boolean;
+  confirmado?: boolean;
+  fecha?: string;
 }
 
 const Dashboard: React.FC = () => {
@@ -38,15 +46,170 @@ const Dashboard: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<string>(crToday);
   const [sesionesDelDia, setSesionesDelDia] = useState<SesionDelDia[]>([]);
   const [sesionesHoy, setSesionesHoy] = useState<SesionDelDia[]>([]);
+  const [matriculasLista, setMatriculasLista] = useState<any[]>([]);
+  const [tutoresMapa, setTutoresMapa] = useState<Record<number, Tutor>>({});
+  const [estudiantesMapa, setEstudiantesMapa] = useState<Record<number, Estudiante>>({});
   const [loading, setLoading] = useState(true);
   const [resumenTutores, setResumenTutores] = useState<ResumenTutorEstudiantes[]>([]);
   const [resumenCursos, setResumenCursos] = useState<ResumenCursoGrupos[]>([]);
+  const [sesionesDelMes, setSesionesDelMes] = useState<Record<string, SesionDelDia[]>>({});
+  const [showDayDetail, setShowDayDetail] = useState(false);
+  const [detalleMatricula, setDetalleMatricula] = useState<any | null>(null);
+  const [tutorSeleccionado, setTutorSeleccionado] = useState<{ id: number; nombre: string } | null>(null);
+  const [alumnosTutor, setAlumnosTutor] = useState<{ id: number; nombre: string }[]>([]);
+  const [programacionSesion, setProgramacionSesion] = useState<{ sesion: SesionDelDia; modo: 'info' | 'programar' } | null>(null);
+  const [mensajeWA, setMensajeWA] = useState('');
 
   // Función para obtener el día de la semana en español
   const getDiaSemana = (fecha: string): string => {
     const dias = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     const date = new Date(fecha + 'T00:00:00');
     return dias[date.getDay()];
+  };
+
+  // Utilidades para resumen
+  const parseMaybeJSON = (value: any) => {
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch (e) {
+        return value;
+      }
+    }
+    return value;
+  };
+
+  const renderHorarioBadges = (m: any) => {
+    const scheduleRaw = parseMaybeJSON(m.curso_dias_schedule as any);
+    const turnosRaw = parseMaybeJSON(m.curso_dias_turno as any);
+    const items: { dia: string; label: string }[] = [];
+
+    if (scheduleRaw && typeof scheduleRaw === 'object' && !Array.isArray(scheduleRaw)) {
+      Object.entries(scheduleRaw).forEach(([dia, info]: any) => {
+        if (!info) return;
+        const hi = info.hora_inicio || info.horaInicio || info.start;
+        const hf = info.hora_fin || info.horaFin || info.end;
+        const turno = info.turno;
+        if (hi || hf || turno) {
+          items.push({ dia, label: `${hi || ''}${hi && hf ? ' - ' : ''}${hf || ''}${turno ? ` • ${turno}` : ''}`.trim() });
+        }
+      });
+    }
+
+    if (!items.length && Array.isArray(scheduleRaw)) {
+      scheduleRaw.forEach((sesion: any, idx: number) => {
+        const dia = sesion?.dia || sesion?.dia_semana || sesion?.day || `Sesión ${idx + 1}`;
+        const hi = sesion?.hora_inicio || sesion?.start;
+        const hf = sesion?.hora_fin || sesion?.end;
+        if (hi || hf) {
+          items.push({ dia, label: `${hi}${hi && hf ? ' - ' : ''}${hf || ''}` });
+        }
+      });
+    }
+
+    if (!items.length && turnosRaw && typeof turnosRaw === 'object') {
+      Object.entries(turnosRaw).forEach(([dia, turno]: any) => {
+        items.push({ dia, label: `${turno}` });
+      });
+    }
+
+    if (!items.length) {
+      return <div className="text-xs text-slate-400 mt-3">Sin horario asignado</div>;
+    }
+
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+        {items.map(({ dia, label }) => {
+          const diaTexto = String(dia || '').trim();
+          return (
+            <div key={diaTexto || label} className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-semibold text-slate-200">
+              <span className="uppercase tracking-wide">{diaTexto ? diaTexto.slice(0, 3) : 'Día'}</span>
+              <span className="text-white">{label}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const estadoSesionLabel = (s: SesionDelDia) => {
+    if (s.confirmado) return 'Confirmada';
+    if (s.avisado) return 'En espera de confirmación';
+    return 'Programada';
+  };
+
+  const telefonoTutor = (s: SesionDelDia) => {
+    const t = s.tutor_id ? tutoresMapa[s.tutor_id] : undefined;
+    return t?.telefono || '';
+  };
+
+  const telefonoEncargado = (s: SesionDelDia) => {
+    const e = s.estudiante_id ? estudiantesMapa[s.estudiante_id] : undefined;
+    return e?.telefono_encargado || e?.telefono || '';
+  };
+
+  const buildWaUrl = (numero: string, mensaje: string) => numero ? `https://wa.me/${numero.replace(/\D/g, '')}?text=${encodeURIComponent(mensaje)}` : '';
+
+  const abrirProgramacion = (sesion: SesionDelDia, modo: 'info' | 'programar') => {
+    setProgramacionSesion({ sesion, modo });
+    const fechaLabel = hoy ? new Date(hoy + 'T00:00:00').toLocaleDateString('es-CR') : '';
+    const msg = `Hola, confirmamos la sesión de ${sesion.curso_nombre} con ${sesion.estudiante_nombre} el ${fechaLabel} de ${sesion.hora_inicio} a ${sesion.hora_fin}. ¿Puedes confirmar asistencia?`;
+    setMensajeWA(msg);
+  };
+
+  const cambiarEstadoSesion = async (sesion: SesionDelDia, avisado?: boolean, confirmado?: boolean) => {
+    try {
+      const fecha = sesion.fecha || new Date().toISOString().split('T')[0];
+      await api.dashboard.actualizarEstadoSesion(sesion.matricula_id, fecha, { avisado, confirmado });
+      await fetchData();
+      alert('Estado actualizado');
+    } catch (e) {
+      console.error('Error al actualizar estado:', e);
+      alert('Error al actualizar estado');
+    }
+  };
+
+  const cargarDetalleMatricula = async (matriculaId: number) => {
+    try {
+      const all = await api.matriculas.getAll();
+      const m = all.find((x) => x.id === matriculaId);
+      if (!m) {
+        setDetalleMatricula(null);
+        return;
+      }
+      let students: { id: number; nombre: string }[] = [];
+      if (m.es_grupo && m.grupo_nombre) {
+        const miembros = all.filter((x) => x.curso_id === m.curso_id && x.grupo_nombre === m.grupo_nombre);
+        const uniq = new Map<number, string>();
+        miembros.forEach((x) => {
+          if (x.estudiante_id) uniq.set(x.estudiante_id, x.estudiante_nombre || `Alumno ${x.estudiante_id}`);
+        });
+        students = Array.from(uniq.entries()).map(([id, nombre]) => ({ id, nombre }));
+      } else if (m.estudiante_id) {
+        students = [{ id: m.estudiante_id, nombre: m.estudiante_nombre || `Alumno ${m.estudiante_id}` }];
+      }
+      setDetalleMatricula({ ...m, students });
+    } catch (e) {
+      console.error('Error cargando detalle de matrícula', e);
+      setDetalleMatricula(null);
+    }
+  };
+
+  const cargarAlumnosTutor = async (tutorId: number, nombre: string) => {
+    try {
+      const all = await api.matriculas.getAll();
+      const filtradas = all.filter((m) => m.tutor_id === tutorId && m.estado !== 0);
+      const uniq = new Map<number, string>();
+      filtradas.forEach((m) => {
+        if (m.estudiante_id) uniq.set(m.estudiante_id, m.estudiante_nombre || `Alumno ${m.estudiante_id}`);
+      });
+      setTutorSeleccionado({ id: tutorId, nombre });
+      setAlumnosTutor(Array.from(uniq.entries()).map(([id, nombre]) => ({ id, nombre })));
+    } catch (e) {
+      console.error('Error cargando alumnos del tutor', e);
+      setTutorSeleccionado({ id: tutorId, nombre });
+      setAlumnosTutor([]);
+    }
   };
 
   // Función para calcular sesiones del día: primero intenta backend, luego fallback local
@@ -66,6 +229,11 @@ const Dashboard: React.FC = () => {
           hora_fin: c.hora_fin ?? '—',
           duracion_horas: c.duracion_horas ?? 0,
           turno: c.turno ?? '—',
+          tutor_id: c.tutor_id,
+          estudiante_id: c.estudiante_id,
+          curso_id: c.curso_id,
+          avisado: Boolean(c.avisado),
+          confirmado: Boolean(c.confirmado),
         })) as SesionDelDia[];
         sesiones.sort((a, b) => String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
         setSesiones(sesiones);
@@ -75,8 +243,14 @@ const Dashboard: React.FC = () => {
       // 2) Fallback local desde matrículas y cursos
       // Calcular el día de la semana para la fecha seleccionada
       const diaSemana = getDiaSemana(fecha);
-      // Obtener SOLO matrículas activas (estado = true)
-      const matriculas = (await api.matriculas.getAll()).filter(m => !!m.estado);
+      // Obtener SOLO matrículas activas (estado = true) con datos completos
+      const matriculas = (await api.matriculas.getAll()).filter(m => 
+        !!m.estado && 
+        m.curso_id != null && 
+        m.tutor_id != null && 
+        m.estudiante_id != null
+      );
+      setMatriculasLista(matriculas);
       const cursosPromises = matriculas.map(m => api.cursos.getById(m.curso_id));
       const tutoresPromises = matriculas.map(m => api.tutores.getById(m.tutor_id));
       const estudiantesPromises = matriculas.map(m => api.estudiantes.getById(m.estudiante_id));
@@ -103,7 +277,12 @@ const Dashboard: React.FC = () => {
             hora_inicio: schedule.hora_inicio,
             hora_fin: schedule.hora_fin,
             duracion_horas: schedule.duracion_horas || 0,
-            turno: schedule.turno
+            turno: schedule.turno,
+            tutor_id: tutor.id,
+            estudiante_id: estudiante.id,
+            curso_id: curso.id,
+            avisado: false,
+            confirmado: false
           });
         } else if (curso?.dias_turno && (curso.dias_turno as any)[diaSemana]) {
           const turno = (curso.dias_turno as any)[diaSemana];
@@ -115,7 +294,12 @@ const Dashboard: React.FC = () => {
             hora_inicio: '—',
             hora_fin: '—',
             duracion_horas: 0,
-            turno: turno
+            turno: turno,
+            tutor_id: tutor.id,
+            estudiante_id: estudiante.id,
+            curso_id: curso.id,
+            avisado: false,
+            confirmado: false
           });
         }
       });
@@ -130,6 +314,17 @@ const Dashboard: React.FC = () => {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
+      const [tutoresAll, estudiantesAll] = await Promise.all([
+        api.tutores.getAll().catch(() => []),
+        api.estudiantes.getAll().catch(() => []),
+      ]);
+      const tMap: Record<number, Tutor> = {};
+      const eMap: Record<number, Estudiante> = {};
+      tutoresAll.forEach((t) => { if (t?.id) tMap[t.id] = t; });
+      estudiantesAll.forEach((e) => { if (e?.id) eMap[e.id] = e; });
+      setTutoresMapa(tMap);
+      setEstudiantesMapa(eMap);
+
       const statsData = await api.dashboard.getStats().catch(() => ({
         tutores_activos: 0,
         estudiantes_activos: 0,
@@ -145,9 +340,95 @@ const Dashboard: React.FC = () => {
         await calcularSesionesDelDia(hoy, setSesionesHoy);
       }
       
-      // Calcular sesiones del día seleccionado
+      // Calcular sesiones del mes completo - OPTIMIZADO
+      const today = new Date(hoy + 'T00:00:00');
+      const year = today.getFullYear();
+      const month = today.getMonth();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      
+      // Obtener todas las matrículas activas una sola vez
+      // FILTRAR matrículas con datos completos (sin IDs null)
+      const matriculas = (await api.matriculas.getAll()).filter(m => 
+        !!m.estado && 
+        m.curso_id != null && 
+        m.tutor_id != null && 
+        m.estudiante_id != null
+      );
+      const cursosPromises = matriculas.map(m => api.cursos.getById(m.curso_id));
+      const tutoresPromises = matriculas.map(m => api.tutores.getById(m.tutor_id));
+      const estudiantesPromises = matriculas.map(m => api.estudiantes.getById(m.estudiante_id));
+      const [cursos, tutores, estudiantes] = await Promise.all([
+        Promise.all(cursosPromises),
+        Promise.all(tutoresPromises),
+        Promise.all(estudiantesPromises)
+      ]);
+
+      const sesionesmes: Record<string, SesionDelDia[]> = {};
+      
+      // Calcular para cada día sin await individual
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const diaSemana = getDiaSemana(dateStr);
+        const sesiones: SesionDelDia[] = [];
+        
+        matriculas.forEach((matricula, index) => {
+          const curso = cursos[index];
+          const tutor = tutores[index];
+          const estudiante = estudiantes[index];
+          
+          if (curso?.dias_schedule && (curso.dias_schedule as any)[diaSemana]) {
+            const schedule = (curso.dias_schedule as any)[diaSemana];
+            
+            sesiones.push({
+              matricula_id: matricula.id,
+              curso_nombre: curso.nombre,
+              estudiante_nombre: estudiante.nombre,
+              tutor_nombre: tutor.nombre,
+              hora_inicio: schedule.hora_inicio,
+              hora_fin: schedule.hora_fin,
+              duracion_horas: schedule.duracion_horas || 0,
+              turno: schedule.turno,
+              tutor_id: tutor.id,
+              estudiante_id: estudiante.id,
+              curso_id: curso.id,
+              avisado: false,
+              confirmado: false,
+              fecha: dateStr
+            });
+          }
+        });
+        
+        if (sesiones.length > 0) {
+          sesiones.sort((a, b) => String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
+          sesionesmes[dateStr] = sesiones;
+        }
+      }
+      
+      // Cargar estados (avisado, confirmado) desde la base de datos para todas las fechas
+      for (const dateStr of Object.keys(sesionesmes)) {
+        try {
+          const estados = await api.dashboard.obtenerEstadosClases(dateStr);
+          // Crear un mapa de matricula_id -> estado para búsqueda rápida
+          const estadosMap: Record<number, any> = {};
+          estados.forEach((e: any) => {
+            estadosMap[e.matricula_id] = { avisado: e.avisado, confirmado: e.confirmado };
+          });
+          // Actualizar sesiones con estados reales del backend
+          sesionesmes[dateStr].forEach((sesion: SesionDelDia) => {
+            if (estadosMap[sesion.matricula_id]) {
+              sesion.avisado = estadosMap[sesion.matricula_id].avisado || false;
+              sesion.confirmado = estadosMap[sesion.matricula_id].confirmado || false;
+            }
+          });
+        } catch (e) {
+          console.warn(`No se pudieron cargar estados para ${dateStr}:`, e);
+        }
+      }
+      
+      setSesionesDelMes(sesionesmes);
+      // Sincronizar sesiones del día seleccionado con el cálculo mensual (incluye hoy)
       if (selectedDate) {
-        await calcularSesionesDelDia(selectedDate, setSesionesDelDia);
+        setSesionesDelDia(sesionesmes[selectedDate] || []);
       }
 
       // Resúmenes
@@ -176,17 +457,20 @@ const Dashboard: React.FC = () => {
   }, [fetchData]);
 
   const StatCard = ({ title, value, icon, accentColor }: any) => (
-    <Card className="hover:translate-y-[-4px] transition-transform group cursor-default bg-white">
-      <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardDescription className="font-bold text-slate-500">{title}</CardDescription>
-        <div className={`p-3 rounded-xl ${accentColor} shadow-sm group-hover:scale-110 transition-transform`}>
+    <Card className="relative overflow-hidden hover:-translate-y-1 transition-all cursor-default border-white/10">
+      <div className="absolute top-0 right-0 w-28 h-28 bg-[#00AEEF] opacity-10 rounded-bl-full blur-2xl" />
+      <CardHeader className="flex flex-row items-start justify-between pb-2 border-none">
+        <div>
+          <CardDescription className="font-bold text-slate-400 tracking-wider uppercase text-[11px]">{title}</CardDescription>
+          <div className="text-4xl font-black text-white leading-tight mt-2">{value}</div>
+        </div>
+        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${accentColor}`}>
           {icon}
         </div>
       </CardHeader>
-      <CardContent>
-        <div className="text-3xl font-black text-slate-900 tracking-tight">{value}</div>
-        <div className="mt-4 flex items-center text-xs font-bold text-slate-400 uppercase tracking-widest">
-          <TrendingUp className="w-3 h-3 mr-2 text-emerald-500" />
+      <CardContent className="pt-0">
+        <div className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-400 tracking-widest">
+          <TrendingUp className="w-3 h-3 text-emerald-400" />
           En tiempo real
         </div>
       </CardContent>
@@ -201,318 +485,633 @@ const Dashboard: React.FC = () => {
   );
 
   return (
-    <div className="space-y-10">
-      {/* Header */}
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-8">
-        <div>
-          <h1 className="text-4xl font-black text-slate-900 tracking-tight leading-none">
-            Resumen General
-          </h1>
-          <p className="text-slate-500 text-sm mt-3 font-medium flex items-center gap-2">
-            <Activity className="w-4 h-4 text-blue-600" />
-            Estado actual de Linguistika Academy
-          </p>
-        </div>
-        <div className="flex items-center gap-4">
-          <Button
-            variant="primary"
-            className="h-11 px-6 bg-blue-600 hover:bg-blue-700 text-white"
-            onClick={fetchData}
-            disabled={loading}
-          >
-            Actualizar Datos
-          </Button>
-          <div className="flex items-center gap-3 bg-gradient-to-r from-blue-50 to-blue-100 p-3 rounded-2xl border border-blue-200 shadow-sm">
-            <div className="flex flex-col items-end px-2">
-              <span className="text-xs font-black text-blue-700 uppercase tracking-widest">Estado</span>
-              <span className="text-sm font-bold text-blue-900">OPERATIVO</span>
-            </div>
-            <div className="w-10 h-10 rounded-xl bg-emerald-500 flex items-center justify-center text-white shadow-lg">
-              <Star className="w-5 h-5 fill-current" />
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-5">
-        <StatCard 
-          title="Tutores Activos" 
-          value={stats?.tutores_activos || 0} 
-          icon={<Users className="w-5 h-5 text-blue-600" />} 
-          accentColor="bg-blue-50"
-        />
-        <StatCard 
-          title="Estudiantes" 
-          value={stats?.estudiantes_activos || 0} 
-          icon={<GraduationCap className="w-5 h-5 text-indigo-600" />} 
-          accentColor="bg-indigo-50"
-        />
-        <StatCard 
-          title="Cursos" 
-          value={stats?.cursos_activos || 0} 
-          icon={<BookOpen className="w-5 h-5 text-emerald-600" />} 
-          accentColor="bg-emerald-50"
-        />
-        <StatCard 
-          title="Matrículas" 
-          value={stats?.matriculas_activas || 0} 
-          icon={<ClipboardList className="w-5 h-5 text-amber-600" />} 
-          accentColor="bg-amber-50"
-        />
-        <StatCard 
-          title="Sesiones Totales" 
-          value={stats?.total_clases || 0} 
-          icon={<Award className="w-5 h-5 text-rose-600" />} 
-          accentColor="bg-rose-50"
-        />
-        <StatCard 
-          title="Ingresos Pendientes" 
-          value={formatCRC(stats?.ingresos_pendientes ?? 0)} 
-          icon={<CreditCard className="w-5 h-5 text-slate-700" />} 
-          accentColor="bg-slate-100"
-        />
-      </div>
-
-      <div className="grid grid-cols-1 gap-10">
-        {/* Resúmenes */}
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Estudiantes por Tutor */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Alumnos por Tutor</CardTitle>
-              <CardDescription>Conteo de estudiantes activos por docente</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {resumenTutores.length === 0 ? (
-                <div className="text-sm text-slate-400 font-bold uppercase tracking-widest py-6">Sin datos</div>
-              ) : (
-                <div className="space-y-3">
-                  {resumenTutores.map((r) => (
-                    <div key={r.tutor_id} className="flex items-center justify-between p-3 rounded-lg border border-slate-200">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-700 font-bold">
-                          {r.tutor_nombre.charAt(0)}
-                        </div>
-                        <span className="font-semibold text-slate-800">{r.tutor_nombre}</span>
-                      </div>
-                      <span className="text-sm font-bold text-blue-700 bg-blue-50 px-3 py-1 rounded-full border border-blue-200">
-                        {r.total_estudiantes} alumnos
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Grupos/Estudiantes por Curso */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Grupos por Curso</CardTitle>
-              <CardDescription>Estudiantes y grupos activos por programa</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {resumenCursos.length === 0 ? (
-                <div className="text-sm text-slate-400 font-bold uppercase tracking-widest py-6">Sin datos</div>
-              ) : (
-                <div className="space-y-3">
-                  {resumenCursos.map((c) => (
-                    <div key={c.curso_id} className="p-3 rounded-lg border border-slate-200">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-700 font-bold">
-                            {c.curso_nombre.charAt(0)}
-                          </div>
-                          <div>
-                            <div className="font-semibold text-slate-800">{c.curso_nombre}</div>
-                            {c.grado_activo && c.grado_nombre && (
-                              <div
-                                className="text-[10px] inline-flex font-bold px-2 py-0.5 rounded-full border mt-1"
-                                style={{
-                                  backgroundColor: (c.grado_color || '#e5e7eb') + '33',
-                                  color: c.grado_color || '#111827',
-                                  borderColor: c.grado_color || '#e5e7eb'
-                                }}
-                              >
-                                {c.grado_nombre}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-full border border-emerald-200">{c.total_estudiantes} alumnos</span>
-                          <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded-full border border-indigo-200">{c.total_grupos} grupos</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </section>
-
-        {/* Sesiones de Hoy */}
+    <div className="flex gap-6">
+      {/* Contenido principal - 70% */}
+      <div className="flex-1 space-y-10">
+        {/* Sesiones Hoy (arriba del calendario) */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+            <h2 className="text-2xl font-black text-white tracking-tight flex items-center gap-3">
               <CalendarIcon className="w-6 h-6 text-emerald-600" />
               Sesiones de Hoy
             </h2>
-            <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-              {hoy ? new Date(hoy + 'T00:00:00').toLocaleDateString('es-CR') : '—'}
-            </div>
+            <span className="text-xs text-slate-400">{hoy ? new Date(hoy + 'T00:00:00').toLocaleDateString('es-CR') : '—'}</span>
           </div>
-
-          {sesionesHoy.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
-              <Clock className="w-12 h-12 mb-3 text-slate-300" />
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Sin sesiones hoy</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {sesionesHoy.map((sesion, index) => {
-                const ahora = new Date();
-                const [hIni, mIni] = String(sesion.hora_inicio).split(':').map(Number);
-                const [hFin, mFin] = String(sesion.hora_fin).split(':').map(Number);
-                const inicioDate = new Date(); inicioDate.setHours(hIni || 0, mIni || 0, 0, 0);
-                const finDate = new Date(); finDate.setHours(hFin || 0, mFin || 0, 0, 0);
-                const puedeMarcarDada = isFinite(hIni) && isFinite(mIni) && ahora >= finDate; // ya pasó fin
-                const hoy = new Date().toISOString().split('T')[0];
-                return (
-                  <Card key={`hoy-${sesion.matricula_id}-${index}`} className="group border-slate-200 hover:border-emerald-300 hover:shadow-md transition-all bg-white">
-                    <div className="p-6 flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-6 flex-1">
-                        <div className="flex flex-col items-center justify-center w-24 h-24 rounded-2xl bg-gradient-to-br from-emerald-50 to-emerald-100 border border-emerald-200 group-hover:from-emerald-100 group-hover:to-emerald-200 transition-colors flex-shrink-0">
-                          <span className="text-xs font-bold text-emerald-700 mb-1">{sesion.turno.toUpperCase()}</span>
-                          <span className="text-base font-black text-emerald-900">{sesion.hora_inicio}</span>
-                          <span className="text-xs text-emerald-700">a</span>
-                          <span className="text-base font-black text-emerald-900">{sesion.hora_fin}</span>
-                        </div>
-                        <div className="flex-1">
-                          <h4 className="text-lg font-bold text-slate-900 group-hover:text-emerald-600 transition-colors">
-                            {sesion.curso_nombre}
-                          </h4>
-                          <div className="flex items-center gap-4 mt-2 text-sm">
-                            <span className="flex items-center gap-2 font-semibold text-slate-600">
-                              <UserIcon className="w-4 h-4 text-emerald-500" />
-                              {sesion.estudiante_nombre}
-                            </span>
-                            <span className="text-slate-400">•</span>
-                            <span className="text-slate-500 italic">Docente: {sesion.tutor_nombre}</span>
-                            <span className="text-slate-400">•</span>
-                            <span className="text-slate-500 font-semibold">{sesion.duracion_horas}h</span>
+          <Card className="border-white/10 bg-[#0F2445]">
+            <CardContent className="pt-4">
+              {sesionesHoy.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-6">
+                  <Clock className="w-8 h-8 mb-2 text-slate-500" />
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Sin sesiones hoy</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {sesionesHoy.map((sesion, index) => {
+                    const ahora = new Date();
+                    const [hIni, mIni] = String(sesion.hora_inicio).split(':').map(Number);
+                    const [hFin, mFin] = String(sesion.hora_fin).split(':').map(Number);
+                    const finDate = new Date(); finDate.setHours(hFin || 0, mFin || 0, 0, 0);
+                    const puedeMarcarDada = isFinite(hIni) && isFinite(mIni) && ahora >= finDate;
+                    const hoyStr = new Date().toISOString().split('T')[0];
+                    return (
+                      <div key={`hoy-top-${sesion.matricula_id}-${index}`} className="p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all group">
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="flex-1">
+                            <p className="text-sm font-bold text-white group-hover:text-[#00AEEF] transition-colors">{sesion.curso_nombre}</p>
+                            <p className="text-xs text-slate-400 mt-0.5">{sesion.hora_inicio} - {sesion.hora_fin}</p>
                           </div>
+                          <button onClick={() => abrirProgramacion(sesion, 'info')} className="text-[#00AEEF] hover:text-white transition-colors p-1 rounded hover:bg-white/10 flex-shrink-0" title="Ver detalles">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-300 mb-2">{sesion.estudiante_nombre}</p>
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                            sesion.confirmado ? 'bg-emerald-400/20 text-emerald-300' : 
+                            sesion.avisado ? 'bg-amber-400/20 text-amber-300' : 
+                            'bg-slate-600/30 text-slate-400'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${
+                              sesion.confirmado ? 'bg-emerald-400' : 
+                              sesion.avisado ? 'bg-amber-400' : 
+                              'bg-slate-500'
+                            }`} />
+                            {sesion.confirmado ? 'Confirmada' : sesion.avisado ? 'En espera' : 'Programada'}
+                          </span>
+                        </div>
+                        <div className="flex gap-1.5 justify-end flex-wrap">
+                          <Button
+                            size="sm"
+                            className={`text-[10px] px-2 py-0.5 h-7 ${puedeMarcarDada ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-white/10 text-slate-400 border border-white/10'}`}
+                            disabled={!puedeMarcarDada}
+                            onClick={async () => {
+                              const hoyStr = new Date().toISOString().split('T')[0];
+                              await api.dashboard.completarSesion(sesion.matricula_id, hoyStr);
+                              await fetchData();
+                            }}
+                          >
+                            Marcar dada
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="text-[10px] px-2 py-0.5 h-7 bg-white/10 border border-white/15 hover:bg-white/15"
+                            onClick={() => abrirProgramacion(sesion, 'programar')}
+                          >
+                            Programar
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="text-[10px] px-2 py-0.5 h-7"
+                            onClick={async () => {
+                              const motivo = window.prompt('Motivo de cancelación por hoy:');
+                              if (motivo === null) return;
+                              if (!window.confirm('¿Seguro que quieres cancelar la clase solo por hoy?')) return;
+                              await api.dashboard.cancelarSesionDia(sesion.matricula_id, hoyStr);
+                              console.log('Motivo cancelación (local):', motivo);
+                              await fetchData();
+                            }}
+                          >
+                            Cancelar hoy
+                          </Button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <Button
-                          variant="secondary"
-                          className={`px-4 py-2 ${puedeMarcarDada ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-100 text-slate-500'}`}
-                          disabled={!puedeMarcarDada}
-                          onClick={async () => {
-                            await api.dashboard.completarSesion(sesion.matricula_id, hoy);
-                            await fetchData();
-                          }}
-                        >
-                          Marcar Dada
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          className="px-4 py-2 bg-rose-600 text-white hover:bg-rose-700"
-                          onClick={async () => {
-                            await api.dashboard.cancelarSesionDia(sesion.matricula_id, hoy);
-                            await fetchData();
-                          }}
-                        >
-                          Cancelar Hoy
-                        </Button>
-                      </div>
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </section>
 
-        {/* Agenda de Sesiones - Fecha Seleccionada */}
+        {/* Calendario Mensual */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
-              <CalendarIcon className="w-6 h-6 text-blue-600" />
-              Agenda de Sesiones
+            <h2 className="text-2xl font-black text-white tracking-tight flex items-center gap-3">
+              <CalendarIcon className="w-6 h-6 text-[#00AEEF]" />
+              Calendario de Clases
             </h2>
-            <Input 
-              type="date" 
-              value={selectedDate} 
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="h-11 w-44 font-bold"
-            />
           </div>
 
-          {sesionesDelDia.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
-              <Clock className="w-14 h-14 mb-3 text-slate-300" />
-              <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Sin sesiones para esta fecha</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {sesionesDelDia.map((sesion, index) => (
-                <Card key={index} className="group border-slate-200 hover:border-blue-300 hover:shadow-md transition-all bg-white">
-                  <div className="p-6 flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-6 flex-1">
-                      <div className="flex flex-col items-center justify-center w-24 h-24 rounded-2xl bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 group-hover:from-blue-100 group-hover:to-blue-200 transition-colors flex-shrink-0">
-                        <span className="text-xs font-bold text-blue-600 mb-1">{sesion.turno.toUpperCase()}</span>
-                        <span className="text-base font-black text-blue-900">{sesion.hora_inicio}</span>
-                        <span className="text-xs text-blue-600">a</span>
-                        <span className="text-base font-black text-blue-900">{sesion.hora_fin}</span>
-                      </div>
-                      <div className="flex-1">
-                        <h4 className="text-lg font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
-                          {sesion.curso_nombre}
-                        </h4>
-                        <div className="flex items-center gap-4 mt-2 text-sm">
-                          <span className="flex items-center gap-2 font-semibold text-slate-600">
-                            <UserIcon className="w-4 h-4 text-blue-500" />
-                            {sesion.estudiante_nombre}
-                          </span>
-                          <span className="text-slate-400">•</span>
-                          <span className="text-slate-500 italic">Docente: {sesion.tutor_nombre}</span>
-                          <span className="text-slate-400">•</span>
-                          <span className="text-slate-500 font-semibold">{sesion.duracion_horas}h</span>
-                        </div>
-                      </div>
+          <Card className="border-white/10 bg-[#0F2445]">
+            <CardContent className="p-6">
+              {(() => {
+                const today = new Date(hoy + 'T00:00:00');
+                const year = today.getFullYear();
+                const month = today.getMonth();
+                const firstDay = new Date(year, month, 1);
+                const lastDay = new Date(year, month + 1, 0);
+                const daysInMonth = lastDay.getDate();
+                const startDay = firstDay.getDay(); // 0 = Domingo
+
+                const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+                const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+                const days: (number | null)[] = [];
+                for (let i = 0; i < startDay; i++) days.push(null);
+                for (let d = 1; d <= daysInMonth; d++) days.push(d);
+
+                return (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xl font-black text-white">{monthNames[month]} {year}</h3>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <Badge 
-                        variant="secondary"
-                        className="font-bold px-4 py-2 bg-emerald-100 text-emerald-700"
-                      >
-                        Programada
-                      </Badge>
-                      <Button
-                        variant="destructive"
-                        className="px-4 py-2 bg-red-600 text-white hover:bg-red-700"
-                        onClick={async () => {
-                          await api.dashboard.cancelarPermanente(sesion.matricula_id);
-                          await fetchData();
-                        }}
-                      >
-                        Cancelar para siempre
-                      </Button>
-                      <button className="p-3 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 transition-all border border-blue-100">
-                        <ChevronRight className="w-5 h-5" />
-                      </button>
+                    <div className="grid grid-cols-7 gap-2">
+                      {dayNames.map(day => (
+                        <div key={day} className="text-center text-xs font-bold text-slate-400 uppercase tracking-widest py-2">
+                          {day}
+                        </div>
+                      ))}
+                      {days.map((day, index) => {
+                        if (!day) return <div key={`empty-${index}`} className="min-h-28" />;
+                        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const isToday = dateStr === hoy;
+                        const isSelected = selectedDate === dateStr;
+                        const sesionesEnDia = sesionesDelMes[dateStr] || [];
+                        const hasClasses = sesionesEnDia.length > 0;
+                        const diaSemana = getDiaSemana(dateStr);
+                        const diaCorto = diaSemana.slice(0, 3);
+                        
+                        return (
+                          <button
+                            key={day}
+                            onClick={() => {
+                              setSelectedDate(dateStr);
+                              setSesionesDelDia(sesionesEnDia);
+                              setShowDayDetail(true);
+                            }}
+                            className={`min-h-28 rounded-lg border transition-all relative group flex flex-col p-2 overflow-hidden ${
+                              isToday
+                                ? 'bg-gradient-to-br from-[#00AEEF]/20 to-[#00AEEF]/10 border-[#00AEEF] shadow-lg shadow-[#00AEEF]/20'
+                                : isSelected
+                                ? 'bg-gradient-to-br from-[#FFC800]/20 to-[#FFC800]/10 border-[#FFC800] shadow-lg shadow-[#FFC800]/20'
+                                : hasClasses
+                                ? 'bg-white/5 border-white/20 hover:bg-white/10 hover:border-[#00AEEF]/50'
+                                : 'bg-transparent border-white/5 text-slate-600'
+                            } text-sm`}
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className={`text-sm font-black ${
+                                isToday ? 'text-[#00AEEF]' : isSelected ? 'text-[#FFC800]' : 'text-white'
+                              }`}>
+                                {day}
+                              </span>
+                              {hasClasses && (
+                                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
+                                  isToday ? 'bg-[#00AEEF]/30 text-[#00AEEF]' : isSelected ? 'bg-[#FFC800]/30 text-[#FFC800]' : 'bg-emerald-500/30 text-emerald-300'
+                                }`}>
+                                  {sesionesEnDia.length}
+                                </span>
+                              )}
+                            </div>
+                            
+                            {hasClasses && (
+                              <div className="flex-1 flex flex-col gap-1 overflow-hidden">
+                                {sesionesEnDia.slice(0, 2).map((sesion, idx) => (
+                                  <div key={idx} className="text-[10px] leading-tight">
+                                    <p className={`font-bold truncate ${
+                                      isToday ? 'text-[#00AEEF]' : isSelected ? 'text-[#FFC800]' : 'text-emerald-300'
+                                    }`}>
+                                      {sesion.curso_nombre}
+                                    </p>
+                                    <p className={`text-[9px] ${
+                                      isToday ? 'text-[#00AEEF]/70' : isSelected ? 'text-[#FFC800]/70' : 'text-slate-400'
+                                    }`}>
+                                      {sesion.hora_inicio}
+                                    </p>
+                                  </div>
+                                ))}
+                                {sesionesEnDia.length > 2 && (
+                                  <p className={`text-[9px] font-semibold ${
+                                    isToday ? 'text-[#00AEEF]/60' : isSelected ? 'text-[#FFC800]/60' : 'text-slate-500'
+                                  }`}>
+                                    +{sesionesEnDia.length - 2} más
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
-                </Card>
-              ))}
-            </div>
-          )}
+                );
+              })()}
+            </CardContent>
+          </Card>
         </section>
+
+        {/* Header */}
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-8">
+          <div>
+            <h1 className="text-4xl font-black text-[#FFC800] tracking-tight leading-none">
+              Resumen General
+            </h1>
+            <p className="text-slate-500 text-sm mt-3 font-medium flex items-center gap-2">
+              <Activity className="w-4 h-4" style={{color: '#00AEEF'}} />
+              Estado actual de Linguistika Academy
+            </p>
+          </div>
+          <div className="flex items-center gap-4">
+            <Button
+              variant="primary"
+              className="h-11 px-6 bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026] font-bold"
+              onClick={fetchData}
+              disabled={loading}
+            >
+              Actualizar Datos
+            </Button>
+            <div className="flex items-center gap-3 bg-gradient-to-r from-yellow-50 to-cyan-50 p-3 rounded-2xl border border-cyan-200 shadow-sm">
+              <div className="flex flex-col items-end px-2">
+                <span className="text-xs font-black text-cyan-700 uppercase tracking-widest">Estado</span>
+                <span className="text-sm font-bold text-cyan-900">OPERATIVO</span>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-400 to-cyan-500 flex items-center justify-center text-white shadow-lg">
+                <Star className="w-5 h-5 fill-current" />
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          <StatCard 
+            title="Tutores Activos" 
+            value={stats?.tutores_activos || 0} 
+            icon={<Users className="w-5 h-5" style={{color: '#051026'}} />} 
+            accentColor="bg-[#FFC800] text-[#051026]"
+          />
+          <StatCard 
+            title="Estudiantes" 
+            value={stats?.estudiantes_activos || 0} 
+            icon={<GraduationCap className="w-5 h-5" style={{color: '#051026'}} />} 
+            accentColor="bg-[#00AEEF] text-[#051026]"
+          />
+          <StatCard 
+            title="Cursos" 
+            value={stats?.cursos_activos || 0} 
+            icon={<BookOpen className="w-5 h-5" style={{color: '#051026'}} />} 
+            accentColor="bg-[#FFC800] text-[#051026]"
+          />
+          <StatCard 
+            title="Matrículas" 
+            value={stats?.matriculas_activas || 0} 
+            icon={<ClipboardList className="w-5 h-5" style={{color: '#051026'}} />} 
+            accentColor="bg-[#00AEEF] text-[#051026]"
+          />
+          <StatCard 
+            title="Sesiones Totales" 
+            value={stats?.total_clases || 0} 
+            icon={<Award className="w-5 h-5" style={{color: '#051026'}} />} 
+            accentColor="bg-[#FFC800] text-[#051026]"
+          />
+          <StatCard 
+            title="Ingresos Pendientes" 
+            value={formatCRC(stats?.ingresos_pendientes ?? 0)} 
+            icon={<CreditCard className="w-5 h-5" style={{color: '#051026'}} />} 
+            accentColor="bg-[#00AEEF] text-[#051026]"
+          />
+        </div>
       </div>
+
+      {/* Sidebar derecha - 30% */}
+      <aside className="w-[30%] space-y-6 sticky top-24 self-start">
+        {/* Detalle del Día Seleccionado */}
+        {showDayDetail && selectedDate !== hoy && (
+          <Card className="border-white/10 bg-[#0F2445]">
+            <CardHeader className="border-b border-white/10">
+              <div className="flex justify-between items-start">
+                <div>
+                  <CardTitle className="text-white text-base">
+                    {new Date(selectedDate + 'T00:00:00').toLocaleDateString('es-CR', {
+                      weekday: 'long',
+                      day: 'numeric',
+                      month: 'long'
+                    })}
+                  </CardTitle>
+                  <CardDescription className="text-slate-400 mt-1 text-xs">
+                    {sesionesDelDia.length} sesión(es) programada(s)
+                  </CardDescription>
+                </div>
+                <button 
+                  onClick={() => setShowDayDetail(false)}
+                  className="text-slate-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-4">
+              {sesionesDelDia.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-6 text-center">
+                  <Clock className="w-8 h-8 mb-2 text-slate-500" />
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Sin sesiones</p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                  {sesionesDelDia.map((sesion, index) => (
+                    <div key={`detail-${sesion.matricula_id}-${index}`} className="w-full p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all">
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div>
+                          <p className="text-sm font-bold text-white">{sesion.curso_nombre}</p>
+                          <p className="text-xs text-[#00AEEF] font-semibold mt-0.5">{sesion.hora_inicio} - {sesion.hora_fin}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-[#FFC800] bg-[#FFC800]/20 px-2 py-1 rounded-full border border-[#FFC800]/30 flex-shrink-0">
+                            {sesion.turno}
+                          </span>
+                          <button onClick={() => cargarDetalleMatricula(sesion.matricula_id)} className="text-[#00AEEF] hover:text-white transition-colors p-1 rounded hover:bg-white/10" title="Ver detalles">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-xs text-slate-300 space-y-1">
+                        <p className="truncate"><span className="font-semibold text-slate-200">{sesion.estudiante_nombre}</span></p>
+                        <p className="text-slate-500 text-[11px]">Docente: {sesion.tutor_nombre}</p>
+                        <div className="flex items-center gap-2 text-[11px]">
+                          <span className={`px-2 py-0.5 rounded-full border text-[10px] ${sesion.avisado ? 'border-emerald-400 text-emerald-300 bg-emerald-400/10' : 'border-slate-500 text-slate-400 bg-slate-700/30'}`}>
+                            {sesion.avisado ? 'Avisado' : 'Aviso pendiente'}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full border text-[10px] ${sesion.confirmado ? 'border-emerald-400 text-emerald-300 bg-emerald-400/10' : 'border-amber-400 text-amber-200 bg-amber-400/10'}`}>
+                            {sesion.confirmado ? 'Confirmado' : 'Confirmar'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 mt-3 text-[11px]">
+                        <Button
+                          size="sm"
+                          className="h-7 text-[11px] px-2 bg-white/10 border border-white/15 hover:bg-white/15"
+                          onClick={() => console.log('Ir al chat con tutor', sesion.tutor_id || sesion.tutor_nombre)}
+                        >
+                          Chat tutor
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-7 text-[11px] px-2 bg-white/10 border border-white/15 hover:bg-white/15"
+                          onClick={() => console.log('Ir al chat con encargados', sesion.estudiante_id || sesion.estudiante_nombre)}
+                        >
+                          Chat encargados
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {programacionSesion && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[120] p-4">
+            <Card className="bg-[#0F2445] border border-white/10 w-full max-w-lg rounded-2xl shadow-2xl">
+              <div className="flex items-start justify-between p-5 border-b border-white/10">
+                <div>
+                  <CardTitle className="text-white text-base">{programacionSesion.sesion.curso_nombre}</CardTitle>
+                  <p className="text-xs text-slate-400 mt-1">{programacionSesion.sesion.hora_inicio} - {programacionSesion.sesion.hora_fin}</p>
+                </div>
+                <button onClick={cerrarProgramacion} className="text-slate-400 hover:text-white transition-colors p-1 rounded hover:bg-white/10">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 max-h-[60vh] overflow-y-auto text-slate-100">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold">{programacionSesion.sesion.estudiante_nombre}</p>
+                  <p className="text-[11px] text-slate-400">Docente: {programacionSesion.sesion.tutor_nombre}</p>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className={`px-2 py-0.5 rounded-full border ${programacionSesion.sesion.avisado ? 'border-amber-300 text-amber-200 bg-amber-300/10' : 'border-slate-500 text-slate-400 bg-slate-700/30'}`}>
+                      {programacionSesion.sesion.avisado ? 'Avisado' : 'Aviso pendiente'}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full border ${programacionSesion.sesion.confirmado ? 'border-emerald-400 text-emerald-300 bg-emerald-400/10' : 'border-slate-500 text-slate-400 bg-slate-700/30'}`}>
+                      {programacionSesion.sesion.confirmado ? 'Confirmado' : 'En espera'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
+                  <p className="text-[11px] text-slate-400 font-semibold">Mensaje para WhatsApp</p>
+                  <textarea
+                    className="w-full text-sm bg-transparent border border-white/10 rounded-lg p-2 text-slate-100"
+                    rows={3}
+                    value={mensajeWA}
+                    onChange={(e) => setMensajeWA(e.target.value)}
+                  />
+                  <div className="flex gap-2 text-[11px]">
+                    <Button
+                      size="sm"
+                      className="h-8 px-3 text-[11px] bg-white/10 border border-white/15 hover:bg-white/15"
+                      onClick={async () => {
+                        const waUrl = `https://wa.me/[telefono]?text=${encodeURIComponent(mensajeWA)}`;
+                        window.open(waUrl, '_blank');
+                      }}
+                    >
+                      Abrir WhatsApp
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 px-3 text-[11px] bg-white/5 border-white/15 hover:bg-white/10"
+                      onClick={async () => {
+                        if (navigator?.clipboard?.writeText) {
+                          await navigator.clipboard.writeText(mensajeWA);
+                          alert('Mensaje copiado');
+                        }
+                      }}
+                    >
+                      Copiar mensaje
+                    </Button>
+                  </div>
+                </div>
+
+                {programacionSesion.modo === 'programar' && (
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-slate-400 font-semibold">Estado</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button 
+                        size="sm" 
+                        className="h-8 text-[11px] px-3 bg-white/10 border-white/15 hover:bg-white/20"
+                        onClick={() => cambiarEstadoSesion(programacionSesion.sesion, true, false)}
+                      >
+                        Programada
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        className="h-8 text-[11px] px-3 bg-white/10 border-white/15 hover:bg-white/20"
+                        onClick={() => cambiarEstadoSesion(programacionSesion.sesion, true, false)}
+                      >
+                        En espera
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        className="h-8 text-[11px] px-3 bg-emerald-600 hover:bg-emerald-700 text-white"
+                        onClick={() => cambiarEstadoSesion(programacionSesion.sesion, true, true)}
+                      >
+                        Confirmada
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-5 border-t border-white/10 flex justify-end">
+                <Button
+                  variant="outline"
+                  className="text-xs h-8 bg-white/5 border-white/10 hover:bg-white/10 text-white"
+                  onClick={cerrarProgramacion}
+                >
+                  Cerrar
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Resumen del curso seleccionado (pantalla completa) */}
+        {detalleMatricula && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <Card className="bg-[#0F2445] border border-white/10 w-full max-w-md rounded-2xl shadow-2xl">
+              <div className="flex items-start justify-between p-5 border-b border-white/10">
+                <div>
+                  <CardTitle className="text-base font-bold text-white">{detalleMatricula.curso_nombre}</CardTitle>
+                  <p className="text-xs text-slate-400 mt-1">Docente: {detalleMatricula.tutor_nombre}</p>
+                </div>
+                <button onClick={() => setDetalleMatricula(null)} className="text-slate-400 hover:text-white transition-colors p-1 rounded hover:bg-white/10">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+              
+              <div className="p-5 space-y-3 max-h-[55vh] overflow-y-auto">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                    <p className="text-[10px] text-slate-400 mb-0.5">Tipo</p>
+                    <p className="text-xs font-semibold text-white">{detalleMatricula.tipo_inscripcion || '-'}</p>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                    <p className="text-[10px] text-slate-400 mb-0.5">Grupo</p>
+                    <p className="text-xs font-semibold text-white">{detalleMatricula.grupo || 'Sin grupo'}</p>
+                  </div>
+                </div>
+
+                {Array.isArray(detalleMatricula.students) && detalleMatricula.students.length > 0 && (
+                  <div>
+                    <p className="text-[10px] text-slate-400 mb-1.5 font-semibold">Alumnos ({detalleMatricula.students.length})</p>
+                    <div className="space-y-1">
+                      {detalleMatricula.students.slice(0, 4).map((al: any) => (
+                        <div key={al.id || al.nombre} className="p-1.5 rounded-lg bg-white/5 border border-white/10">
+                          <p className="text-[10px] font-semibold text-white">{al.nombre}</p>
+                        </div>
+                      ))}
+                      {detalleMatricula.students.length > 4 && (
+                        <p className="text-[10px] text-slate-400 mt-1">+{detalleMatricula.students.length - 4} más</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <p className="text-[10px] text-slate-400 mb-1.5 font-semibold">Horarios</p>
+                  <div className="flex flex-wrap gap-1">
+                    {renderHorarioBadges(detalleMatricula)}
+                  </div>
+                </div>
+
+                {(detalleMatricula.curso_costo_curso || detalleMatricula.curso_pago_tutor) && (
+                  <div className="space-y-1.5 pt-1">
+                    <p className="text-[10px] text-slate-400 font-semibold">Costos</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {detalleMatricula.curso_costo_curso && (
+                        <div className="p-2 rounded-lg bg-white/5 border border-white/10">
+                          <p className="text-[10px] text-slate-400">Curso</p>
+                          <p className="text-xs font-bold text-[#FFC800]">₡{(detalleMatricula.curso_costo_curso || 0).toLocaleString()}</p>
+                        </div>
+                      )}
+                      {detalleMatricula.curso_pago_tutor && (
+                        <div className="p-2 rounded-lg bg-white/5 border border-white/10">
+                          <p className="text-[10px] text-slate-400">Tutor</p>
+                          <p className="text-xs font-bold text-[#00AEEF]">₡{(detalleMatricula.curso_pago_tutor || 0).toLocaleString()}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-5 border-t border-white/10">
+                <Button
+                  variant="outline"
+                  className="w-full text-xs h-7 bg-white/5 border-white/10 hover:bg-white/10 text-white"
+                  onClick={() => setDetalleMatricula(null)}
+                >
+                  Cerrar
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Estudiantes por Tutor */}
+        <Card className="border-slate-200">
+          <CardHeader>
+            <CardTitle className="text-lg">Alumnos por Tutor</CardTitle>
+            <CardDescription className="text-xs">Conteo de estudiantes activos por docente</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {resumenTutores.length === 0 ? (
+              <div className="text-xs text-slate-400 font-bold uppercase tracking-widest py-6 text-center">Sin datos</div>
+            ) : (
+              <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                {resumenTutores.map((r) => (
+                  <button onClick={() => cargarAlumnosTutor(r.tutor_id, r.tutor_nombre)} key={r.tutor_id} className="w-full flex items-center justify-between p-2.5 rounded-xl border border-white/10 hover:border-[#00AEEF]/30 hover:bg-white/5 transition-all">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-white font-bold text-xs">
+                        {r.tutor_nombre.charAt(0)}
+                      </div>
+                      <span className="font-semibold text-slate-200 text-sm">{r.tutor_nombre}</span>
+                    </div>
+                    <span className="text-[11px] font-bold text-[#FFC800] bg-[#FFC800]/15 px-2.5 py-1 rounded-full border border-[#FFC800]/30">
+                      {r.total_estudiantes}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {tutorSeleccionado && (
+          <Card className="border-white/10 bg-[#0F2445]">
+            <CardHeader className="border-b border-white/10">
+              <div className="flex justify-between items-start">
+                <CardTitle className="text-white text-base">Alumnos de {tutorSeleccionado.nombre}</CardTitle>
+                <button onClick={() => { setTutorSeleccionado(null); setAlumnosTutor([]); }} className="text-slate-400 hover:text-white transition-colors">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-4">
+              {alumnosTutor.length === 0 ? (
+                <div className="text-xs text-slate-400">Sin alumnos asociados</div>
+              ) : (
+                <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                  {alumnosTutor.map((al) => (
+                    <div key={al.id} className="flex items-center gap-2 p-2 rounded-lg border border-white/10 bg-white/5">
+                      <div className="w-8 h-8 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-white font-bold text-xs">
+                        {al.nombre.charAt(0)}
+                      </div>
+                      <span className="font-semibold text-slate-100">{al.nombre}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+      </aside>
     </div>
   );
 };

@@ -25,6 +25,7 @@ export interface Tutor {
   email: string;
   telefono: string;
   especialidad: string;
+  color?: string | null;
   horario_preferido?: string | null;
   dias?: string[] | null;
   dias_turno?: Record<string, 'Tarde' | 'Noche'> | null;

@@ -1,14 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
+import { supabaseClient } from '../lib/supabaseClient';
 import { Curso, Tutor } from '../types';
 import { 
-  Button, Card, CardHeader, CardTitle, CardDescription, 
-  Badge, Input, Label, Select
+  Button, Card, CardHeader, CardTitle, CardDescription, CardContent,
+  Badge, Input, Label, Select, Dialog, Table, TableHead, TableHeader, TableRow, TableCell, TableBody
 } from '../components/UI';
-import { Plus, Edit, Trash2, BookOpen, Users as UsersIcon, Clock } from 'lucide-react';
+import { Plus, Edit, Trash2, BookOpen, Users as UsersIcon, Clock, MoreVertical, CheckCircle2, XCircle, Filter, Layers, Table as TableIcon } from 'lucide-react';
 
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const NIVELES = ['None', 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+
+const getErrorMessage = (error: any) =>
+  error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Error al guardar curso';
 
 const Cursos: React.FC = () => {
   const [cursos, setCursos] = useState<Curso[]>([]);
@@ -37,6 +41,14 @@ const Cursos: React.FC = () => {
     grado_nombre: '',
     grado_color: '#2563eb'
   });
+  const [resumenSeleccion, setResumenSeleccion] = useState<{ titulo: string; detalle: string; lista?: string[] } | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [selectedCurso, setSelectedCurso] = useState<Curso | null>(null);
+  const [menuOpen, setMenuOpen] = useState<number | null>(null);
+  const [estadoFiltro, setEstadoFiltro] = useState<'todos' | 'activos' | 'inactivos'>('todos');
+  const [search, setSearch] = useState('');
+  const [viewMode, setViewMode] = useState<'tabla' | 'tarjetas'>('tarjetas');
+  const [nivelFiltro, setNivelFiltro] = useState('');
 
   // Función para calcular duración en horas
   const calcularDuracionHoras = (horaInicio: string, horaFin: string): number => {
@@ -63,6 +75,54 @@ const Cursos: React.FC = () => {
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  const cursosFiltrados = useMemo(() => {
+    return cursos.filter(c => {
+      const matchesSearch = `${c.nombre} ${c.descripcion ?? ''} ${c.nivel} ${c.tipo_clase}`
+        .toLowerCase()
+        .includes(search.toLowerCase());
+      const matchesEstado = estadoFiltro === 'todos' ? true : estadoFiltro === 'activos' ? c.estado === 1 : c.estado !== 1;
+      const matchesNivel = nivelFiltro ? c.nivel === nivelFiltro : true;
+      return matchesSearch && matchesEstado && matchesNivel;
+    });
+  }, [cursos, estadoFiltro, search, nivelFiltro]);
+
+  const resumenCursos = useMemo(() => {
+    const total = cursosFiltrados.length;
+    const grupales = cursosFiltrados.filter(c => c.tipo_clase === 'grupal').length;
+    const tutorias = cursosFiltrados.filter(c => c.tipo_clase === 'tutoria').length;
+    const niveles = new Set(cursosFiltrados.map(c => c.nivel).filter(Boolean)).size;
+    const conTutor = cursosFiltrados.filter(c => !!c.tutor_id).length;
+    const top5 = cursosFiltrados.slice(0, 5).map(c => c.nombre);
+
+    return [
+      { titulo: 'Cursos', valor: total, accent: '#FFC800', detalle: `Total de cursos filtrados: ${total}.`, lista: top5 },
+      { titulo: 'Grupales', valor: grupales, accent: '#00AEEF', detalle: `${grupales} cursos grupales.`, lista: cursosFiltrados.filter(c => c.tipo_clase === 'grupal').slice(0,5).map(c=>c.nombre) },
+      { titulo: 'Tutorías', valor: tutorias, accent: '#FFC800', detalle: `${tutorias} cursos de tutoría.`, lista: cursosFiltrados.filter(c => c.tipo_clase === 'tutoria').slice(0,5).map(c=>c.nombre) },
+      { titulo: 'Niveles distintos', valor: niveles, accent: '#00AEEF', detalle: `Cobertura de ${niveles} niveles.`, lista: Array.from(new Set(cursosFiltrados.map(c => c.nivel).filter(Boolean))).map(String) },
+      { titulo: 'Con docente asignado', valor: conTutor, accent: '#FFC800', detalle: `${conTutor} cursos tienen tutor asignado.`, lista: cursosFiltrados.filter(c => c.tutor_id).slice(0,5).map(c=>c.nombre) },
+    ];
+  }, [cursosFiltrados]);
+
+  const nivelesDisponibles = useMemo(() => {
+    return Array.from(new Set(cursos.map(c => c.nivel).filter(Boolean))) as string[];
+  }, [cursos]);
+
+  const tutoresActivos = useMemo(() => tutores.filter(t => t.estado === 1), [tutores]);
+
+  // Suscripción en tiempo real a cursos y tutores (para combos)
+  useEffect(() => {
+    if (!supabaseClient) return;
+    const channel = supabaseClient
+      .channel('realtime-cursos')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cursos' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tutores' }, () => loadData())
+      .subscribe();
+
+    return () => {
+      supabaseClient.removeChannel(channel);
+    };
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -130,7 +190,7 @@ const Cursos: React.FC = () => {
           tutor: error.response?.data?.details?.join(', ') || 'Horarios incompatibles'
         });
       } else {
-        setErrors({ submit: 'Error al guardar curso: ' + (error.response?.data?.error || error.message) });
+        setErrors({ submit: getErrorMessage(error) });
       }
     }
   };
@@ -183,6 +243,12 @@ const Cursos: React.FC = () => {
     }
   };
 
+  const toggleEstado = async (curso: Curso) => {
+    const nuevoEstado = curso.estado === 1 ? 0 : 1;
+    await api.cursos.update(curso.id, { estado: nuevoEstado });
+    setCursos(prev => prev.map(c => c.id === curso.id ? { ...c, estado: nuevoEstado } : c));
+  };
+
   if (loading) return (
     <div className="flex flex-col items-center justify-center h-[50vh]">
       <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-4" />
@@ -191,29 +257,205 @@ const Cursos: React.FC = () => {
   );
 
   return (
-    <div className="space-y-10">
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-slate-200 pb-8">
-        <div>
-          <h1 className="text-3xl font-black text-slate-900 tracking-tight">Catálogo de Cursos</h1>
-          <p className="text-slate-500 font-medium mt-2">Programas académicos y niveles</p>
-        </div>
-        <Button
-          onClick={() => {
-            resetForm();
-            setShowModal(true);
-          }}
-          variant="primary"
-          className="h-12 px-8 gap-3 bg-blue-600 hover:bg-blue-700 text-white"
-        >
-          <Plus className="w-5 h-5" />
-          Nuevo Curso
-        </Button>
-      </header>
+    <div className="flex flex-col lg:flex-row gap-6">
+      <aside className="lg:w-[32%] space-y-4 sticky top-24 self-start">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Filter className="w-5 h-5" style={{ color: '#00AEEF' }} /> Filtros y vista
+            </CardTitle>
+            <CardDescription>Filtra y cambia entre tabla o tarjetas</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label>Búsqueda rápida</Label>
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Nombre, descripción o nivel"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label>Nivel</Label>
+                <Select value={nivelFiltro} onChange={(e) => setNivelFiltro(e.target.value)}>
+                  <option value="">Todos</option>
+                  {nivelesDisponibles.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <Label>Estado</Label>
+                <Select value={estadoFiltro} onChange={(e) => setEstadoFiltro(e.target.value as any)}>
+                  <option value="todos">Todos</option>
+                  <option value="activos">Activos</option>
+                  <option value="inactivos">Inactivos</option>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                size="sm"
+                onClick={() => setViewMode('tabla')}
+                className={`gap-2 font-bold transition-all ${viewMode === 'tabla'
+                  ? 'bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026]'
+                  : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
+              >
+                <TableIcon className="w-4 h-4" /> Tabla
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setViewMode('tarjetas')}
+                className={`gap-2 font-bold transition-all ${viewMode === 'tarjetas'
+                  ? 'bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026]'
+                  : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
+              >
+                <Layers className="w-4 h-4" /> Tarjetas
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-white/10">
+          <CardHeader>
+            <CardTitle className="text-lg">Resumen rápido</CardTitle>
+            <CardDescription className="text-xs">Indicadores clave del catálogo</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {resumenCursos.map(card => (
+                <button
+                  key={card.titulo}
+                  onClick={() => setResumenSeleccion({ titulo: card.titulo, detalle: card.detalle, lista: card.lista })}
+                  className="relative text-left p-4 rounded-2xl border border-white/10 bg-[#0F2445] hover:border-[#00AEEF]/40 hover:shadow-cyan-500/10 transition-all overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 w-16 h-16 rounded-bl-full" style={{ backgroundColor: `${card.accent}22` }} />
+                  <div className="flex items-center justify-between relative z-10 gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-bold uppercase text-slate-400 tracking-widest">{card.titulo}</div>
+                      <div className="text-3xl font-black mt-1 text-white">{card.valor}</div>
+                    </div>
+                    <div className="w-10 h-10 rounded-2xl flex items-center justify-center" style={{ backgroundColor: `${card.accent}33`, color: '#051026' }}>
+                      <Layers className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <div className="mt-2 text-[12px] text-slate-400 leading-snug">{card.detalle}</div>
+                </button>
+              ))}
+            </div>
+
+            {resumenSeleccion && (
+              <Card className="border-white/10 bg-[#0F2445]">
+                <CardHeader className="border-white/10 pb-3">
+                  <CardTitle className="text-white text-base">{resumenSeleccion.titulo}</CardTitle>
+                  <CardDescription className="text-slate-400">{resumenSeleccion.detalle}</CardDescription>
+                </CardHeader>
+                {resumenSeleccion.lista && resumenSeleccion.lista.length > 0 && (
+                  <div className="p-4 space-y-2 text-slate-100">
+                    {resumenSeleccion.lista.map((item, idx) => (
+                      <div key={idx} className="text-sm">• {item}</div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            )}
+          </CardContent>
+        </Card>
+      </aside>
+
+      <div className="flex-1 space-y-10">
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-white/10 pb-8">
+          <div>
+            <h1 className="text-3xl font-black text-white tracking-tight">Catálogo de Cursos</h1>
+            <p className="text-slate-300 font-medium mt-2">Programas académicos y niveles</p>
+          </div>
+          <Button
+            onClick={() => {
+              resetForm();
+              setShowModal(true);
+            }}
+            variant="primary"
+            className="h-12 px-8 gap-3 bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026] font-bold"
+          >
+            <Plus className="w-5 h-5" />
+            Nuevo Curso
+          </Button>
+        </header>
+
+        <section className="space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-black text-white tracking-tight">Cursos</h2>
+              <p className="text-slate-300 text-sm font-medium">Programas académicos disponibles</p>
+            </div>
+            <div className="text-sm font-semibold text-slate-200">{cursosFiltrados.length} resultado(s)</div>
+          </div>
+
+          {/* Dialog de Detalle */}
+          <Dialog isOpen={detailOpen} onClose={() => setDetailOpen(false)} title="Detalles del Curso">
+        {selectedCurso && (
+          <div className="space-y-4 text-slate-100">
+            <div>
+              <div className="font-bold text-2xl text-white">{selectedCurso.nombre}</div>
+              {selectedCurso.descripcion && (
+                <p className="text-sm text-slate-300 mt-2">{selectedCurso.descripcion}</p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-lg border border-white/10 bg-white/5">
+                <div className="text-[11px] font-bold text-slate-300 uppercase">Nivel</div>
+                <div className="text-sm font-semibold text-white">{selectedCurso.nivel}</div>
+              </div>
+              <div className="p-3 rounded-lg border border-cyan-400/40 bg-cyan-500/10">
+                <div className="text-[11px] font-bold text-cyan-200 uppercase">Tipo</div>
+                <div className="text-sm font-semibold text-white">{selectedCurso.tipo_clase === 'tutoria' ? 'Tutoría' : 'Grupal'}</div>
+              </div>
+              {selectedCurso.max_estudiantes && (
+                <div className="p-3 rounded-lg border border-emerald-400/30 bg-emerald-500/10">
+                  <div className="text-[11px] font-bold text-emerald-200 uppercase">Límite alumnos</div>
+                  <div className="text-sm font-semibold text-white">{selectedCurso.max_estudiantes}</div>
+                </div>
+              )}
+              {selectedCurso.costo_curso && (
+                <div className="p-3 rounded-lg border border-green-400/30 bg-green-500/10">
+                  <div className="text-[11px] font-bold text-green-200 uppercase">Costo</div>
+                  <div className="text-sm font-semibold text-white">₡{selectedCurso.costo_curso.toLocaleString()}</div>
+                </div>
+              )}
+            </div>
+
+            {selectedCurso.dias_schedule && Object.keys(selectedCurso.dias_schedule).length > 0 && (
+              <div>
+                <div className="text-xs font-bold text-slate-300 uppercase mb-2">Horario del curso</div>
+                <div className="space-y-2">
+                  {Object.entries(selectedCurso.dias_schedule).map(([dia, info]: any) => (
+                    <div key={dia} className="flex items-center justify-between p-2.5 rounded-lg bg-[#0F2445] border border-white/10">
+                      <span className="font-semibold text-white">{dia}</span>
+                      <span className="text-sm text-slate-200">{info.hora_inicio} - {info.hora_fin}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {selectedCurso.grado_activo && selectedCurso.grado_nombre && (
+              <div className="p-3 rounded-lg border border-indigo-400/30 bg-indigo-500/10">
+                <div className="text-[11px] font-bold text-indigo-200 uppercase">Grado escolar</div>
+                <div className="text-sm font-semibold text-white">{selectedCurso.grado_nombre}</div>
+              </div>
+            )}
+          </div>
+        )}
+      </Dialog>
 
       {/* Modal de Formulario */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white">
+          <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <CardHeader className="border-b border-slate-200 flex justify-between items-start">
               <div>
                 <CardTitle>{editingId ? 'Editar Curso' : 'Nuevo Curso'}</CardTitle>
@@ -283,7 +525,7 @@ const Cursos: React.FC = () => {
               <div>
                 <Label>Asignar Tutor (opcional)</Label>
                 <div className="space-y-3">
-                  {tutores.map(tutor => {
+                  {tutoresActivos.map(tutor => {
                     const diasHorarios = tutor.dias_horarios || {};
                     const tieneDias = Object.keys(diasHorarios).length > 0;
                     return (
@@ -577,32 +819,37 @@ const Cursos: React.FC = () => {
         </div>
       )}
 
-      {/* Grid de Cursos */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
-        {cursos.map((curso) => (
-          <Card key={curso.id} className="group relative overflow-hidden bg-white border-slate-200">
-            <div className="absolute top-0 left-0 w-full h-1.5 bg-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+      {viewMode === 'tarjetas' ? (
+        <>
+          {/* Grid de Cursos */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+        {cursosFiltrados.map((curso) => (
+          <Card 
+            key={curso.id} 
+            className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30"
+          >
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-[#FFC800] to-[#00AEEF] opacity-60" />
             
-            <CardHeader className="pb-4">
-              <div className="flex justify-between items-start">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 font-black shadow-inner">
+            <CardHeader className="pb-4 border-none">
+              <div className="flex justify-between items-start gap-3">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="w-12 h-12 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center text-white font-black shadow-inner flex-shrink-0">
                     <BookOpen className="w-6 h-6" />
                   </div>
-                  <div>
-                    <CardTitle className="text-lg text-slate-900">{curso.nombre}</CardTitle>
-                    <div className="flex gap-2 mt-2">
+                  <div className="min-w-0 flex-1">
+                    <CardTitle className="text-lg text-white truncate">{curso.nombre}</CardTitle>
+                    <div className="flex gap-2 mt-2 flex-wrap">
                       <Badge variant="secondary" className="font-bold">{curso.nivel || 'None'}</Badge>
-                      <Badge className={`${curso.tipo_clase === 'tutoria' ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'} font-bold`}>
+                      <Badge className={`${curso.tipo_clase === 'tutoria' ? 'bg-purple-500/15 text-purple-200 border border-purple-400/40' : 'bg-emerald-500/15 text-emerald-200 border border-emerald-400/40'} font-bold`}>
                         {curso.tipo_clase === 'tutoria' ? '1:1' : 'Grupal'}
                       </Badge>
                       {curso.grado_activo && curso.grado_nombre && (
                         <span
-                          className="text-[11px] font-bold px-3 py-1 rounded-full border"
+                          className="text-[11px] font-bold px-3 py-1 rounded-full border truncate max-w-[100px]"
                           style={{
-                            backgroundColor: (curso.grado_color || '#e5e7eb') + '33',
-                            color: curso.grado_color || '#111827',
-                            borderColor: (curso.grado_color || '#e5e7eb')
+                            backgroundColor: (curso.grado_color || '#00AEEF') + '22',
+                            color: curso.grado_color || '#FFC800',
+                            borderColor: (curso.grado_color || '#00AEEF')
                           }}
                         >
                           {curso.grado_nombre}
@@ -611,48 +858,76 @@ const Cursos: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                <div className="flex gap-1">
+                <div className="relative flex-shrink-0">
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => handleEdit(curso)}
-                    className="h-9 w-9 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-100"
+                    onClick={() => setMenuOpen(menuOpen === curso.id ? null : curso.id)}
+                    className="h-9 w-9 text-slate-300 hover:bg-white/10"
                   >
-                    <Edit className="w-4 h-4" />
+                    <MoreVertical className="w-5 h-5" />
                   </Button>
-                  <Button
-                    variant="destructive"
-                    size="icon"
-                    onClick={() => handleDelete(curso.id)}
-                    className="h-9 w-9 bg-red-600 hover:bg-red-700 text-white"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  {menuOpen === curso.id && (
+                    <div className="absolute right-0 top-10 z-50 bg-[#0F2445] rounded-2xl shadow-2xl border border-white/10 py-1 min-w-[180px]">
+                      <button
+                        onClick={() => { setSelectedCurso(curso); setDetailOpen(true); setMenuOpen(null); }}
+                        className="w-full text-left px-4 py-2 text-sm text-slate-100 hover:bg-white/5 flex items-center gap-2"
+                      >
+                        <BookOpen className="w-4 h-4" />
+                        Ver detalles
+                      </button>
+                      <button
+                        onClick={() => { handleEdit(curso); setMenuOpen(null); }}
+                        className="w-full text-left px-4 py-2 text-sm text-slate-100 hover:bg-white/5 flex items-center gap-2"
+                      >
+                        <Edit className="w-4 h-4" />
+                        Editar
+                      </button>
+                      <button
+                        onClick={() => { handleDelete(curso.id); setMenuOpen(null); }}
+                        className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-rose-500/10 flex items-center gap-2"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Eliminar
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </CardHeader>
 
             {curso.descripcion && (
-              <div className="px-8 mb-4">
-                <p className="text-sm text-slate-600">{curso.descripcion}</p>
+              <div className="px-6 mb-4">
+                <p className="text-sm text-slate-300 line-clamp-2">{curso.descripcion}</p>
               </div>
             )}
 
-            <div className="px-8 space-y-4 pb-6">
+            <div className="px-6 space-y-4 pb-6">
+              <Button
+                size="sm"
+                onClick={() => toggleEstado(curso)}
+                className={`w-full gap-2 font-bold border ${curso.estado === 1 
+                  ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50' 
+                  : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+              >
+                {curso.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                {curso.estado === 1 ? 'Activo' : 'Inactivo'}
+              </Button>
+
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-slate-600">
-                  <UsersIcon className="w-4 h-4 text-blue-500" />
+                <div className="flex items-center gap-2 text-slate-300">
+                  <UsersIcon className="w-4 h-4 text-cyan-300 flex-shrink-0" />
                   <span className="text-sm font-semibold">
                     {curso.tipo_clase === 'tutoria' ? 'Sin límite' : `Máx: ${curso.max_estudiantes}`}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 text-slate-600">
-                  <Clock className="w-4 h-4 text-blue-500" />
-                  <span className="text-sm font-semibold">
+                <div className="flex items-center gap-2 text-slate-300 min-w-0">
+                  <Clock className="w-4 h-4 text-cyan-300 flex-shrink-0" />
+                  <span className="text-sm font-semibold truncate">
                     {curso.dias_schedule && typeof curso.dias_schedule === 'object' && Object.keys(curso.dias_schedule).length > 0
-                      ? Object.entries(curso.dias_schedule).map(([dia, schedule]: [string, any]) => 
+                      ? Object.entries(curso.dias_schedule).slice(0,2).map(([dia, schedule]: [string, any]) => 
                           `${dia.slice(0,3)} ${schedule.hora_inicio}-${schedule.hora_fin}`
-                        ).join(', ')
+                        ).join(', ') + (Object.keys(curso.dias_schedule).length > 2 ? '...' : '')
                       : 'Sin horario'}
                   </span>
                 </div>
@@ -660,23 +935,23 @@ const Cursos: React.FC = () => {
 
               {/* Tutor Asignado */}
               {curso.tutor_id && (
-                <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-200">
-                  <p className="text-xs text-indigo-700 font-bold uppercase mb-1">Tutor Asignado</p>
-                  <p className="text-sm font-black text-indigo-900">
+                <div className="bg-indigo-500/10 p-3 rounded-lg border border-indigo-400/30">
+                  <p className="text-xs text-indigo-100 font-bold uppercase mb-1">Tutor asignado</p>
+                  <p className="text-sm font-black text-white">
                     {tutores.find(t => t.id === curso.tutor_id)?.nombre || `Tutor #${curso.tutor_id}`}
                   </p>
                 </div>
               )}
 
               {/* Costos */}
-              <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-100">
-                <div className="bg-green-50 p-3 rounded-lg border border-green-100">
-                  <p className="text-xs text-green-700 font-semibold mb-1">Costo del Curso</p>
-                  <p className="text-lg font-black text-green-900">₡{curso.costo_curso?.toLocaleString() || '0'}</p>
+              <div className="grid grid-cols-2 gap-3 pt-3 border-t border-white/5">
+                <div className="bg-emerald-500/10 p-3 rounded-lg border border-emerald-400/30">
+                  <p className="text-xs text-emerald-100 font-semibold mb-1">Costo del curso</p>
+                  <p className="text-lg font-black text-white">₡{curso.costo_curso?.toLocaleString() || '0'}</p>
                 </div>
-                <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
-                  <p className="text-xs text-blue-700 font-semibold mb-1">Pago a Tutores</p>
-                  <p className="text-lg font-black text-blue-900">₡{curso.pago_tutor?.toLocaleString() || '0'}</p>
+                <div className="bg-cyan-500/10 p-3 rounded-lg border border-cyan-400/30">
+                  <p className="text-xs text-cyan-100 font-semibold mb-1">Pago a tutores</p>
+                  <p className="text-lg font-black text-white">₡{curso.pago_tutor?.toLocaleString() || '0'}</p>
                 </div>
               </div>
 
@@ -685,7 +960,7 @@ const Cursos: React.FC = () => {
                   {curso.dias.map((dia) => {
                     const schedule = curso.dias_schedule?.[dia];
                     return (
-                      <span key={dia} className="text-xs bg-blue-50 text-blue-700 font-semibold px-2 py-1 rounded">
+                      <span key={dia} className="text-xs bg-cyan-500/10 text-cyan-100 border border-cyan-400/30 font-semibold px-2 py-1 rounded">
                         {dia.slice(0, 3)}: {schedule?.hora_inicio || '?'}-{schedule?.hora_fin || '?'}
                       </span>
                     );
@@ -695,6 +970,64 @@ const Cursos: React.FC = () => {
             </div>
           </Card>
         ))}
+        </div>
+        </>
+      ) : (
+          <Card className="border-slate-200">
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Nombre</TableHead>
+                    <TableHead>Nivel</TableHead>
+                    <TableHead>Tipo</TableHead>
+                    <TableHead>Estado</TableHead>
+                    <TableHead>Tutor</TableHead>
+                    <TableHead className="text-right">Acciones</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {cursosFiltrados.map((curso) => (
+                    <TableRow key={curso.id}>
+                      <TableCell className="font-semibold text-slate-900">{curso.nombre}</TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">{curso.nivel}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={curso.tipo_clase === 'grupal' ? 'info' : 'warning'}>
+                          {curso.tipo_clase === 'grupal' ? 'Grupal' : 'Tutoría'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          onClick={() => toggleEstado(curso)}
+                          className={`gap-2 border ${curso.estado === 1
+                            ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
+                            : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+                        >
+                          {curso.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                          {curso.estado === 1 ? 'Activo' : 'Inactivo'}
+                        </Button>
+                      </TableCell>
+                      <TableCell className="text-sm text-slate-600">
+                        {curso.tutor_id ? tutores.find(t => t.id === curso.tutor_id)?.nombre || `Tutor #${curso.tutor_id}` : 'Sin asignar'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button size="sm" variant="ghost" onClick={() => { setSelectedCurso(curso); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
+                          <Button size="sm" variant="ghost" onClick={() => handleEdit(curso)} className="text-blue-700">Editar</Button>
+                          <Button size="sm" variant="ghost" onClick={() => handleDelete(curso.id)} className="text-red-600">Eliminar</Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
+        </section>
       </div>
     </div>
   );

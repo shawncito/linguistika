@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import { supabaseClient } from '../lib/supabaseClient';
 import { Pago, Tutor, EstadoPago } from '../types';
 import { Button, Card, Badge, Input, Label, Select, Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/UI';
 import { CreditCard, Filter, History, Download, DollarSign, Search, CheckCircle2 } from 'lucide-react';
@@ -32,6 +33,20 @@ const Pagos: React.FC = () => {
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  // Suscripción en tiempo real a pagos y tutores
+  useEffect(() => {
+    if (!supabaseClient) return;
+    const channel = supabaseClient
+      .channel('realtime-pagos')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pagos' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tutores' }, () => loadData())
+      .subscribe();
+
+    return () => {
+      supabaseClient.removeChannel(channel);
+    };
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -77,7 +92,7 @@ const Pagos: React.FC = () => {
           </Button>
           <Button
             variant="outline"
-            className="h-12 px-8 bg-blue-600 hover:bg-blue-700 text-white border-blue-600"
+            className="h-12 px-8 bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026] border-0 font-bold"
           >
             Auditar Pagos
           </Button>
@@ -88,7 +103,7 @@ const Pagos: React.FC = () => {
         {/* Payment Form Panel */}
         <div className="lg:col-span-4">
             <Card className="border-slate-200 sticky top-28 overflow-hidden">
-                <div className="bg-blue-600 h-2 w-full" />
+                <div className="bg-gradient-to-r from-[#FFC800] to-[#00AEEF] h-2 w-full" />
                 <div className="p-8">
                     <h2 className="text-lg font-bold text-slate-900 mb-8 flex items-center gap-3">
                         <DollarSign className="w-6 h-6 p-1 bg-blue-50 text-blue-600 rounded-lg" />
@@ -129,7 +144,7 @@ const Pagos: React.FC = () => {
                         <Button
                           type="submit"
                           variant="primary"
-                          className="w-full h-14 text-base font-black shadow-lg shadow-blue-100 mt-4 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white"
+                          className="w-full h-14 text-base font-black shadow-lg mt-4 rounded-2xl bg-gradient-to-r from-[#FFC800] to-[#00AEEF] hover:from-[#FFC800]/80 hover:to-[#00AEEF]/80 text-[#051026]"
                         >
                             Emitir Pago Ahora
                         </Button>

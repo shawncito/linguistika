@@ -10,12 +10,11 @@ router.get('/', async (req, res) => {
     const { data: cursos, error } = await supabase
       .from('cursos')
       .select('*')
-      .eq('estado', true)
       .order('created_at', { ascending: false });
     
     if (error) throw error;
 
-    // Parse JSON fields
+    // Parse JSON fields y convertir estado a número
     const cursosResponse = cursos.map(c => ({
       ...c,
       dias: c.dias ? JSON.parse(c.dias) : null,
@@ -24,7 +23,8 @@ router.get('/', async (req, res) => {
       grado_activo: c.grado_activo,
       grado_nombre: c.grado_nombre,
       grado_color: c.grado_color,
-      tutor_id: c.tutor_id
+      tutor_id: c.tutor_id,
+      estado: c.estado ? 1 : 0
     }));
 
     res.json(cursosResponse);
@@ -164,45 +164,44 @@ router.post('/', async (req, res) => {
 // PUT - Actualizar curso
 router.put('/:id', async (req, res) => {
   try {
-    const { 
-      nombre, descripcion, nivel, max_estudiantes = null,
-      tipo_clase = 'grupal', dias = null, dias_turno = null, dias_schedule = null, estado,
-      costo_curso = 0, pago_tutor = 0,
-      grado_activo = false, grado_nombre = null, grado_color = null,
-      tutor_id = null
-    } = req.body;
     const userId = req.user?.id;
     
+    // Construir objeto de actualización solo con campos presentes
+    const updateData = {
+      updated_by: userId,
+      updated_at: new Date().toISOString()
+    };
+
+    if (req.body.nombre !== undefined) updateData.nombre = req.body.nombre;
+    if (req.body.descripcion !== undefined) updateData.descripcion = req.body.descripcion;
+    if (req.body.nivel !== undefined) updateData.nivel = req.body.nivel;
+    if (req.body.tipo_clase !== undefined) updateData.tipo_clase = req.body.tipo_clase;
+    
     // Si es tutoría, max_estudiantes debe ser null
-    const maxEstudiantes = tipo_clase === 'tutoria' ? null : max_estudiantes;
+    if (req.body.max_estudiantes !== undefined) {
+      updateData.max_estudiantes = req.body.tipo_clase === 'tutoria' ? null : req.body.max_estudiantes;
+    }
+    
+    if (req.body.dias !== undefined) updateData.dias = req.body.dias ? JSON.stringify(req.body.dias) : null;
+    if (req.body.dias_schedule !== undefined) updateData.dias_schedule = req.body.dias_schedule ? JSON.stringify(req.body.dias_schedule) : null;
+    if (req.body.costo_curso !== undefined) updateData.costo_curso = parseFloat(req.body.costo_curso) || 0;
+    if (req.body.pago_tutor !== undefined) updateData.pago_tutor = parseFloat(req.body.pago_tutor) || 0;
+    if (req.body.grado_activo !== undefined) updateData.grado_activo = !!req.body.grado_activo;
+    if (req.body.grado_nombre !== undefined) updateData.grado_nombre = req.body.grado_nombre || null;
+    if (req.body.grado_color !== undefined) updateData.grado_color = req.body.grado_color || null;
+    if (req.body.tutor_id !== undefined) updateData.tutor_id = req.body.tutor_id || null;
+    if (req.body.estado !== undefined) updateData.estado = req.body.estado === 1 || req.body.estado === true;
 
     const { data: curso, error } = await supabase
       .from('cursos')
-      .update({
-        nombre,
-        descripcion,
-        nivel,
-        max_estudiantes: maxEstudiantes,
-        tipo_clase,
-        dias: dias ? JSON.stringify(dias) : null,
-        dias_schedule: dias_schedule ? JSON.stringify(dias_schedule) : null,
-        costo_curso: parseFloat(costo_curso) || 0,
-        pago_tutor: parseFloat(pago_tutor) || 0,
-        grado_activo: !!grado_activo,
-        grado_nombre: grado_nombre || null,
-        grado_color: grado_color || null,
-        tutor_id: tutor_id || null,
-        estado,
-        updated_by: userId,
-        updated_at: new Date().toISOString()
-      })
+      .update(updateData)
       .eq('id', req.params.id)
       .select()
       .single();
     
     if (error) throw error;
 
-    // Parse JSON fields for response
+    // Parse JSON fields for response y convertir estado a número
     const cursoResponse = {
       ...curso,
       dias: curso.dias ? JSON.parse(curso.dias) : null,
@@ -211,7 +210,8 @@ router.put('/:id', async (req, res) => {
       grado_activo: curso.grado_activo,
       grado_nombre: curso.grado_nombre,
       grado_color: curso.grado_color,
-      tutor_id: curso.tutor_id
+      tutor_id: curso.tutor_id,
+      estado: curso.estado ? 1 : 0
     };
 
     res.json(cursoResponse);
@@ -220,21 +220,16 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE - Desactivar curso
+// DELETE - Eliminar curso permanentemente
 router.delete('/:id', async (req, res) => {
   try {
-    const userId = req.user?.id;
     const { error } = await supabase
       .from('cursos')
-      .update({
-        estado: false,
-        updated_by: userId,
-        updated_at: new Date().toISOString()
-      })
+      .delete()
       .eq('id', req.params.id);
     
     if (error) throw error;
-    res.json({ message: 'Curso desactivado correctamente' });
+    res.json({ message: 'Curso eliminado correctamente' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

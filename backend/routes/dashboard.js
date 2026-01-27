@@ -536,6 +536,60 @@ router.post('/sesion/:matriculaId/cancelar-permanente', async (req, res) => {
   }
 });
 
+// PATCH - Actualizar estado de sesión (avisado, confirmado, motivo)
+router.patch('/sesion/:matriculaId/:fecha/estado', async (req, res) => {
+  try {
+    const { matriculaId, fecha } = req.params;
+    const { avisado, confirmado, motivo_cancelacion } = req.body;
+
+    const updateData = { updated_at: new Date().toISOString() };
+    if (avisado !== undefined) updateData.avisado = avisado;
+    if (confirmado !== undefined) updateData.confirmado = confirmado;
+    if (motivo_cancelacion !== undefined) updateData.motivo_cancelacion = motivo_cancelacion;
+
+    // Buscar la clase asociada a la matrícula en esa fecha
+    const { data: clases, error: selectError } = await supabase
+      .from('clases')
+      .select('id')
+      .eq('matricula_id', matriculaId)
+      .eq('fecha', fecha)
+      .limit(1);
+
+    if (selectError) throw selectError;
+    if (!clases || clases.length === 0) {
+      return res.status(404).json({ error: 'Sesión no encontrada' });
+    }
+
+    const { error: updateError } = await supabase
+      .from('clases')
+      .update(updateData)
+      .eq('id', clases[0].id);
+
+    if (updateError) throw updateError;
+    res.json({ message: 'Estado actualizado', sesion_id: clases[0].id });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET estados de clases para una fecha
+router.get('/estados-clases/:fecha', async (req, res) => {
+  try {
+    const { fecha } = req.params;
+    
+    const { data: clases, error } = await supabase
+      .from('clases')
+      .select('id, matricula_id, fecha, avisado, confirmado, motivo_cancelacion')
+      .eq('fecha', fecha);
+    
+    if (error) throw error;
+    
+    res.json(clases || []);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
 
 
