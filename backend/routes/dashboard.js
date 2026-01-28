@@ -556,17 +556,71 @@ router.patch('/sesion/:matriculaId/:fecha/estado', async (req, res) => {
       .limit(1);
 
     if (selectError) throw selectError;
-    if (!clases || clases.length === 0) {
-      return res.status(404).json({ error: 'Sesión no encontrada' });
+
+    let claseId = clases && clases.length > 0 ? clases[0].id : null;
+
+    // Si no existe, crear la clase usando el horario del curso para ese día
+    if (!claseId) {
+      const { data: m, error: mErr } = await supabase
+        .from('matriculas')
+        .select(`
+          id, curso_id, estudiante_id, tutor_id,
+          cursos:curso_id (dias_schedule)
+        `)
+        .eq('id', matriculaId)
+        .single();
+
+      if (mErr || !m) return res.status(404).json({ error: 'Matrícula no encontrada' });
+
+      const dias = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+      const diaSemana = dias[new Date(fecha + 'T00:00:00').getDay()];
+
+      let schedule = null;
+      try { schedule = m.cursos?.dias_schedule ? JSON.parse(m.cursos.dias_schedule)[diaSemana] : null; } catch { schedule = null; }
+
+      if (!schedule || !schedule.hora_inicio || !schedule.hora_fin) {
+        return res.status(400).json({ error: 'No se puede crear la sesión: el curso no tiene horario definido para ese día' });
+      }
+
+      const hora_inicio = String(schedule.hora_inicio).length === 5 ? `${schedule.hora_inicio}:00` : schedule.hora_inicio;
+      const hora_fin = String(schedule.hora_fin).length === 5 ? `${schedule.hora_fin}:00` : schedule.hora_fin;
+      const duracion_horas = (() => {
+        try {
+          const [hi, mi] = String(hora_inicio).split(':').map(Number);
+          const [hf, mf] = String(hora_fin).split(':').map(Number);
+          const min = (hf * 60 + mf) - (hi * 60 + mi);
+          return Math.max(0, parseFloat((min / 60).toFixed(2)));
+        } catch { return 0; }
+      })();
+
+      const { data: nuevaClase, error: insertError } = await supabase
+        .from('clases')
+        .insert({
+          matricula_id: m.id,
+          fecha,
+          hora_inicio,
+          hora_fin,
+          duracion_horas,
+          estado: 'programada',
+          created_by: req.user?.id || null,
+          avisado: avisado ?? null,
+          confirmado: confirmado ?? null,
+          motivo_cancelacion: motivo_cancelacion ?? null
+        })
+        .select('id')
+        .single();
+
+      if (insertError) throw insertError;
+      claseId = nuevaClase.id;
     }
 
     const { error: updateError } = await supabase
       .from('clases')
       .update(updateData)
-      .eq('id', clases[0].id);
+      .eq('id', claseId);
 
     if (updateError) throw updateError;
-    res.json({ message: 'Estado actualizado', sesion_id: clases[0].id });
+    res.json({ message: 'Estado actualizado', sesion_id: claseId });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

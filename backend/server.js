@@ -12,6 +12,8 @@ import pagosRouter from './routes/pagos.js';
 import dashboardRouter from './routes/dashboard.js';
 import authRouter from './routes/auth.js';
 import horasTrabajoRouter from './routes/horas-trabajo.js';
+import adminRouter from './routes/admin.js';
+import finanzasRouter from './routes/finanzas.js';
 import { requireAuth } from './middleware/auth.js';
 
 dotenv.config();
@@ -200,6 +202,8 @@ app.use('/api/horarios', (req, res, next) => requireAuth(req, res, next));
 app.use('/api/pagos', (req, res, next) => requireAuth(req, res, next));
 app.use('/api/dashboard', (req, res, next) => requireAuth(req, res, next));
 app.use('/api/horas-trabajo', (req, res, next) => requireAuth(req, res, next));
+app.use('/api/admin', (req, res, next) => requireAuth(req, res, next));
+app.use('/api/finanzas', (req, res, next) => requireAuth(req, res, next));
 
 app.use('/api/tutores', tutoresRouter);
 app.use('/api/cursos', cursosRouter);
@@ -209,6 +213,8 @@ app.use('/api/horarios', horariosRouter);
 app.use('/api/pagos', pagosRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/horas-trabajo', horasTrabajoRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/finanzas', finanzasRouter);
 
 // Ruta de prueba
 app.get('/api/health', (req, res) => {

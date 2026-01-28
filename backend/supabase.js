@@ -20,6 +20,17 @@ export const supabaseAdmin = supabaseServiceKey
   ? createClient(supabaseUrl, supabaseServiceKey)
   : null;
 
+// Cliente por-request con el JWT del usuario (útil si activas RLS)
+export function supabaseForToken(token) {
+  return createClient(supabaseUrl, supabaseKey, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  });
+}
+
 console.log('✅ Cliente Supabase inicializado');
 
 export default supabase;

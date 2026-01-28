@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { HashRouter, Routes, Route, Link, useLocation, Navigate, Outlet } from 'react-router-dom';
 import { 
   LayoutDashboard, Users, BookOpen, GraduationCap, 
@@ -14,7 +14,9 @@ import Estudiantes from './views/Estudiantes';
 import Matriculas from './views/Matriculas';
 import Pagos from './views/Pagos';
 import Login from './views/Login';
+import Empleados from './views/Empleados';
 import { auth } from './services/api';
+import { api } from './services/api';
 
 const TopNav = () => {
   const location = useLocation();
@@ -26,6 +28,7 @@ const TopNav = () => {
     { name: 'Cursos', path: '/cursos', icon: <BookOpen className="w-4 h-4" /> },
     { name: 'Matrículas', path: '/matriculas', icon: <ClipboardList className="w-4 h-4" /> },
     { name: 'Pagos', path: '/pagos', icon: <CreditCard className="w-4 h-4" /> },
+    { name: 'Empleados', path: '/empleados', icon: <Users className="w-4 h-4" /> },
   ];
 
   return (
@@ -51,7 +54,89 @@ const TopNav = () => {
   );
 };
 
-const AppHeader = () => (
+const AppHeader = () => {
+  const [me, setMe] = useState<any | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const token = auth.getToken();
+    if (!token) {
+      setMe(null);
+      return;
+    }
+
+    api.auth
+      .me()
+      .then((res) => {
+        if (!cancelled) setMe(res.user ?? null);
+      })
+      .catch(() => {
+        // El interceptor ya redirige en 401.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const el = menuRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && !el.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onMouseDown);
+    return () => window.removeEventListener('mousedown', onMouseDown);
+  }, [menuOpen]);
+
+  const rol: string = (me?.rol ?? 'tutor_view_only') as string;
+
+  const roleLabel = useMemo(() => {
+    switch (rol) {
+      case 'admin':
+        return 'Admin';
+      case 'contador':
+        return 'Contador';
+      case 'tutor_view_only':
+        return 'Oficina';
+      default:
+        return 'Oficina';
+    }
+  }, [rol]);
+
+  const displayName = useMemo(() => {
+    const nombre = (me?.nombre_completo ?? '').toString().trim();
+    if (nombre) return nombre;
+
+    switch (rol) {
+      case 'admin':
+        return 'Admin User';
+      case 'contador':
+        return 'Contador User';
+      case 'tutor_view_only':
+        return 'Oficina User';
+      default:
+        return 'Admin User';
+    }
+  }, [me?.nombre_completo, rol]);
+
+  const onLogout = async () => {
+    try {
+      await api.auth.logout();
+    } catch {
+      // Ignorar: el logout real del lado cliente es limpiar el token.
+    } finally {
+      auth.clear();
+      window.location.hash = '#/login';
+    }
+  };
+
+  return (
   <div className="bg-[#051026] border-b border-[#FFC800] sticky top-0 z-50">
     {/* Primera fila: Logo, Usuario y Notificaciones */}
     <div className="h-16 flex items-center justify-between px-6 border-b border-[#FFC800]/30">
@@ -71,14 +156,38 @@ const AppHeader = () => (
           <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-[#051026]" />
         </button>
         <div className="h-6 w-px bg-[#FFC800]/30" />
-        <div className="flex items-center gap-2">
-          <div className="flex flex-col items-end">
-            <span className="text-sm font-bold text-white">Admin User</span>
-            <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">Online</span>
-          </div>
-          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#FFC800]/20 to-[#00AEEF]/20 border border-[#FFC800]/50 flex items-center justify-center text-[#FFC800] font-bold">
-            <User className="w-5 h-5" />
-          </div>
+        <div className="relative" ref={menuRef}>
+          <button
+            type="button"
+            onClick={() => setMenuOpen((v) => !v)}
+            className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-white/5 transition-colors"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+          >
+            <div className="flex flex-col items-end">
+              <span className="text-sm font-bold text-white">{displayName}</span>
+              <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{roleLabel}</span>
+            </div>
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#FFC800]/20 to-[#00AEEF]/20 border border-[#FFC800]/50 flex items-center justify-center text-[#FFC800] font-bold">
+              <User className="w-5 h-5" />
+            </div>
+          </button>
+
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 mt-2 w-44 rounded-xl border border-[#FFC800]/20 bg-[#0B1A3A] shadow-xl overflow-hidden z-50"
+            >
+              <button
+                type="button"
+                onClick={onLogout}
+                role="menuitem"
+                className="w-full text-left px-4 py-3 text-sm font-semibold text-white hover:bg-white/5 transition-colors"
+              >
+                Logout
+              </button>
+            </div>
+          )}
         </div>
         <div className="hidden lg:flex items-center gap-2 ml-2 text-xs">
           <Phone className="w-3.5 h-3.5 text-[#FFC800]" />
@@ -104,6 +213,7 @@ const AppHeader = () => (
     </div>
   </div>
 );
+};
 
 const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   if (!auth.getToken()) {
@@ -141,6 +251,7 @@ const App: React.FC = () => {
           <Route path="/estudiantes" element={<Estudiantes />} />
           <Route path="/matriculas" element={<Matriculas />} />
           <Route path="/pagos" element={<Pagos />} />
+          <Route path="/empleados" element={<Empleados />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

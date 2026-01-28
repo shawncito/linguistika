@@ -15,6 +15,8 @@ import {
 
 const TOKEN_KEY = 'linguistika_token';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
 export const auth = {
   getToken: () => localStorage.getItem(TOKEN_KEY),
   setToken: (token: string) => localStorage.setItem(TOKEN_KEY, token),
@@ -22,7 +24,7 @@ export const auth = {
 };
 
 const http = axios.create({
-  baseURL: 'http://localhost:5000/api',
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -56,11 +58,53 @@ export const api = {
       const res = await http.post('/auth/login', { email, password });
       return res.data as any;
     },
+    logout: async (): Promise<{ message: string }> => {
+      const res = await http.post('/auth/logout');
+      return res.data as any;
+    },
     me: async (): Promise<{ user: any }> => {
       const res = await http.get('/auth/me');
       return res.data as any;
     },
   },
+
+  admin: {
+    crearEmpleado: async (data: {
+      email: string;
+      password: string;
+      rol: 'admin' | 'contador' | 'tutor_view_only';
+      nombre_completo?: string | null;
+      telefono?: string | null;
+    }): Promise<any> => {
+      const res = await http.post('/admin/crear-empleado', {
+        email: data.email,
+        password: data.password,
+        rol: data.rol,
+        nombre_completo: data.nombre_completo ?? null,
+        telefono: data.telefono ?? null,
+      });
+      return res.data as any;
+    },
+
+    listarEmpleados: async (): Promise<any[]> => {
+      const res = await http.get('/admin/empleados');
+      return res.data as any[];
+    },
+
+    actualizarEmpleado: async (
+      id: string,
+      data: { rol?: 'admin' | 'contador' | 'tutor_view_only'; estado?: boolean; nombre_completo?: string | null; telefono?: string | null }
+    ): Promise<any> => {
+      const res = await http.patch(`/admin/empleados/${id}`, data);
+      return res.data as any;
+    },
+
+    eliminarEmpleado: async (id: string): Promise<{ ok: boolean; id: string }> => {
+      const res = await http.delete(`/admin/empleados/${id}`);
+      return res.data as any;
+    },
+  },
+
   tutores: {
     getAll: async (): Promise<Tutor[]> => {
       const res = await http.get<Tutor[]>('/tutores');

@@ -1,5 +1,5 @@
 import express from 'express';
-import { supabase } from '../supabase.js';
+import { supabase, supabaseForToken } from '../supabase.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -22,20 +22,40 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: error.message || 'Credenciales inválidas' });
     }
 
-    // Obtener datos del usuario desde la tabla usuarios si existen
-    const { data: userData } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('id', data.user.id)
-      .single();
+    const accessToken = data?.session?.access_token;
+    if (!accessToken) {
+      return res.status(401).json({ error: 'No se pudo obtener sesión de Supabase' });
+    }
 
-    return res.json({ 
-      token: data.session.access_token,
+    // Solo empleados: validar que exista fila en public.usuarios (usando el JWT para que RLS aplique)
+    const db = supabaseForToken(accessToken);
+    const { data: usuarioRow, error: usuarioErr } = await db
+      .from('usuarios')
+      .select('id, rol, estado, nombre_completo, telefono')
+      .eq('id', data.user.id)
+      .maybeSingle();
+
+    if (usuarioErr) {
+      return res.status(500).json({ error: 'Error consultando perfil de empleado', details: usuarioErr.message });
+    }
+
+    if (!usuarioRow) {
+      return res.status(403).json({ error: 'Usuario no autorizado (no es empleado)' });
+    }
+
+    if (usuarioRow.estado === false) {
+      return res.status(403).json({ error: 'Usuario desactivado' });
+    }
+
+    return res.json({
+      token: accessToken,
       user: {
         id: data.user.id,
         email: data.user.email,
-        rol: userData?.rol || 'usuario',
-        estado: userData?.estado !== false
+        rol: usuarioRow.rol || 'tutor_view_only',
+        estado: true,
+        nombre_completo: usuarioRow.nombre_completo,
+        telefono: usuarioRow.telefono
       }
     });
   } catch (error) {
@@ -89,18 +109,26 @@ router.post('/logout', async (req, res) => {
 
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    const { data: userData } = await supabase
+    // requireAuth ya valida empleado + estado y adjunta req.userRole y req.accessToken
+    const db = supabaseForToken(req.accessToken);
+    const { data: usuarioRow, error: usuarioErr } = await db
       .from('usuarios')
-      .select('*')
+      .select('id, rol, estado, nombre_completo, telefono')
       .eq('id', req.user.id)
-      .single();
-    
-    return res.json({ 
+      .maybeSingle();
+
+    if (usuarioErr) {
+      return res.status(500).json({ error: 'Error consultando perfil', details: usuarioErr.message });
+    }
+
+    return res.json({
       user: {
         id: req.user.id,
         email: req.user.email,
-        rol: userData?.rol || 'usuario',
-        estado: userData?.estado !== false
+        rol: req.userRole,
+        estado: usuarioRow?.estado !== false,
+        nombre_completo: usuarioRow?.nombre_completo ?? null,
+        telefono: usuarioRow?.telefono ?? null
       }
     });
   } catch (error) {

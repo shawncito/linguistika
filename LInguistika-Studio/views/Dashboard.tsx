@@ -157,6 +157,8 @@ const Dashboard: React.FC = () => {
     setMensajeWA(msg);
   };
 
+  const cerrarProgramacion = () => setProgramacionSesion(null);
+
   const cambiarEstadoSesion = async (sesion: SesionDelDia, avisado?: boolean, confirmado?: boolean) => {
     try {
       const fecha = sesion.fecha || new Date().toISOString().split('T')[0];

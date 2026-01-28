@@ -25,7 +25,9 @@ const Login: React.FC = () => {
       auth.setToken(res.token);
       navigate('/', { replace: true });
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'No se pudo iniciar sesión');
+      const msg = err?.response?.data?.error;
+      const details = err?.response?.data?.details;
+      setError(details ? `${msg}: ${details}` : (msg || 'No se pudo iniciar sesión'));
     } finally {
       setLoading(false);
     }

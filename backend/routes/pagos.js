@@ -1,7 +1,11 @@
 import express from 'express';
 import { supabase } from '../supabase.js';
+import { requireRoles } from '../middleware/roles.js';
 
 const router = express.Router();
+
+// Solo admin/contador pueden entrar a pagos
+router.use(requireRoles(['admin', 'contador']));
 
 // GET - Listar todos los pagos
 router.get('/', async (req, res) => {
