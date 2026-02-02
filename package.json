@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Gestor de horarios y tutorías para centro de idiomas",
   "private": true,
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "npm run dev:backend",
     "dev:both": "powershell -Command \"Start-Process powershell -ArgumentList 'cd \\\"$((Get-Location))\\\" ; npm run dev:backend' ; npm run dev:frontend\"",
@@ -11,6 +12,49 @@
     "build": "npm run build:backend && npm run build:frontend",
     "build:backend": "cd backend && npm run build",
     "build:frontend": "cd LInguistika-Studio && npm run build",
-    "start": "cd backend && npm start"
+    "start": "cd backend && npm start",
+    "desktop:dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"cd LInguistika-Studio && npm run dev -- --port 5173 --strictPort\" \"wait-on http://localhost:5173 && npx electron .\"",
+    "desktop:prod": "npm run build:frontend && powershell -NoProfile -Command \"$env:FORCE_PROD='1'; npx electron .\"",
+    "desktop:prod:debug": "npm run build:frontend && powershell -NoProfile -Command \"$env:FORCE_PROD='1'; $env:ELECTRON_DEBUG='1'; npx electron .\"",
+    "desktop:build": "npm run build:frontend && electron-builder --win --x64",
+    "generate:icons": "node scripts/generate-icons.cjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "electron": "^34.1.1",
+    "electron-builder": "^24.13.3",
+    "png-to-ico": "^2.1.8",
+    "sharp": "^0.33.5",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.linguistika.desktop",
+    "productName": "Linguistika",
+    "files": [
+      "desktop/**/*",
+      "LInguistika-Studio/dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis",
+        "portable",
+        "zip"
+      ],
+      "icon": "desktop/icon.ico"
+    },
+    "directories": {
+      "output": "release"
+    }
   }
 }

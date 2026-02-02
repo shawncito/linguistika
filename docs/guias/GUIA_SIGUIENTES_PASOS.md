@@ -6,13 +6,24 @@
 1. Ir a: https://supabase.com → Tu Proyecto → SQL Editor
 2. Copiar el contenido de cada archivo SQL y ejecutar:
 
-**Archivo 1: `backend/FIX_RLS_POLICIES.sql`**
+**Archivo 1: `docs/migraciones/FIX_RLS_POLICIES.sql`**
 - Soluciona: Error 42501 "new row violates row-level security policy"
 - Acción: Copia → Pega → Run
 - Espera: Mensaje "Executed successfully"
 
-**Archivo 2: `backend/MIGRACION_TUTORES_DIAS_TURNO.sql`**
-- Soluciona: Agregar columna `dias_turno` a tabla tutores
+**Archivo 2: `docs/migraciones/MIGRACION_TUTORES_DIAS_TURNO.sql`**
+- Nota: es parte del histórico. El sistema actual usa `dias_horarios` para disponibilidad por hora.
+- Acción: Copia → Pega → Run
+- Espera: Mensaje "Executed successfully"
+
+**Archivo 3: `backend/migrations/002_add_estudiantes_bulk_extra_fields.sql`**
+- Soluciona: que importación bulk guarde los mismos campos que el formulario (grado, encargado, etc.)
+
+**Archivo 4: `backend/migrations/003_add_turno_to_matriculas_grupo.sql`**
+- Soluciona: soportar `turno` en grupos (Plantilla de carga masiva)
+
+**Archivo 5: `backend/migrations/003_add_matricula_grupo_id_to_estudiantes.sql`**
+- Soluciona: Permitir que estudiantes “manuales” se asignen a grupos (`matricula_grupo_id`)
 - Acción: Copia → Pega → Run
 - Espera: Mensaje "Executed successfully"
 
@@ -27,9 +38,8 @@
 - ✅ `backend/FIX_RLS_POLICIES.sql` - Creado
 
 **Frontend:**
-- ✅ `LInguistika-Studio/views/Tutores.tsx` - Formulario con selección de turno por día
-- ✅ `LInguistika-Studio/types.ts` - Interfaces actualizadas (Tutor, Curso con `dias_turno`)
-- ✅ Tarjetas de tutores - Muestran horarios como "Lun • Tarde, Mar • Noche"
+- ✅ Manejo de horarios por día y rangos horarios (`dias_horarios`) y schedule por curso (`dias_schedule`)
+- ✅ Gestión de grupos (bulk + manual) y borrado de cursos con opción cascade
 
 ---
 
@@ -38,13 +48,13 @@
 #### Crear un Docente (Tutor):
 1. Click "Nuevo Docente"
 2. Completa: Nombre, Teléfono (+506 8888-8888), Especialidad, Tarifa
-3. Selecciona "Días Hábiles" (checkboxes)
-4. Para cada día seleccionado → Elige Tarde o Noche
+3. Selecciona días y define rangos de hora inicio/fin por día (`dias_horarios`)
 5. Click "Guardar"
-6. Datos se guardan como: `{ "Lunes": "Tarde", "Martes": "Noche", ... }`
+6. Datos se guardan como objeto JSON: `{ "Lunes": {"hora_inicio":"09:00","hora_fin":"11:00"}, ... }`
 
 #### Crear un Curso:
-- Igual que Tutores - Selecciona días, elige turno por día
+- Define `dias_schedule` por día (hora inicio/fin) y asigna tutor.
+- La compatibilidad se valida por traslape de rangos horarios.
 
 #### Crear un Estudiante:
 - Ya funcionaba, mantiene el mismo patrón
@@ -78,6 +88,39 @@ Después de ejecutar SQL, si guardas un tutor y ves:
 
 ### 🧪 TESTING FULL FLOW
 
+**Nota de autenticación (importante):**
+- Todas las rutas `/api/*` requieren `Bearer token` y que el usuario exista en `public.usuarios`.
+- Si no tenés un usuario empleado/admin creado, podés crearlo con el script del backend:
+
+```powershell
+cd backend
+npm run bootstrap-admin -- --email "tu-correo@dominio.com" --password "TuPasswordSegura123" --nombre "Admin" --telefono "+506 8888-8888"
+```
+
+#### Opción recomendada: Roundtrip automatizado (API end-to-end)
+
+Desde `backend\\`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ..\roundtrip.ps1 -BaseUrl "http://localhost:5000/api" -Email "<email>" -Password "<password>" -CheckPagoPhase
+```
+
+- Por defecto deja datos creados (listos para validar UI y fase de pagos).
+- Guarda `.roundtrip-state.json` para permitir limpieza segura.
+
+Limpieza cuando termines:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ..\roundtrip.ps1 -BaseUrl "http://localhost:5000/api" -Email "<email>" -Password "<password>" -CleanupOnly
+```
+
+#### Fase de Pagos (prerrequisitos)
+
+- El módulo `pagos` y `finanzas` requiere rol `admin` o `contador`.
+- `GET /api/finanzas/movimientos` puede requerir `SUPABASE_SERVICE_KEY` configurado en el backend.
+
+Ver guía: `docs/guias/GUIA_TESTING_ROUNDTRIP.md`
+
 1. **Crea un Docente:**
    - Nombre: "Carlos García"
    - Teléfono: 8888-8888
@@ -102,6 +145,11 @@ Después de ejecutar SQL, si guardas un tutor y ves:
 
 4. **Matricula un Estudiante en el Curso:**
    - ✓ Debe validar compatibilidad de horarios
+
+5. **Borrado de Curso (cuando esté en uso):**
+   - Al borrar un curso con grupos/matrículas/clases/movimientos asociados, el backend responde 409 con `blockers`.
+   - La UI ofrece confirmar **borrado en cascada** (elimina dependencias y luego borra el curso).
+   - Si no querés borrar datos, usá “Inactivar” (solo cambia `estado`).
 
 ---
 

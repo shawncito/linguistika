@@ -64,7 +64,7 @@ export const CardContent: React.FC<{ children: React.ReactNode; className?: stri
 
 // --- FORM ---
 export const Label: React.FC<React.LabelHTMLAttributes<HTMLLabelElement>> = ({ children, className = "", ...props }) => (
-  <label {...props} className={`text-xs font-bold text-brand-navy mb-2 block uppercase tracking-wider ${className}`}>
+  <label {...props} className={`text-xs font-bold text-slate-300 mb-2 block uppercase tracking-wider ${className}`}>
     {children}
   </label>
 );
@@ -140,12 +140,19 @@ export const TableCell: React.FC<React.TdHTMLAttributes<HTMLTableDataCellElement
 );
 
 // --- DIALOG ---
-export const Dialog: React.FC<{ isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode }> = ({ isOpen, onClose, title, children }) => {
+export const Dialog: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  children: React.ReactNode;
+  maxWidthClass?: string;
+  contentClassName?: string;
+}> = ({ isOpen, onClose, title, children, maxWidthClass = 'max-w-lg', contentClassName = '' }) => {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity" onClick={onClose} />
-      <div className="relative z-[101] w-full max-w-lg bg-[#0F2445] rounded-3xl border border-white/10 shadow-2xl shadow-black/40 animate-in fade-in zoom-in duration-300">
+      <div className={`relative z-[101] w-full ${maxWidthClass} bg-[#0F2445] rounded-3xl border border-white/10 shadow-2xl shadow-black/40 animate-in fade-in zoom-in duration-300 ${contentClassName}`}>
         <div className="flex items-center justify-between p-6 border-b border-white/10">
           <h2 className="text-xl font-bold text-white">{title}</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-2 rounded-full hover:bg-white/10">

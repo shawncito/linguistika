@@ -142,7 +142,15 @@ const AppHeader = () => {
     <div className="h-16 flex items-center justify-between px-6 border-b border-[#FFC800]/30">
       {/* Logo */}
       <Link to="/" className="flex items-center gap-3">
-        <img src="/logo-icon.svg" alt="Linguistika" className="w-12 h-12" />
+        <div className="w-12 h-12 drop-shadow-2xl">
+          <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+            <path d="M 50 20 Q 30 20 30 40 L 30 160 Q 30 180 50 180 L 100 180 L 100 20 Z" fill="#FFC800" />
+            <path d="M 100 20 L 100 180 L 150 180 Q 170 180 170 160 L 170 40 Q 170 20 150 20 Z" fill="#00AEEF" />
+            <ellipse cx="60" cy="70" rx="8" ry="12" fill="#051026" />
+            <ellipse cx="140" cy="70" rx="8" ry="12" fill="#051026" />
+            <path d="M 70 110 Q 100 140 130 110" stroke="#051026" strokeWidth="12" fill="none" strokeLinecap="round" />
+          </svg>
+        </div>
         <div className="flex flex-col">
           <span className="font-extrabold text-lg tracking-tight text-[#FFC800] leading-none">Lingüistika</span>
           <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">UNADECA Language Center</span>
@@ -184,17 +192,22 @@ const AppHeader = () => {
                 role="menuitem"
                 className="w-full text-left px-4 py-3 text-sm font-semibold text-white hover:bg-white/5 transition-colors"
               >
-                Logout
+                Cerrar sesión
               </button>
+              <div className="hidden lg:flex items-center gap-2 ml-2 text-xs">
+          <Phone className="w-3.5 h-3.5 text-[#FFC800]" />
+          <div className="flex flex-col">
+            <span className="font-bold text-white">Soporte:</span>
+            <span className="text-[#00AEEF] font-semibold">+506 6126-8302</span>
+          
+          </div>
+        </div>
             </div>
           )}
         </div>
-        <div className="hidden lg:flex items-center gap-2 ml-2 text-xs">
-          <Phone className="w-3.5 h-3.5 text-[#FFC800]" />
-          <span className="font-bold text-white">+506 7095-2430</span>
-        </div>
       </div>
     </div>
+
 
     {/* Segunda fila: Navegación y Búsqueda */}
     <div className="h-14 flex items-center justify-between px-6 bg-[#051026]/50 gap-4 border-b border-[#FFC800]/20">

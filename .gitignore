@@ -2,6 +2,8 @@ node_modules/
 dist/
 build/
 *.log
+.env
+.env.*
 .env.local
 .env.*.local
 .DS_Store
@@ -10,3 +12,16 @@ build/
 *.sqlite
 *.sqlite3
 linguistika.db
+
+# Roundtrip local state
+.roundtrip-state.json
+
+# Desktop/Electron build artifacts
+release/
+*.exe
+*.msi
+*.zip
+*.blockmap
+
+# Optional: OS / tooling
+Thumbs.db

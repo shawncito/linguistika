@@ -3,9 +3,9 @@ import { api } from '../services/api';
 import { supabaseClient } from '../lib/supabaseClient';
 import { Estudiante } from '../types';
 import { Button, Card, CardHeader, CardTitle, CardDescription, CardContent, Input, Label, Select, Badge, Dialog, Table, TableHead, TableHeader, TableRow, TableCell, TableBody } from '../components/UI';
-import { Plus, Edit, Trash2, Mail, Phone, User, X, MoreVertical, Filter, Layers, Table as TableIcon, CheckCircle2, XCircle } from 'lucide-react';
+import { Plus, Edit, Trash2, Mail, Phone, User, X, MoreVertical, Filter, Layers, Table as TableIcon, CheckCircle2, XCircle, Upload, FolderKanban, Wand2, GraduationCap, ArrowLeft, Users } from 'lucide-react';
 
-const GRADOS = ['1ro', '2do', '3ro', '4to', '5to', '6to', '7mo', '8vo', '9no', '10mo', '11mo'];
+const GRADOS = ['1ro', '2do', '3ro', '4to', '5to', '6to', '7mo', '8vo', '9no', '10mo', '11mo', 'No aplica'];
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const TURNOS = ['Tarde', 'Noche'];
 const GRADO_COLORES: Record<string, string> = {
@@ -20,6 +20,7 @@ const GRADO_COLORES: Record<string, string> = {
   '9no': '#0284c7',
   '10mo': '#f59e0b',
   '11mo': '#ef4444',
+  'No aplica': '#94a3b8',
 };
 
 const getErrorMessage = (error: any) =>
@@ -34,8 +35,59 @@ const hexToRgba = (hex: string, alpha: number) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
+type Bandeja = 'estudiantes' | 'grupos';
+
+type BulkEstudiante = {
+  id: number;
+  nombre: string;
+  correo?: string | null;
+  telefono?: string | null;
+  requiere_perfil_completo?: boolean;
+  estado: boolean | number;
+  created_at?: string;
+  updated_at?: string;
+  matricula_grupo_id?: string | null;
+};
+
+type BulkGrupo = {
+  id: string;
+  curso_id: number;
+  tutor_id: number;
+  nombre_grupo?: string | null;
+  cantidad_estudiantes_esperados?: number | null;
+  estado?: string | null;
+  fecha_inicio?: string | null;
+  fecha_fin?: string | null;
+  turno?: string | null;
+  notas?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  curso_nombre?: string | null;
+  tutor_nombre?: string | null;
+  linked_count?: number;
+};
+
+type UnifiedStudent = {
+  key: string;
+  kind: 'normal' | 'bulk';
+  id: number;
+  nombre: string;
+  grado?: string | null;
+  estado: number;
+  email?: string | null;
+  email_encargado?: string | null;
+  telefono?: string | null;
+  telefono_encargado?: string | null;
+  dias?: string[] | null;
+  dias_turno?: Record<string, 'Tarde' | 'Noche'> | null;
+  requiere_perfil_completo?: boolean;
+  matricula_grupo_id?: string | null;
+};
+
 const Estudiantes: React.FC = () => {
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
+  const [bulkEstudiantes, setBulkEstudiantes] = useState<BulkEstudiante[]>([]);
+  const [bulkGrupos, setBulkGrupos] = useState<BulkGrupo[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -46,28 +98,204 @@ const Estudiantes: React.FC = () => {
     email_encargado: '',
     telefono_encargado: '',
     grado: '',
+    grupo_id: '',
     dias: [] as string[],
     dias_turno: {} as Record<string, 'Tarde' | 'Noche'>
   });
   const [detailOpen, setDetailOpen] = useState(false);
-  const [selectedEstudiante, setSelectedEstudiante] = useState<Estudiante | null>(null);
-  const [menuOpen, setMenuOpen] = useState<number | null>(null);
+  const [selectedEstudiante, setSelectedEstudiante] = useState<UnifiedStudent | null>(null);
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [gradoFiltro, setGradoFiltro] = useState('');
+  const [grupoFiltro, setGrupoFiltro] = useState<string>('');
   const [estadoFiltro, setEstadoFiltro] = useState<'todos' | 'activos' | 'inactivos'>('todos');
   const [viewMode, setViewMode] = useState<'tabla' | 'tarjetas'>('tabla');
-  const [groupByGrado, setGroupByGrado] = useState(false);
+  const [groupByMode, setGroupByMode] = useState<'none' | 'grado' | 'grupo'>('none');
+
+  const [bandeja, setBandeja] = useState<Bandeja>('estudiantes');
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionTab, setActionTab] = useState<'importar' | 'crear_grupo' | 'nuevo_estudiante'>('importar');
+
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [bulkEditing, setBulkEditing] = useState<BulkEstudiante | null>(null);
+  const [bulkForm, setBulkForm] = useState({ nombre: '', correo: '', telefono: '', requiere_perfil_completo: false, estado: true });
+  const [bulkEditErr, setBulkEditErr] = useState<string | null>(null);
+
+  const [grupoAdminOpen, setGrupoAdminOpen] = useState(false);
+  const [grupoAdminId, setGrupoAdminId] = useState<string | null>(null);
+  const [grupoAddSearch, setGrupoAddSearch] = useState('');
+  const [grupoMembersSearch, setGrupoMembersSearch] = useState('');
+  const [grupoSelectedToAdd, setGrupoSelectedToAdd] = useState<number[]>([]);
+  const [grupoSelectedToAddNormales, setGrupoSelectedToAddNormales] = useState<number[]>([]);
+
+  const [grupoCreateBusy, setGrupoCreateBusy] = useState(false);
+  const [grupoCreateMsg, setGrupoCreateMsg] = useState<string | null>(null);
+  const [cursosCatalog, setCursosCatalog] = useState<any[]>([]);
+  const [tutoresCatalog, setTutoresCatalog] = useState<any[]>([]);
+  const [grupoForm, setGrupoForm] = useState({
+    nombre_grupo: '',
+    curso_id: '',
+    tutor_id: '',
+    turno: '',
+    cantidad_estudiantes_esperados: '',
+  });
+
+  const [bulkTipo, setBulkTipo] = useState<'estudiantes_bulk' | 'grupo_matricula'>('estudiantes_bulk');
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
   const loadData = async () => {
     setLoading(true);
-    const data = await api.estudiantes.getAll();
+    const [data, bulkData, gruposData] = await Promise.all([
+      api.estudiantes.getAll(),
+      api.bulk.listEstudiantesBulk(),
+      api.bulk.listGrupos(),
+    ]);
     setEstudiantes(data);
+    setBulkEstudiantes(bulkData as any);
+    setBulkGrupos(gruposData as any);
     setLoading(false);
   };
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const downloadBulkTemplate = async () => {
+    setBulkMsg(null);
+    setBulkBusy(true);
+    try {
+      const blob = await api.bulk.downloadTemplate(bulkTipo);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = bulkTipo === 'grupo_matricula' ? 'template_grupo_matricula.xlsx' : 'template_estudiantes_bulk.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setBulkMsg('Template descargado. Llénalo y luego súbelo para procesar.');
+    } catch (e: any) {
+      setBulkMsg(e?.response?.data?.error || 'No se pudo descargar el template');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const uploadBulkExcel = async () => {
+    if (!bulkFile) {
+      setBulkMsg('Selecciona un archivo .xlsx');
+      return;
+    }
+    setBulkMsg(null);
+    setBulkBusy(true);
+    try {
+      const res = await api.bulk.uploadExcel(bulkFile);
+      const inserted = res?.inserted ?? res?.inserted_estudiantes_bulk ?? 0;
+      const createdGrupos = res?.created_grupos ?? 0;
+      const linked = res?.linked ?? 0;
+      const extra = res?.matricula_grupo_id ? ` (grupo #${res.matricula_grupo_id})` : '';
+
+      const parts = [`Procesado: ${res.bulkType}.`];
+      if (createdGrupos) parts.push(`Grupos: ${createdGrupos}.`);
+      parts.push(`Insertados: ${inserted}${extra}.`);
+      if (linked) parts.push(`Vinculados a grupo: ${linked}.`);
+      parts.push('Revisa la bandeja “Grupos” para organizarlos.');
+      setBulkMsg(parts.join(' '));
+      setBulkFile(null);
+      // Refrescar bandejas
+      const [bulkData, gruposData] = await Promise.all([api.bulk.listEstudiantesBulk(), api.bulk.listGrupos()]);
+      setBulkEstudiantes(bulkData as any);
+      setBulkGrupos(gruposData as any);
+    } catch (e: any) {
+      setBulkMsg(e?.response?.data?.error || 'No se pudo procesar el archivo');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const openBulkEdit = (s: BulkEstudiante) => {
+    setBulkEditing(s);
+    setBulkForm({
+      nombre: s.nombre ?? '',
+      correo: (s.correo ?? '') as any,
+      telefono: (s.telefono ?? '') as any,
+      requiere_perfil_completo: !!s.requiere_perfil_completo,
+      estado: s.estado === true || s.estado === 1,
+    });
+    setBulkEditErr(null);
+    setBulkEditOpen(true);
+  };
+
+  const saveBulkEdit = async () => {
+    if (!bulkEditing) return;
+    setBulkEditErr(null);
+    try {
+      await api.bulk.updateEstudianteBulk(bulkEditing.id, {
+        nombre: bulkForm.nombre,
+        correo: bulkForm.correo || null,
+        telefono: bulkForm.telefono || null,
+        requiere_perfil_completo: !!bulkForm.requiere_perfil_completo,
+        estado: !!bulkForm.estado,
+      });
+      const bulkData = await api.bulk.listEstudiantesBulk();
+      setBulkEstudiantes(bulkData as any);
+      setBulkEditOpen(false);
+    } catch (e: any) {
+      setBulkEditErr(e?.response?.data?.error || 'No se pudo actualizar');
+    }
+  };
+
+  const deleteBulk = async (id: number) => {
+    if (!window.confirm('¿Eliminar este estudiante? (Se quitará de cualquier grupo)')) return;
+    await api.bulk.deleteEstudianteBulk(id);
+    const bulkData = await api.bulk.listEstudiantesBulk();
+    setBulkEstudiantes(bulkData as any);
+  };
+
+  const toggleBulkEstado = async (s: BulkEstudiante) => {
+    const nuevo = !(s.estado === true || s.estado === 1);
+    await api.bulk.updateEstudianteBulk(s.id, { estado: nuevo });
+    setBulkEstudiantes((prev) => prev.map((x) => (x.id === s.id ? { ...x, estado: nuevo } : x)));
+  };
+
+  const ensureCatalogos = async () => {
+    if (cursosCatalog.length && tutoresCatalog.length) return;
+    const [cursos, tutores] = await Promise.all([api.cursos.getAll(), api.tutores.getAll()]);
+    setCursosCatalog(cursos as any);
+    setTutoresCatalog(tutores as any);
+  };
+
+  const createGrupo = async () => {
+    setGrupoCreateMsg(null);
+    setGrupoCreateBusy(true);
+    try {
+      const cursoId = parseInt(grupoForm.curso_id, 10);
+      const tutorId = parseInt(grupoForm.tutor_id, 10);
+      if (!Number.isFinite(cursoId) || !Number.isFinite(tutorId)) {
+        setGrupoCreateMsg('Selecciona curso y tutor.');
+        return;
+      }
+      const cant = grupoForm.cantidad_estudiantes_esperados.trim() ? parseInt(grupoForm.cantidad_estudiantes_esperados, 10) : null;
+      await api.bulk.createGrupo({
+        curso_id: cursoId,
+        tutor_id: tutorId,
+        nombre_grupo: grupoForm.nombre_grupo.trim() || null,
+        cantidad_estudiantes_esperados: Number.isFinite(cant as any) ? (cant as any) : null,
+        turno: grupoForm.turno.trim() || null,
+      });
+      const gruposData = await api.bulk.listGrupos();
+      setBulkGrupos(gruposData as any);
+      setGrupoCreateMsg('Grupo creado.');
+      setGrupoForm({ nombre_grupo: '', curso_id: '', tutor_id: '', turno: '', cantidad_estudiantes_esperados: '' });
+      setBandeja('grupos');
+    } catch (e: any) {
+      setGrupoCreateMsg(e?.response?.data?.error || 'No se pudo crear el grupo');
+    } finally {
+      setGrupoCreateBusy(false);
+    }
+  };
 
   // Suscripción en tiempo real a cambios en estudiantes
   useEffect(() => {
@@ -110,6 +338,8 @@ const Estudiantes: React.FC = () => {
     e.preventDefault();
     const newErrors: Record<string, string> = {};
 
+    const creatingBulkInGrupo = !editingId && !!formData.grupo_id;
+
     if (!formData.nombre.trim()) newErrors.nombre = 'Nombre requerido';
     if (formData.email && !validateEmail(formData.email)) newErrors.email = 'Email inválido';
     if (formData.email_encargado && !validateEmail(formData.email_encargado)) {
@@ -118,7 +348,7 @@ const Estudiantes: React.FC = () => {
     if (formData.telefono_encargado && !validatePhone(formData.telefono_encargado)) {
       newErrors.telefono_encargado = 'Teléfono inválido';
     }
-    if (!formData.grado) newErrors.grado = 'Selecciona un grado';
+    if (!creatingBulkInGrupo && !formData.grado) newErrors.grado = 'Selecciona un grado';
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -126,6 +356,23 @@ const Estudiantes: React.FC = () => {
     }
 
     try {
+      if (!editingId && formData.grupo_id) {
+        const created = await api.bulk.createEstudianteBulk({
+          nombre: formData.nombre.trim(),
+          correo: formData.email.trim() || null,
+          telefono: null,
+          requiere_perfil_completo: false,
+          estado: true,
+        });
+        await api.bulk.assignEstudiantesToGrupo(String(formData.grupo_id), [created.id]);
+
+        setShowModal(false);
+        resetForm();
+        await loadData();
+        setBandeja('grupos');
+        return;
+      }
+
       const dataToSubmit = {
         nombre: formData.nombre.trim(),
         email: formData.email.trim() || null,
@@ -158,6 +405,7 @@ const Estudiantes: React.FC = () => {
       email_encargado: '',
       telefono_encargado: '',
       grado: '',
+      grupo_id: '',
       dias: [],
       dias_turno: {}
     });
@@ -172,6 +420,7 @@ const Estudiantes: React.FC = () => {
       email_encargado: est.email_encargado || '',
       telefono_encargado: est.telefono_encargado || '',
       grado: est.grado || '',
+      grupo_id: '',
       dias: Array.isArray(est.dias) ? est.dias : [],
       dias_turno: (est as any).dias_turno || {}
     });
@@ -206,32 +455,180 @@ const Estudiantes: React.FC = () => {
     } as React.CSSProperties;
   };
 
+  const unifiedStudents: UnifiedStudent[] = useMemo(() => {
+    const normal: UnifiedStudent[] = estudiantes.map((e) => ({
+      key: `n:${e.id}`,
+      kind: 'normal',
+      id: e.id,
+      nombre: e.nombre,
+      grado: e.grado ?? null,
+      estado: e.estado,
+      email: e.email ?? null,
+      email_encargado: e.email_encargado ?? null,
+      telefono: e.telefono ?? null,
+      telefono_encargado: e.telefono_encargado ?? null,
+      dias: Array.isArray(e.dias) ? e.dias : null,
+      dias_turno: (e as any).dias_turno ?? null,
+      matricula_grupo_id: null,
+    }));
+
+    const bulk: UnifiedStudent[] = bulkEstudiantes.map((b) => ({
+      key: `b:${b.id}`,
+      kind: 'bulk',
+      id: b.id,
+      nombre: b.nombre,
+      grado: null,
+      estado: (b.estado === true || b.estado === 1) ? 1 : 0,
+      email: (b.correo ?? null) as any,
+      telefono: (b.telefono ?? null) as any,
+      requiere_perfil_completo: !!b.requiere_perfil_completo,
+      dias: null,
+      dias_turno: null,
+      matricula_grupo_id: (b as any).matricula_grupo_id ?? null,
+    }));
+
+    return [...normal, ...bulk];
+  }, [estudiantes, bulkEstudiantes]);
+
   const filteredEstudiantes = useMemo(() => {
-    return estudiantes.filter((e) => {
-      const matchesSearch = `${e.nombre} ${e.email ?? ''} ${e.email_encargado ?? ''}`
+    return unifiedStudents.filter((e) => {
+      const matchesSearch = `${e.nombre} ${e.email ?? ''} ${e.email_encargado ?? ''} ${e.telefono ?? ''} ${e.telefono_encargado ?? ''}`
         .toLowerCase()
         .includes(search.toLowerCase());
-      const matchesGrado = gradoFiltro ? e.grado === gradoFiltro : true;
+      const matchesGrado = gradoFiltro ? (e.grado === gradoFiltro) : true;
       const matchesEstado = estadoFiltro === 'todos'
         ? true
         : estadoFiltro === 'activos'
           ? e.estado === 1
           : e.estado !== 1;
-      return matchesSearch && matchesGrado && matchesEstado;
+
+      const matchesGrupo = grupoFiltro === ''
+        ? true
+        : grupoFiltro === 'sin_grupo'
+          ? !e.matricula_grupo_id
+          : String(e.matricula_grupo_id ?? '') === String(grupoFiltro);
+      return matchesSearch && matchesGrado && matchesEstado && matchesGrupo;
     });
-  }, [estudiantes, search, gradoFiltro, estadoFiltro]);
+  }, [unifiedStudents, search, gradoFiltro, estadoFiltro, grupoFiltro]);
+
+  const selectedGrupoAdmin = useMemo(() => {
+    if (!grupoAdminId) return null;
+    return bulkGrupos.find((g) => String(g.id) === String(grupoAdminId)) ?? null;
+  }, [grupoAdminId, bulkGrupos]);
+
+  const grupoNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const g of bulkGrupos) {
+      map.set(String(g.id), g.nombre_grupo || `Grupo #${g.id}`);
+    }
+    return map;
+  }, [bulkGrupos]);
+
+  const grupoMembers = useMemo(() => {
+    if (!grupoAdminId) return [];
+    const id = String(grupoAdminId);
+    return bulkEstudiantes.filter((s) => String((s as any).matricula_grupo_id ?? '') === id);
+  }, [grupoAdminId, bulkEstudiantes]);
+
+  const grupoMembersNormales = useMemo(() => {
+    if (!grupoAdminId) return [];
+    const id = String(grupoAdminId);
+    return estudiantes.filter((s: any) => String((s as any).matricula_grupo_id ?? '') === id);
+  }, [grupoAdminId, estudiantes]);
+
+  const grupoCandidates = useMemo(() => {
+    if (!grupoAdminId) return [];
+    const id = String(grupoAdminId);
+    return bulkEstudiantes.filter((s) => String((s as any).matricula_grupo_id ?? '') !== id);
+  }, [grupoAdminId, bulkEstudiantes]);
+
+  const grupoCandidatesNormales = useMemo(() => {
+    if (!grupoAdminId) return [];
+    const id = String(grupoAdminId);
+    return estudiantes.filter((s: any) => String((s as any).matricula_grupo_id ?? '') !== id);
+  }, [grupoAdminId, estudiantes]);
+
+  const openGrupoAdmin = (id: string) => {
+    setGrupoAdminId(String(id));
+    setGrupoAdminOpen(true);
+    setGrupoAddSearch('');
+    setGrupoMembersSearch('');
+    setGrupoSelectedToAdd([]);
+    setGrupoSelectedToAddNormales([]);
+  };
+
+  const addSelectedToGrupo = async () => {
+    if (!grupoAdminId || (grupoSelectedToAdd.length === 0 && grupoSelectedToAddNormales.length === 0)) return;
+    try {
+      await api.bulk.assignEstudiantesToGrupo(String(grupoAdminId), grupoSelectedToAdd, grupoSelectedToAddNormales);
+      const [gruposData, bulkData, normalData] = await Promise.all([
+        api.bulk.listGrupos(),
+        api.bulk.listEstudiantesBulk(),
+        api.estudiantes.getAll(),
+      ]);
+      setBulkGrupos(gruposData as any);
+      setBulkEstudiantes(bulkData as any);
+      setEstudiantes(normalData as any);
+      setGrupoSelectedToAdd([]);
+      setGrupoSelectedToAddNormales([]);
+    } catch (e: any) {
+      window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo agregar al grupo');
+    }
+  };
+
+  const removeFromGrupo = async (estudianteBulkId: number) => {
+    try {
+      await api.bulk.unassignEstudiantes([estudianteBulkId], []);
+      const [gruposData, bulkData] = await Promise.all([api.bulk.listGrupos(), api.bulk.listEstudiantesBulk()]);
+      setBulkGrupos(gruposData as any);
+      setBulkEstudiantes(bulkData as any);
+    } catch (e: any) {
+      window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo quitar del grupo');
+    }
+  };
+
+  const removeFromGrupoNormal = async (estudianteId: number) => {
+    try {
+      await api.bulk.unassignEstudiantes([], [estudianteId]);
+      const [gruposData, normalData] = await Promise.all([api.bulk.listGrupos(), api.estudiantes.getAll()]);
+      setBulkGrupos(gruposData as any);
+      setEstudiantes(normalData as any);
+    } catch (e: any) {
+      window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo quitar del grupo');
+    }
+  };
+
+  const deleteGrupo = async () => {
+    if (!grupoAdminId) return;
+    if (!window.confirm('¿Eliminar este grupo? Se desasignarán estudiantes y se quitará el vínculo en finanzas (si aplica).')) return;
+    try {
+      await api.bulk.deleteGrupo(String(grupoAdminId));
+      const [gruposData, bulkData, normalData] = await Promise.all([
+        api.bulk.listGrupos(),
+        api.bulk.listEstudiantesBulk(),
+        api.estudiantes.getAll(),
+      ]);
+      setBulkGrupos(gruposData as any);
+      setBulkEstudiantes(bulkData as any);
+      setEstudiantes(normalData as any);
+      setGrupoAdminOpen(false);
+      setGrupoAdminId(null);
+    } catch (e: any) {
+      window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo eliminar el grupo');
+    }
+  };
 
   const stats = useMemo(() => {
-    const total = estudiantes.length;
-    const activos = estudiantes.filter(e => e.estado === 1).length;
+    const total = unifiedStudents.length;
+    const activos = unifiedStudents.filter(e => e.estado === 1).length;
     const inactivos = total - activos;
-    const grados = new Set(estudiantes.map(e => e.grado).filter(Boolean)).size;
+    const grados = new Set(unifiedStudents.map(e => e.grado).filter(Boolean)).size;
     return { total, activos, inactivos, grados };
-  }, [estudiantes]);
+  }, [unifiedStudents]);
 
   const gradoStats = useMemo(() => {
     const map = new Map<string, { total: number; activos: number; inactivos: number }>();
-    estudiantes.forEach((e) => {
+    unifiedStudents.forEach((e) => {
       const key = e.grado || 'Sin grado';
       const current = map.get(key) || { total: 0, activos: 0, inactivos: 0 };
       current.total += 1;
@@ -239,23 +636,232 @@ const Estudiantes: React.FC = () => {
       map.set(key, current);
     });
     return Array.from(map.entries()).map(([grado, data]) => ({ grado, ...data })).sort((a, b) => a.grado.localeCompare(b.grado));
-  }, [estudiantes]);
+  }, [unifiedStudents]);
 
   const gradosDisponibles = useMemo(() => {
-    return Array.from(new Set(estudiantes.map(e => e.grado).filter(Boolean))) as string[];
-  }, [estudiantes]);
+    return Array.from(new Set(unifiedStudents.map(e => e.grado).filter(Boolean))) as string[];
+  }, [unifiedStudents]);
 
   const agrupadosPorGrado = useMemo(() => {
-    if (!groupByGrado) return [];
-    const groups = new Map<string, Estudiante[]>();
+    if (groupByMode !== 'grado') return [];
+    const groups = new Map<string, UnifiedStudent[]>();
     filteredEstudiantes.forEach((e) => {
       const key = e.grado || 'Sin grado';
       const list = groups.get(key) || [];
       list.push(e);
       groups.set(key, list);
     });
-    return Array.from(groups.entries()).map(([grado, lista]) => ({ grado, lista }));
-  }, [filteredEstudiantes, groupByGrado]);
+    const orderOf = (g: string) => {
+      if (g === 'Sin grado') return Number.MAX_SAFE_INTEGER;
+      const idx = GRADOS.indexOf(g);
+      return idx === -1 ? Number.MAX_SAFE_INTEGER - 1 : idx;
+    };
+
+    return Array.from(groups.entries())
+      .map(([grado, lista]) => ({ grado, lista }))
+      .sort((a, b) => {
+        const ao = orderOf(a.grado);
+        const bo = orderOf(b.grado);
+        if (ao !== bo) return ao - bo;
+        return a.grado.localeCompare(b.grado);
+      });
+  }, [filteredEstudiantes, groupByMode]);
+
+  const agrupadosPorGrupo = useMemo(() => {
+    if (groupByMode !== 'grupo') return [];
+    const groups = new Map<string, UnifiedStudent[]>();
+    filteredEstudiantes.forEach((e) => {
+      const gid = String(e.matricula_grupo_id ?? '');
+      const list = groups.get(gid) || [];
+      list.push(e);
+      groups.set(gid, list);
+    });
+    return Array.from(groups.entries())
+      .map(([gid, lista]) => ({
+        gid,
+        grupo: gid ? (grupoNameById.get(gid) || `Grupo #${gid}`) : 'Sin grupo',
+        lista,
+      }))
+      .sort((a, b) => {
+        const aSin = !a.gid;
+        const bSin = !b.gid;
+        if (aSin !== bSin) return aSin ? 1 : -1;
+        return a.grupo.localeCompare(b.grupo);
+      });
+  }, [filteredEstudiantes, groupByMode, grupoNameById]);
+
+  const filteredStats = useMemo(() => {
+    const total = filteredEstudiantes.length;
+    const activos = filteredEstudiantes.filter(e => e.estado === 1).length;
+    const inactivos = total - activos;
+    return { total, activos, inactivos };
+  }, [filteredEstudiantes]);
+
+  const getGrupoLabel = (e: UnifiedStudent) => {
+    const gid = String(e.matricula_grupo_id ?? '');
+    return gid ? (grupoNameById.get(gid) || `Grupo #${gid}`) : 'Sin grupo';
+  };
+
+  const StudentCardItem = ({ est }: { est: UnifiedStudent }) => (
+    <Card className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30">
+      <div className="absolute top-0 left-0 w-full h-1.5 opacity-80" style={{ backgroundColor: getGradoColor(est.grado) }} />
+
+      <CardHeader className="pb-4 border-none">
+        <div className="flex justify-between items-start gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-12 h-12 rounded-2xl border flex items-center justify-center font-black shadow-inner flex-shrink-0" style={gradoChipStyle(est.grado)}>
+              {est.nombre.charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <CardTitle className="text-lg text-white truncate">{est.nombre}</CardTitle>
+              <div className="flex flex-wrap items-center gap-2 mt-2">
+                <Badge variant="secondary" className="font-bold" style={gradoChipStyle(est.grado)}>
+                  {est.grado || 'N/A'}
+                </Badge>
+                {!!est.matricula_grupo_id && (
+                  <Badge variant="secondary" className="font-bold bg-white/10 border-white/10 text-slate-100">
+                    {getGrupoLabel(est)}
+                  </Badge>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="relative flex-shrink-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setMenuOpen(menuOpen === est.key ? null : est.key)}
+              className="h-9 w-9 text-slate-300 hover:bg-white/10"
+            >
+              <MoreVertical className="w-5 h-5" />
+            </Button>
+            {menuOpen === est.key && (
+              <div className="absolute right-0 top-10 z-50 bg-[#0F2445] rounded-2xl shadow-2xl border border-white/10 py-1 min-w-[180px]">
+                {est.kind === 'normal' ? (
+                  <>
+                    <button
+                      onClick={() => { setSelectedEstudiante(est as any); setDetailOpen(true); setMenuOpen(null); }}
+                      className="w-full text-left px-4 py-2 text-sm text-slate-100 hover:bg-white/5 flex items-center gap-2"
+                    >
+                      <User className="w-4 h-4" />
+                      Ver detalles
+                    </button>
+                    <button
+                      onClick={() => { handleEdit(est as any); setMenuOpen(null); }}
+                      className="w-full text-left px-4 py-2 text-sm text-slate-100 hover:bg-white/5 flex items-center gap-2"
+                    >
+                      <Edit className="w-4 h-4" />
+                      Editar
+                    </button>
+                    <button
+                      onClick={() => { handleDelete(est.id); setMenuOpen(null); }}
+                      className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-rose-500/10 flex items-center gap-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Eliminar
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => { openBulkEdit({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any); setMenuOpen(null); }}
+                      className="w-full text-left px-4 py-2 text-sm text-slate-100 hover:bg-white/5 flex items-center gap-2"
+                    >
+                      <Edit className="w-4 h-4" />
+                      Editar
+                    </button>
+                    <button
+                      onClick={() => { deleteBulk(est.id); setMenuOpen(null); }}
+                      className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-rose-500/10 flex items-center gap-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Eliminar
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+
+      <div className="px-6 space-y-3 pb-6">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <Button
+            size="sm"
+            onClick={() => {
+              if (est.kind === 'normal') return toggleEstado(est as any);
+              return toggleBulkEstado({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any);
+            }}
+            className={`gap-2 border ${est.estado === 1
+              ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
+              : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+          >
+            {est.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+            {est.estado === 1 ? 'Activo' : 'Inactivo'}
+          </Button>
+        </div>
+
+        {est.email && (
+          <div className="flex items-center gap-3 text-sm">
+            <Mail className="w-4 h-4 text-[#00AEEF] flex-shrink-0" />
+            <span className="text-slate-200 truncate">{est.email}</span>
+          </div>
+        )}
+
+        {est.email_encargado && (
+          <div className="flex items-center gap-3 text-sm">
+            <User className="w-4 h-4 text-[#FFC800] flex-shrink-0" />
+            <span className="text-slate-300 truncate text-xs">{est.email_encargado}</span>
+          </div>
+        )}
+
+        {est.telefono && (
+          <div className="flex items-center gap-3 text-sm">
+            <Phone className="w-4 h-4 text-emerald-400" />
+            <span className="text-slate-200">{est.telefono}</span>
+          </div>
+        )}
+
+        {est.telefono_encargado && (
+          <div className="flex items-center gap-3 text-sm">
+            <Phone className="w-4 h-4 text-emerald-400" />
+            <span className="text-slate-200">{est.telefono_encargado}</span>
+          </div>
+        )}
+
+        {Array.isArray(est.dias) && est.dias.length > 0 && (
+          <div className="flex flex-wrap gap-1 pt-2 border-t border-white/10">
+            {est.dias.map((dia) => (
+              <span key={dia} className="text-xs bg-emerald-500/15 text-emerald-200 font-semibold px-2 py-1 rounded-full">
+                {dia.slice(0, 3)}{(est as any).dias_turno && (est as any).dias_turno[dia] ? ` • ${(est as any).dias_turno[dia]}` : ''}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+
+  const bulkByGrupo = useMemo(() => {
+    const map = new Map<string, BulkEstudiante[]>();
+    for (const s of bulkEstudiantes) {
+      const gid = String((s as any).matricula_grupo_id ?? '');
+      const list = map.get(gid) || [];
+      list.push(s);
+      map.set(gid, list);
+    }
+    return map;
+  }, [bulkEstudiantes]);
+
+  const unifiedByGrupoCount = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of unifiedStudents) {
+      const gid = String((s as any).matricula_grupo_id ?? '');
+      map.set(gid, (map.get(gid) || 0) + 1);
+    }
+    return map;
+  }, [unifiedStudents]);
 
   if (loading) return (
     <div className="flex flex-col items-center justify-center h-[50vh]">
@@ -305,6 +911,17 @@ const Estudiantes: React.FC = () => {
               </div>
             </div>
 
+            <div>
+              <Label>Grupo</Label>
+              <Select value={grupoFiltro} onChange={(e) => setGrupoFiltro(e.target.value)}>
+                <option value="">Todos</option>
+                <option value="sin_grupo">Sin grupo</option>
+                {bulkGrupos.map((g) => (
+                  <option key={g.id} value={String(g.id)}>{g.nombre_grupo || `Grupo #${g.id}`}</option>
+                ))}
+              </Select>
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <Button
                 size="sm"
@@ -326,16 +943,27 @@ const Estudiantes: React.FC = () => {
               </Button>
               <Button
                 size="sm"
-                onClick={() => setGroupByGrado((prev) => !prev)}
-                className={`col-span-2 gap-2 font-bold transition-all ${groupByGrado 
+                onClick={() => setGroupByMode((prev) => (prev === 'grado' ? 'none' : 'grado'))}
+                className={`col-span-2 gap-2 font-bold transition-all ${groupByMode === 'grado' 
                   ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md' 
                   : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
               >
                 <Layers className="w-4 h-4" /> Agrupar por grado
               </Button>
+              <Button
+                size="sm"
+                onClick={() => setGroupByMode((prev) => (prev === 'grupo' ? 'none' : 'grupo'))}
+                className={`col-span-2 gap-2 font-bold transition-all ${groupByMode === 'grupo'
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md'
+                  : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
+              >
+                <Users className="w-4 h-4" /> Agrupar por grupo
+              </Button>
             </div>
           </CardContent>
         </Card>
+
+        {/* Importación masiva se mueve a “Acciones” */}
 
         {/* Grados - distribución */}
         <Card className="border-slate-200">
@@ -377,6 +1005,53 @@ const Estudiantes: React.FC = () => {
           </CardContent>
         </Card>
 
+        {/* Grupos - distribución */}
+        <Card className="border-slate-200">
+          <CardHeader>
+            <CardTitle className="text-lg">Por Grupo</CardTitle>
+            <CardDescription className="text-xs">Distribución de estudiantes</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {filteredEstudiantes.length === 0 ? (
+              <div className="text-xs text-slate-400 font-bold uppercase tracking-widest py-6 text-center">Sin datos</div>
+            ) : (
+              <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                {(() => {
+                  const groupMap = new Map<string, number>();
+                  filteredEstudiantes.forEach((e) => {
+                    const gid = String(e.matricula_grupo_id ?? '');
+                    groupMap.set(gid, (groupMap.get(gid) || 0) + 1);
+                  });
+
+                  return Array.from(groupMap.entries())
+                    .map(([gid, count]) => ({
+                      gid,
+                      nombre: gid ? (grupoNameById.get(gid) || `Grupo #${gid}`) : 'Sin grupo',
+                      count,
+                    }))
+                    .sort((a, b) => {
+                      const aSin = !a.gid;
+                      const bSin = !b.gid;
+                      if (aSin !== bSin) return aSin ? 1 : -1;
+                      return a.nombre.localeCompare(b.nombre);
+                    })
+                    .map(({ gid, nombre, count }) => (
+                      <div key={gid || 'sin_grupo'} className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 hover:border-cyan-300 hover:bg-cyan-50/50 transition-all">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <Users className="w-4 h-4 text-[#FFC800] flex-shrink-0" />
+                          <span className="font-semibold text-slate-800 text-sm truncate">{nombre}</span>
+                        </div>
+                        <span className="text-xs font-bold text-cyan-700 bg-cyan-50 px-2.5 py-1 rounded-full border border-cyan-200">
+                          {count}
+                        </span>
+                      </div>
+                    ));
+                })()}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Estado de Matrícula */}
         <Card className="border-slate-200">
           <CardHeader>
@@ -391,7 +1066,7 @@ const Estudiantes: React.FC = () => {
                 {(() => {
                   const estadoMap = new Map<boolean, number>();
                   filteredEstudiantes.forEach(e => {
-                    const estado = e.estado === 'activo';
+                    const estado = e.estado === 1;
                     estadoMap.set(estado, (estadoMap.get(estado) || 0) + 1);
                   });
                   return [true, false].map((isActive) => {
@@ -426,25 +1101,50 @@ const Estudiantes: React.FC = () => {
             <p className="text-slate-300 font-medium mt-2">Registro de estudiantes matriculados</p>
           </div>
           <Button
-            onClick={() => {
-              resetForm();
-              setShowModal(true);
+            onClick={async () => {
+              setActionsOpen(true);
+              setActionTab('importar');
+              await ensureCatalogos();
             }}
             variant="primary"
             className="h-12 px-8 gap-3 bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026] font-bold"
           >
-            <Plus className="w-5 h-5" />
-            Nuevo Estudiante
+            <Wand2 className="w-5 h-5" />
+            Acciones
           </Button>
         </header>
 
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={() => setBandeja('estudiantes')}
+            className={`gap-2 font-bold transition-all ${bandeja === 'estudiantes'
+              ? 'bg-[#FFC800] hover:bg-[#FFC800]/90 text-[#051026]'
+              : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
+          >
+            <GraduationCap className="w-4 h-4" /> Estudiantes
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => setBandeja('grupos')}
+            className={`gap-2 font-bold transition-all ${bandeja === 'grupos'
+              ? 'bg-[#FFC800] hover:bg-[#FFC800]/90 text-[#051026]'
+              : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
+          >
+            <FolderKanban className="w-4 h-4" /> Grupos
+          </Button>
+        </div>
+
+      {bandeja === 'estudiantes' ? (
       <section className="space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black text-white tracking-tight">Estudiantes</h2>
             <p className="text-slate-300 text-sm font-medium">Tabla administrativa con activación y agrupamiento</p>
           </div>
-          <div className="text-sm font-semibold text-slate-200">{filteredEstudiantes.length} resultado(s)</div>
+          <div className="text-sm font-semibold text-slate-200">
+            Mostrando {filteredStats.total} / {stats.total} · Activos {filteredStats.activos} · Inactivos {filteredStats.inactivos}
+          </div>
         </div>
 
         {filteredEstudiantes.length === 0 && (
@@ -457,7 +1157,7 @@ const Estudiantes: React.FC = () => {
           {/* Sección de Estudiantes */}
           {viewMode === 'tabla' ? (
             <>
-              {groupByGrado ? (
+              {groupByMode === 'grado' ? (
                 agrupadosPorGrado.map(({ grado, lista }) => (
                   <Card key={grado} className="border-slate-200">
                     <CardHeader className="flex-row items-center justify-between">
@@ -478,6 +1178,7 @@ const Estudiantes: React.FC = () => {
                           <TableRow>
                             <TableHead>Nombre</TableHead>
                             <TableHead>Grado</TableHead>
+                            <TableHead>Grupo</TableHead>
                             <TableHead>Estado</TableHead>
                             <TableHead>Contacto</TableHead>
                             <TableHead>Días</TableHead>
@@ -486,7 +1187,7 @@ const Estudiantes: React.FC = () => {
                         </TableHeader>
                         <TableBody>
                           {lista.map((est) => (
-                            <TableRow key={`${grado}-${est.id}`}>
+                            <TableRow key={`${grado}-${est.key}`}>
                               <TableCell className="font-semibold text-slate-900">{est.nombre}</TableCell>
                               <TableCell>
                                 <span className="px-3 py-1 rounded-full border text-xs font-bold" style={gradoChipStyle(est.grado)}>
@@ -494,9 +1195,112 @@ const Estudiantes: React.FC = () => {
                                 </span>
                               </TableCell>
                               <TableCell>
+                                <span className="text-xs font-semibold text-slate-700">{getGrupoLabel(est)}</span>
+                              </TableCell>
+                              <TableCell>
                                 <Button
                                   size="sm"
-                                  onClick={() => toggleEstado(est)}
+                                  onClick={() => {
+                                    if (est.kind === 'normal') return toggleEstado(est as any);
+                                    return toggleBulkEstado({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any);
+                                  }}
+                                  className={`gap-2 border ${est.estado === 1
+                                    ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
+                                    : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+                                >
+                                  {est.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                                  {est.estado === 1 ? 'Activo' : 'Inactivo'}
+                                </Button>
+                              </TableCell>
+                              <TableCell className="space-y-1">
+                                  {est.email && <div className="flex items-center gap-2 text-sm text-slate-700"><Mail className="w-4 h-4 text-blue-500" />{est.email}</div>}
+                                  {est.email_encargado && <div className="flex items-center gap-2 text-xs text-slate-600"><User className="w-3 h-3 text-emerald-500" />{est.email_encargado}</div>}
+                                  {est.telefono && <div className="flex items-center gap-2 text-xs text-slate-600"><Phone className="w-3 h-3 text-emerald-500" />{est.telefono}</div>}
+                                  {est.telefono_encargado && <div className="flex items-center gap-2 text-xs text-slate-600"><Phone className="w-3 h-3 text-emerald-500" />{est.telefono_encargado}</div>}
+                              </TableCell>
+                              <TableCell>
+                                  {Array.isArray(est.dias) && est.dias.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {est.dias.map((dia) => (
+                                      <Badge key={dia} variant="secondary" className="text-[11px]">
+                                          {dia.slice(0, 3)}{(est as any).dias_turno && (est as any).dias_turno[dia] ? ` • ${(est as any).dias_turno[dia]}` : ''}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-400">Sin horario</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex justify-end gap-2">
+                                    {est.kind === 'normal' ? (
+                                      <>
+                                        <Button size="sm" variant="ghost" onClick={() => { setSelectedEstudiante(est as any); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
+                                        <Button size="sm" variant="ghost" onClick={() => handleEdit(est as any)} className="text-blue-700">Editar</Button>
+                                        <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-red-600">Eliminar</Button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Button size="sm" variant="ghost" onClick={() => openBulkEdit({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any)} className="text-blue-700">Editar</Button>
+                                        <Button size="sm" variant="ghost" onClick={() => deleteBulk(est.id)} className="text-red-600">Eliminar</Button>
+                                      </>
+                                    )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
+                ))
+              ) : groupByMode === 'grupo' ? (
+                agrupadosPorGrupo.map(({ gid, grupo, lista }) => (
+                  <Card key={gid || 'sin_grupo'} className="border-slate-200">
+                    <CardHeader className="flex-row items-center justify-between">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-lg border flex items-center justify-center font-black bg-white/10 border-white/10 text-white">
+                          <Users className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <CardTitle className="text-lg truncate">{grupo}</CardTitle>
+                          <CardDescription>{lista.length} alumno(s) en este grupo</CardDescription>
+                        </div>
+                      </div>
+                      <Badge variant="secondary">Activos: {lista.filter(e => e.estado === 1).length} · Inactivos: {lista.filter(e => e.estado !== 1).length}</Badge>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Nombre</TableHead>
+                            <TableHead>Grado</TableHead>
+                            <TableHead>Grupo</TableHead>
+                            <TableHead>Estado</TableHead>
+                            <TableHead>Contacto</TableHead>
+                            <TableHead>Días</TableHead>
+                            <TableHead className="text-right">Acciones</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {lista.map((est) => (
+                            <TableRow key={`${gid || 'sin'}-${est.key}`}>
+                              <TableCell className="font-semibold text-slate-900">{est.nombre}</TableCell>
+                              <TableCell>
+                                <span className="px-3 py-1 rounded-full border text-xs font-bold" style={gradoChipStyle(est.grado)}>
+                                  {est.grado || '—'}
+                                </span>
+                              </TableCell>
+                              <TableCell>
+                                <span className="text-xs font-semibold text-slate-700">{getGrupoLabel(est)}</span>
+                              </TableCell>
+                              <TableCell>
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    if (est.kind === 'normal') return toggleEstado(est as any);
+                                    return toggleBulkEstado({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any);
+                                  }}
                                   className={`gap-2 border ${est.estado === 1
                                     ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
                                     : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
@@ -508,6 +1312,7 @@ const Estudiantes: React.FC = () => {
                               <TableCell className="space-y-1">
                                 {est.email && <div className="flex items-center gap-2 text-sm text-slate-700"><Mail className="w-4 h-4 text-blue-500" />{est.email}</div>}
                                 {est.email_encargado && <div className="flex items-center gap-2 text-xs text-slate-600"><User className="w-3 h-3 text-emerald-500" />{est.email_encargado}</div>}
+                                {est.telefono && <div className="flex items-center gap-2 text-xs text-slate-600"><Phone className="w-3 h-3 text-emerald-500" />{est.telefono}</div>}
                                 {est.telefono_encargado && <div className="flex items-center gap-2 text-xs text-slate-600"><Phone className="w-3 h-3 text-emerald-500" />{est.telefono_encargado}</div>}
                               </TableCell>
                               <TableCell>
@@ -525,9 +1330,18 @@ const Estudiantes: React.FC = () => {
                               </TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-2">
-                                  <Button size="sm" variant="ghost" onClick={() => { setSelectedEstudiante(est); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
-                                  <Button size="sm" variant="ghost" onClick={() => handleEdit(est)} className="text-blue-700">Editar</Button>
-                                  <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-red-600">Eliminar</Button>
+                                  {est.kind === 'normal' ? (
+                                    <>
+                                      <Button size="sm" variant="ghost" onClick={() => { setSelectedEstudiante(est as any); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
+                                      <Button size="sm" variant="ghost" onClick={() => handleEdit(est as any)} className="text-blue-700">Editar</Button>
+                                      <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-red-600">Eliminar</Button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Button size="sm" variant="ghost" onClick={() => openBulkEdit({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any)} className="text-blue-700">Editar</Button>
+                                      <Button size="sm" variant="ghost" onClick={() => deleteBulk(est.id)} className="text-red-600">Eliminar</Button>
+                                    </>
+                                  )}
                                 </div>
                               </TableCell>
                             </TableRow>
@@ -545,6 +1359,7 @@ const Estudiantes: React.FC = () => {
                         <TableRow>
                           <TableHead>Nombre</TableHead>
                           <TableHead>Grado</TableHead>
+                          <TableHead>Grupo</TableHead>
                           <TableHead>Estado</TableHead>
                           <TableHead>Contacto</TableHead>
                           <TableHead>Días</TableHead>
@@ -553,7 +1368,7 @@ const Estudiantes: React.FC = () => {
                       </TableHeader>
                       <TableBody>
                         {filteredEstudiantes.map((est) => (
-                          <TableRow key={est.id}>
+                          <TableRow key={est.key}>
                             <TableCell className="font-semibold text-slate-900">{est.nombre}</TableCell>
                             <TableCell>
                               <span className="px-3 py-1 rounded-full border text-xs font-bold" style={gradoChipStyle(est.grado)}>
@@ -561,9 +1376,15 @@ const Estudiantes: React.FC = () => {
                               </span>
                             </TableCell>
                             <TableCell>
+                              <span className="text-xs font-semibold text-slate-700">{getGrupoLabel(est)}</span>
+                            </TableCell>
+                            <TableCell>
                               <Button
                                 size="sm"
-                                onClick={() => toggleEstado(est)}
+                                onClick={() => {
+                                  if (est.kind === 'normal') return toggleEstado(est as any);
+                                  return toggleBulkEstado({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any);
+                                }}
                                 className={`gap-2 border ${est.estado === 1
                                   ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
                                   : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
@@ -575,6 +1396,7 @@ const Estudiantes: React.FC = () => {
                             <TableCell className="space-y-1">
                               {est.email && <div className="flex items-center gap-2 text-sm text-slate-700"><Mail className="w-4 h-4 text-blue-500" />{est.email}</div>}
                               {est.email_encargado && <div className="flex items-center gap-2 text-xs text-slate-600"><User className="w-3 h-3 text-emerald-500" />{est.email_encargado}</div>}
+                              {est.telefono && <div className="flex items-center gap-2 text-xs text-slate-600"><Phone className="w-3 h-3 text-emerald-500" />{est.telefono}</div>}
                               {est.telefono_encargado && <div className="flex items-center gap-2 text-xs text-slate-600"><Phone className="w-3 h-3 text-emerald-500" />{est.telefono_encargado}</div>}
                             </TableCell>
                             <TableCell>
@@ -592,9 +1414,18 @@ const Estudiantes: React.FC = () => {
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2">
-                                <Button size="sm" variant="ghost" onClick={() => { setSelectedEstudiante(est); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
-                                <Button size="sm" variant="ghost" onClick={() => handleEdit(est)} className="text-blue-700">Editar</Button>
-                                <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-red-600">Eliminar</Button>
+                                {est.kind === 'normal' ? (
+                                  <>
+                                    <Button size="sm" variant="ghost" onClick={() => { setSelectedEstudiante(est as any); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => handleEdit(est as any)} className="text-blue-700">Editar</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-red-600">Eliminar</Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Button size="sm" variant="ghost" onClick={() => openBulkEdit({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any)} className="text-blue-700">Editar</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => deleteBulk(est.id)} className="text-red-600">Eliminar</Button>
+                                  </>
+                                )}
                               </div>
                             </TableCell>
                           </TableRow>
@@ -606,117 +1437,603 @@ const Estudiantes: React.FC = () => {
               )}
             </>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-              {filteredEstudiantes.map((est) => (
-                <Card key={est.id} className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30">
-                  <div className="absolute top-0 left-0 w-full h-1.5 opacity-80" style={{ backgroundColor: getGradoColor(est.grado) }} />
-                  
-                  <CardHeader className="pb-4 border-none">
-                    <div className="flex justify-between items-start gap-3">
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div className="w-12 h-12 rounded-2xl border flex items-center justify-center font-black shadow-inner flex-shrink-0" style={gradoChipStyle(est.grado)}>
-                          {est.nombre.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <CardTitle className="text-lg text-white truncate">{est.nombre}</CardTitle>
-                          <Badge variant="secondary" className="mt-2 font-bold" style={gradoChipStyle(est.grado)}>
-                            {est.grado || 'N/A'}
-                          </Badge>
-                        </div>
-                      </div>
-                      <div className="relative flex-shrink-0">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setMenuOpen(menuOpen === est.id ? null : est.id)}
-                          className="h-9 w-9 text-slate-300 hover:bg-white/10"
-                        >
-                          <MoreVertical className="w-5 h-5" />
-                        </Button>
-                        {menuOpen === est.id && (
-                          <div className="absolute right-0 top-10 z-50 bg-[#0F2445] rounded-2xl shadow-2xl border border-white/10 py-1 min-w-[180px]">
-                            <button
-                              onClick={() => { setSelectedEstudiante(est); setDetailOpen(true); setMenuOpen(null); }}
-                              className="w-full text-left px-4 py-2 text-sm text-slate-100 hover:bg-white/5 flex items-center gap-2"
-                            >
-                              <User className="w-4 h-4" />
-                              Ver detalles
-                            </button>
-                            <button
-                              onClick={() => { handleEdit(est); setMenuOpen(null); }}
-                              className="w-full text-left px-4 py-2 text-sm text-slate-100 hover:bg-white/5 flex items-center gap-2"
-                            >
-                              <Edit className="w-4 h-4" />
-                              Editar
-                            </button>
-                            <button
-                              onClick={() => { handleDelete(est.id); setMenuOpen(null); }}
-                              className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-rose-500/10 flex items-center gap-2"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                              Eliminar
-                            </button>
+            groupByMode === 'none' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                {filteredEstudiantes.map((est) => (
+                  <StudentCardItem key={est.key} est={est} />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-8">
+                {groupByMode === 'grado' ? (
+                  agrupadosPorGrado.map(({ grado, lista }) => (
+                    <div key={`grado-${grado}`} className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-lg border flex items-center justify-center font-black" style={gradoChipStyle(grado)}>
+                            {grado.charAt(0)}
                           </div>
-                        )}
+                          <div className="min-w-0">
+                            <div className="text-white font-black text-lg truncate">{grado}</div>
+                            <div className="text-slate-300 text-sm font-semibold">{lista.length} estudiante(s)</div>
+                          </div>
+                        </div>
+                        <Badge variant="secondary">Activos: {lista.filter(e => e.estado === 1).length} · Inactivos: {lista.filter(e => e.estado !== 1).length}</Badge>
                       </div>
-                    </div>
-                  </CardHeader>
 
-                    <div className="px-6 space-y-3 pb-6">
-                    <div className="flex items-center gap-2 text-sm font-semibold">
-                      <Button
-                        size="sm"
-                        onClick={() => toggleEstado(est)}
-                        className={`gap-2 border ${est.estado === 1
-                          ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
-                          : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
-                      >
-                        {est.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4 text-red-600" />}
-                        {est.estado === 1 ? 'Activo' : 'Inactivo'}
-                      </Button>
-                    </div>
-
-                    {est.email && (
-                      <div className="flex items-center gap-3 text-sm">
-                          <Mail className="w-4 h-4 text-[#00AEEF] flex-shrink-0" />
-                          <span className="text-slate-200 truncate">{est.email}</span>
-                      </div>
-                    )}
-                    
-                    {est.email_encargado && (
-                      <div className="flex items-center gap-3 text-sm">
-                          <User className="w-4 h-4 text-[#FFC800] flex-shrink-0" />
-                          <span className="text-slate-300 truncate text-xs">{est.email_encargado}</span>
-                      </div>
-                    )}
-                    
-                    {est.telefono_encargado && (
-                      <div className="flex items-center gap-3 text-sm">
-                          <Phone className="w-4 h-4 text-emerald-400" />
-                          <span className="text-slate-200">{est.telefono_encargado}</span>
-                      </div>
-                    )}
-
-                    {Array.isArray(est.dias) && est.dias.length > 0 && (
-                        <div className="flex flex-wrap gap-1 pt-2 border-t border-white/10">
-                        {est.dias.map((dia) => (
-                            <span key={dia} className="text-xs bg-emerald-500/15 text-emerald-200 font-semibold px-2 py-1 rounded-full">
-                            {dia.slice(0, 3)}{(est as any).dias_turno && (est as any).dias_turno[dia] ? ` • ${(est as any).dias_turno[dia]}` : ''}
-                          </span>
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                        {lista.map((est) => (
+                          <StudentCardItem key={`${grado}-${est.key}`} est={est} />
                         ))}
                       </div>
-                    )}
-                  </div>
-                </Card>
-              ))}
-            </div>
+                    </div>
+                  ))
+                ) : (
+                  agrupadosPorGrupo.map(({ gid, grupo, lista }) => (
+                    <div key={`grupo-${gid || 'sin'}`} className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-lg border flex items-center justify-center font-black bg-white/10 border-white/10 text-white">
+                            <Users className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-white font-black text-lg truncate">{grupo}</div>
+                            <div className="text-slate-300 text-sm font-semibold">{lista.length} estudiante(s)</div>
+                          </div>
+                        </div>
+                        <Badge variant="secondary">Activos: {lista.filter(e => e.estado === 1).length} · Inactivos: {lista.filter(e => e.estado !== 1).length}</Badge>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                        {lista.map((est) => (
+                          <StudentCardItem key={`${gid || 'sin'}-${est.key}`} est={est} />
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )
           )}
         </div>
       </section>
+      ) : (
+        <section className="space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-black text-white tracking-tight">Grupos</h2>
+              <p className="text-slate-300 text-sm font-medium">Toca un grupo para agregar/quitar estudiantes.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="text-sm font-semibold text-slate-200 ml-2">{bulkGrupos.length} grupo(s)</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            <Card className="border-white/10">
+              <CardHeader>
+                <CardTitle className="text-base text-white">Sin grupo</CardTitle>
+                <CardDescription className="text-slate-300">{(unifiedByGrupoCount.get('') ?? 0)} estudiante(s)</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-xs text-slate-400">Estos estudiantes aún no pertenecen a un grupo.</div>
+              </CardContent>
+            </Card>
+
+            {bulkGrupos.map((g) => (
+              <Card
+                key={`g:${g.id}`}
+                className="border-white/10 hover:border-[#00AEEF]/30 cursor-pointer"
+                onClick={() => openGrupoAdmin(String(g.id))}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') openGrupoAdmin(String(g.id));
+                }}
+              >
+                <CardHeader>
+                  <CardTitle className="text-base text-white truncate">{g.nombre_grupo || `Grupo #${g.id}`}</CardTitle>
+                  <CardDescription className="text-slate-300">
+                    {g.curso_nombre ? `${g.curso_nombre}` : '—'}{g.tutor_nombre ? ` · ${g.tutor_nombre}` : ''}{g.turno ? ` · ${g.turno}` : ''}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-slate-200">
+                    <Users className="w-4 h-4 text-[#FFC800]" />
+                    <span className="font-bold">{(g.linked_count ?? unifiedByGrupoCount.get(String(g.id)) ?? (bulkByGrupo.get(String(g.id)) ?? []).length)}</span>
+                    <span className="text-sm text-slate-400">estudiante(s)</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openGrupoAdmin(String(g.id));
+                    }}
+                    className="font-bold"
+                  >
+                    Administrar
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Modal detalles estudiante */}
+      <Dialog
+        isOpen={detailOpen && !!selectedEstudiante}
+        onClose={() => { setDetailOpen(false); setSelectedEstudiante(null); }}
+        title={selectedEstudiante ? `Detalles: ${selectedEstudiante.nombre}` : 'Detalles'}
+        maxWidthClass="max-w-2xl"
+      >
+        {!selectedEstudiante ? (
+          <div className="text-sm text-slate-300">Selecciona un estudiante para ver detalles.</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">{selectedEstudiante.kind === 'normal' ? 'Manual' : 'Bulk'}</Badge>
+              <Badge variant={selectedEstudiante.estado === 1 ? 'success' : 'destructive'}>
+                {selectedEstudiante.estado === 1 ? 'Activo' : 'Inactivo'}
+              </Badge>
+              {selectedEstudiante.grado && <Badge variant="secondary">Grado: {selectedEstudiante.grado}</Badge>}
+              <Badge variant="secondary">
+                Grupo: {selectedEstudiante.matricula_grupo_id ? (grupoNameById.get(String(selectedEstudiante.matricula_grupo_id)) || `Grupo #${selectedEstudiante.matricula_grupo_id}`) : 'Sin grupo'}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Contacto</div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm text-slate-200">
+                    <Mail className="w-4 h-4 text-[#00AEEF]" />
+                    <span className="truncate">{selectedEstudiante.email || 'Sin correo'}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-slate-200">
+                    <Phone className="w-4 h-4 text-emerald-400" />
+                    <span className="truncate">{selectedEstudiante.telefono || 'Sin teléfono'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Encargado</div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm text-slate-200">
+                    <User className="w-4 h-4 text-[#FFC800]" />
+                    <span className="truncate">{selectedEstudiante.email_encargado || 'Sin correo de encargado'}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-slate-200">
+                    <Phone className="w-4 h-4 text-emerald-400" />
+                    <span className="truncate">{selectedEstudiante.telefono_encargado || 'Sin teléfono de encargado'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {Array.isArray(selectedEstudiante.dias) && selectedEstudiante.dias.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Días</div>
+                <div className="flex flex-wrap gap-2">
+                  {selectedEstudiante.dias.map((dia) => (
+                    <span key={dia} className="text-xs bg-emerald-500/15 text-emerald-200 font-semibold px-2 py-1 rounded-full">
+                      {dia}{selectedEstudiante.dias_turno && selectedEstudiante.dias_turno[dia] ? ` · ${selectedEstudiante.dias_turno[dia]}` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Dialog>
+
+      {/* Modal administrar grupo */}
+      <Dialog
+        isOpen={!!grupoAdminId && grupoAdminOpen}
+        onClose={() => { setGrupoAdminOpen(false); setGrupoAdminId(null); setGrupoSelectedToAdd([]); setGrupoSelectedToAddNormales([]); }}
+        title={selectedGrupoAdmin ? (selectedGrupoAdmin.nombre_grupo || `Grupo #${selectedGrupoAdmin.id}`) : 'Grupo'}
+        maxWidthClass="max-w-5xl"
+      >
+        {!selectedGrupoAdmin ? (
+          <div className="text-sm text-slate-300">Selecciona un grupo para administrar.</div>
+        ) : (
+          <div className="space-y-6">
+            <div className="text-sm text-slate-300">
+              {selectedGrupoAdmin.curso_nombre ? `${selectedGrupoAdmin.curso_nombre}` : '—'}
+              {selectedGrupoAdmin.tutor_nombre ? ` · ${selectedGrupoAdmin.tutor_nombre}` : ''}
+              {selectedGrupoAdmin.turno ? ` · ${selectedGrupoAdmin.turno}` : ''}
+            </div>
+
+            <div className="flex items-center justify-end">
+              <Button variant="ghost" size="sm" onClick={deleteGrupo} className="text-rose-300 hover:text-rose-200">
+                Eliminar grupo
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Miembros */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="font-black text-white">Miembros</div>
+                  <Badge variant="secondary">{grupoMembers.length + grupoMembersNormales.length}</Badge>
+                </div>
+                <Input
+                  value={grupoMembersSearch}
+                  onChange={(e) => setGrupoMembersSearch(e.target.value)}
+                  placeholder="Buscar en miembros..."
+                />
+                <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-1">
+                  {grupoMembersNormales
+                    .filter((s: any) => {
+                      const q = grupoMembersSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return `${s.nombre} ${s.email ?? ''} ${s.email_encargado ?? ''} ${s.telefono ?? ''} ${s.telefono_encargado ?? ''}`.toLowerCase().includes(q);
+                    })
+                    .map((s: any) => (
+                      <div key={`mn-${s.id}`} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-bold text-white truncate">{s.nombre}</div>
+                          <div className="text-xs text-slate-300 truncate">
+                            {s.email ? s.email : 'Sin correo'}
+                            {s.telefono ? ` · ${s.telefono}` : ''}
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-1">Manual</div>
+                        </div>
+                        <Button variant="ghost" size="sm" onClick={() => removeFromGrupoNormal(s.id)} className="text-rose-300 hover:text-rose-200">
+                          Quitar
+                        </Button>
+                      </div>
+                    ))}
+
+                  {grupoMembers
+                    .filter((s) => {
+                      const q = grupoMembersSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return `${s.nombre} ${s.correo ?? ''} ${s.telefono ?? ''}`.toLowerCase().includes(q);
+                    })
+                    .map((s) => (
+                      <div key={`m-${s.id}`} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-bold text-white truncate">{s.nombre}</div>
+                          <div className="text-xs text-slate-300 truncate">
+                            {s.correo ? s.correo : 'Sin correo'}
+                            {s.telefono ? ` · ${s.telefono}` : ''}
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-1">Bulk</div>
+                        </div>
+                        <Button variant="ghost" size="sm" onClick={() => removeFromGrupo(s.id)} className="text-rose-300 hover:text-rose-200">
+                          Quitar
+                        </Button>
+                      </div>
+                    ))}
+                  {(grupoMembers.length + grupoMembersNormales.length) === 0 && (
+                    <div className="text-xs text-slate-400 font-bold uppercase tracking-widest py-6 text-center">Sin miembros</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Agregar */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="font-black text-white">Agregar estudiantes</div>
+                  <Badge variant="secondary">Seleccionados: {grupoSelectedToAdd.length + grupoSelectedToAddNormales.length}</Badge>
+                </div>
+                <Input
+                  value={grupoAddSearch}
+                  onChange={(e) => setGrupoAddSearch(e.target.value)}
+                  placeholder="Buscar por nombre/correo..."
+                />
+                <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-1">
+                  {grupoCandidatesNormales
+                    .filter((s: any) => {
+                      const q = grupoAddSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return `${s.nombre} ${s.email ?? ''} ${s.email_encargado ?? ''} ${s.telefono ?? ''} ${s.telefono_encargado ?? ''}`.toLowerCase().includes(q);
+                    })
+                    .slice(0, 200)
+                    .map((s: any) => {
+                      const checked = grupoSelectedToAddNormales.includes(s.id);
+                      const currentGrupo = String((s as any).matricula_grupo_id ?? '');
+                      const currentGrupoName = currentGrupo ? (grupoNameById.get(currentGrupo) || `Grupo #${currentGrupo}`) : 'Sin grupo';
+                      return (
+                        <label key={`cn-${s.id}`} className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 cursor-pointer hover:bg-white/10">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const next = e.target.checked;
+                              setGrupoSelectedToAddNormales((prev) => {
+                                if (next) return Array.from(new Set([...prev, s.id]));
+                                return prev.filter((x) => x !== s.id);
+                              });
+                            }}
+                          />
+                          <div className="min-w-0">
+                            <div className="font-bold text-white truncate">{s.nombre}</div>
+                            <div className="text-xs text-slate-300 truncate">
+                              {s.email ? s.email : 'Sin correo'}
+                              {s.telefono ? ` · ${s.telefono}` : ''}
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-1">Manual · Actualmente: {currentGrupoName}</div>
+                          </div>
+                        </label>
+                      );
+                    })}
+
+                  {grupoCandidates
+                    .filter((s) => {
+                      const q = grupoAddSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return `${s.nombre} ${s.correo ?? ''} ${s.telefono ?? ''}`.toLowerCase().includes(q);
+                    })
+                    .slice(0, 200)
+                    .map((s) => {
+                      const checked = grupoSelectedToAdd.includes(s.id);
+                      const currentGrupo = String((s as any).matricula_grupo_id ?? '');
+                      const currentGrupoName = currentGrupo ? (grupoNameById.get(currentGrupo) || `Grupo #${currentGrupo}`) : 'Sin grupo';
+                      return (
+                        <label key={`c-${s.id}`} className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 cursor-pointer hover:bg-white/10">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const next = e.target.checked;
+                              setGrupoSelectedToAdd((prev) => {
+                                if (next) return Array.from(new Set([...prev, s.id]));
+                                return prev.filter((x) => x !== s.id);
+                              });
+                            }}
+                          />
+                          <div className="min-w-0">
+                            <div className="font-bold text-white truncate">{s.nombre}</div>
+                            <div className="text-xs text-slate-300 truncate">
+                              {s.correo ? s.correo : 'Sin correo'}
+                              {s.telefono ? ` · ${s.telefono}` : ''}
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-1">Bulk · Actualmente: {currentGrupoName}</div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  {(grupoCandidates.length + grupoCandidatesNormales.length) === 0 && (
+                    <div className="text-xs text-slate-400 font-bold uppercase tracking-widest py-6 text-center">No hay candidatos</div>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-white/10">
+                  <Button variant="secondary" size="sm" onClick={() => { setGrupoSelectedToAdd([]); setGrupoSelectedToAddNormales([]); }}>
+                    Limpiar
+                  </Button>
+                  <Button size="sm" onClick={addSelectedToGrupo} disabled={(grupoSelectedToAdd.length + grupoSelectedToAddNormales.length) === 0} className="font-bold">
+                    Agregar al grupo
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </Dialog>
+
+      {/* Modal Acciones */}
+      <Dialog isOpen={actionsOpen} onClose={() => { setActionsOpen(false); setActionTab('importar'); }} title="Acciones">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setActionsOpen(false); setActionTab('importar'); }}
+              className="gap-2"
+            >
+              <ArrowLeft className="w-4 h-4" /> Atrás
+            </Button>
+            <div className="text-xs text-slate-400 font-semibold">Click afuera cierra</div>
+          </div>
+          <div className="text-sm text-slate-300">Importa, crea grupos y gestiona el alumnado.</div>
+
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              size="sm"
+              onClick={() => setActionTab('importar')}
+              className={`gap-2 font-bold transition-all ${actionTab === 'importar'
+                ? 'bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026]'
+                : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
+            >
+              <Upload className="w-4 h-4" /> Importar
+            </Button>
+            <Button
+              size="sm"
+              onClick={async () => { await ensureCatalogos(); setActionTab('crear_grupo'); }}
+              className={`gap-2 font-bold transition-all ${actionTab === 'crear_grupo'
+                ? 'bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026]'
+                : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
+            >
+              <FolderKanban className="w-4 h-4" /> Crear grupo
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => { setActionTab('nuevo_estudiante'); resetForm(); setShowModal(true); setActionsOpen(false); }}
+              className="gap-2 font-bold bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10"
+            >
+              <Plus className="w-4 h-4" /> Nuevo estudiante
+            </Button>
+          </div>
+
+          {actionTab === 'importar' && (
+            <Card className="border-white/10 bg-white/5">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <Upload className="w-5 h-5" /> Importación masiva
+                </CardTitle>
+                <CardDescription className="text-slate-300">Descarga el template, llénalo y súbelo para crear registros automáticamente.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {bulkMsg && (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-bold text-slate-100">
+                    {bulkMsg}
+                  </div>
+                )}
+
+                <div>
+                  <Label>Tipo de bulk</Label>
+                  <Select value={bulkTipo} onChange={(e) => setBulkTipo(e.target.value as any)}>
+                    <option value="estudiantes_bulk">Estudiantes (bulk)</option>
+                    <option value="grupo_matricula">Grupo matrícula</option>
+                  </Select>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Button size="sm" onClick={downloadBulkTemplate} disabled={bulkBusy} className="gap-2 font-bold">
+                    Descargar template
+                  </Button>
+                  <div className="text-xs text-slate-400 font-semibold">Formato .xlsx</div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Subir archivo</Label>
+                  <Input
+                    type="file"
+                    accept=".xlsx"
+                    onChange={(e) => setBulkFile(e.target.files?.[0] ?? null)}
+                  />
+                  <Button size="sm" onClick={uploadBulkExcel} disabled={bulkBusy || !bulkFile} className="font-bold">
+                    {bulkBusy ? 'Procesando…' : 'Subir y procesar'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {actionTab === 'crear_grupo' && (
+            <Card className="border-white/10 bg-white/5">
+              <CardHeader>
+                <CardTitle className="text-white">Nuevo grupo</CardTitle>
+                <CardDescription className="text-slate-300">Crea un grupo para organizar estudiantes.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {grupoCreateMsg && (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-bold text-slate-100">
+                    {grupoCreateMsg}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label>Nombre del grupo</Label>
+                    <Input value={grupoForm.nombre_grupo} onChange={(e) => setGrupoForm((p) => ({ ...p, nombre_grupo: e.target.value }))} />
+                  </div>
+                  <div>
+                    <Label>Turno</Label>
+                    <Select value={grupoForm.turno} onChange={(e) => setGrupoForm((p) => ({ ...p, turno: e.target.value }))}>
+                      <option value="">(Opcional)</option>
+                      <option value="Tarde">Tarde</option>
+                      <option value="Noche">Noche</option>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Curso</Label>
+                    <Select value={grupoForm.curso_id} onChange={(e) => setGrupoForm((p) => ({ ...p, curso_id: e.target.value }))}>
+                      <option value="">Selecciona</option>
+                      {cursosCatalog.map((c) => (
+                        <option key={c.id} value={String(c.id)}>{c.nombre}</option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Tutor</Label>
+                    <Select value={grupoForm.tutor_id} onChange={(e) => setGrupoForm((p) => ({ ...p, tutor_id: e.target.value }))}>
+                      <option value="">Selecciona</option>
+                      {tutoresCatalog.map((t) => (
+                        <option key={t.id} value={String(t.id)}>{t.nombre}</option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Estudiantes esperados</Label>
+                    <Input value={grupoForm.cantidad_estudiantes_esperados} onChange={(e) => setGrupoForm((p) => ({ ...p, cantidad_estudiantes_esperados: e.target.value }))} />
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <Button onClick={createGrupo} disabled={grupoCreateBusy} className="font-bold">
+                    {grupoCreateBusy ? 'Creando…' : 'Crear grupo'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </Dialog>
+
+      {/* Modal edición estudiante bulk */}
+      {bulkEditOpen && bulkEditing && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setBulkEditOpen(false);
+          }}
+        >
+          <Card className="w-full max-w-xl max-h-[90vh] overflow-y-auto">
+            <CardHeader className="border-b border-slate-200 flex justify-between items-start">
+              <div>
+                <CardTitle>Editar estudiante</CardTitle>
+                <CardDescription>Edición rápida</CardDescription>
+              </div>
+              <button onClick={() => setBulkEditOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-6 h-6" />
+              </button>
+            </CardHeader>
+            <div className="p-6 space-y-4">
+              {bulkEditErr && <div className="text-sm font-bold text-rose-600">{bulkEditErr}</div>}
+              <div>
+                <Label>Nombre</Label>
+                <Input value={bulkForm.nombre} onChange={(e) => setBulkForm((p) => ({ ...p, nombre: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Correo</Label>
+                <Input value={bulkForm.correo} onChange={(e) => setBulkForm((p) => ({ ...p, correo: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Teléfono</Label>
+                <Input value={bulkForm.telefono} onChange={(e) => setBulkForm((p) => ({ ...p, telefono: e.target.value }))} />
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={bulkForm.requiere_perfil_completo}
+                  onChange={(e) => setBulkForm((p) => ({ ...p, requiere_perfil_completo: e.target.checked }))}
+                />
+                <span className="text-sm font-semibold text-slate-200">Requiere perfil completo</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={bulkForm.estado}
+                  onChange={(e) => setBulkForm((p) => ({ ...p, estado: e.target.checked }))}
+                />
+                <span className="text-sm font-semibold text-slate-200">Activo</span>
+              </div>
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
+                <Button variant="secondary" onClick={() => setBulkEditOpen(false)}>Cancelar</Button>
+                <Button onClick={saveBulkEdit} className="font-bold">Guardar</Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* Modal de Formulario */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowModal(false);
+              resetForm();
+            }
+          }}
+        >
           <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <CardHeader className="border-b border-slate-200 flex justify-between items-start">
               <div>
@@ -756,7 +2073,7 @@ const Estudiantes: React.FC = () => {
 
               {/* Grado */}
               <div>
-                <Label>Grado *</Label>
+                <Label>{(!editingId && formData.grupo_id) ? 'Grado (opcional si va en grupo)' : 'Grado *'}</Label>
                 <Select 
                   value={formData.grado} 
                   onChange={(e) => setFormData(prev => ({ ...prev, grado: e.target.value }))}
@@ -770,9 +2087,27 @@ const Estudiantes: React.FC = () => {
                 {errors.grado && <p className="text-red-500 text-sm mt-1">{errors.grado}</p>}
               </div>
 
+              {!editingId && (
+                <div>
+                  <Label>Agregar a grupo (opcional)</Label>
+                  <Select
+                    value={formData.grupo_id}
+                    onChange={(e) => setFormData(prev => ({ ...prev, grupo_id: e.target.value }))}
+                  >
+                    <option value="">(Sin grupo)</option>
+                    {bulkGrupos.map((g) => (
+                      <option key={g.id} value={String(g.id)}>{g.nombre_grupo || `Grupo #${g.id}`}</option>
+                    ))}
+                  </Select>
+                  <p className="text-xs text-slate-400 mt-2">
+                    Si eliges un grupo, el estudiante quedará asociado al grupo para matricular después.
+                  </p>
+                </div>
+              )}
+
               {/* Datos del Encargado */}
-              <div className="p-6 bg-cyan-50 border-2 border-cyan-200 rounded-lg">
-                <p className="text-sm font-black text-cyan-900 mb-4 uppercase tracking-wide">👨‍👩‍👧 Datos del Encargado</p>
+              <div className="p-6 bg-white/5 border border-cyan-400/20 rounded-2xl">
+                <p className="text-sm font-black text-cyan-200 mb-4 uppercase tracking-wide">Datos del Encargado</p>
                 
                 <div className="space-y-4">
                   <div>
@@ -801,15 +2136,15 @@ const Estudiantes: React.FC = () => {
               </div>
 
               {/* Horario Preferido (Opcional) */}
-              <div className="p-6 bg-green-50 border-2 border-green-200 rounded-lg">
-                <p className="text-sm font-black text-green-900 mb-4 uppercase tracking-wide">🕐 Horario Preferido (Opcional)</p>
+              <div className="p-6 bg-white/5 border border-emerald-400/20 rounded-2xl">
+                <p className="text-sm font-black text-emerald-200 mb-4 uppercase tracking-wide">Horario Preferido (Opcional)</p>
                 
                 <div className="space-y-4">
                   <div>
                     <Label>Días Disponibles</Label>
                     <div className="grid grid-cols-4 gap-2 mt-2">
                       {DIAS_SEMANA.map(dia => (
-                        <label key={dia} className="flex items-center gap-2 p-3 border border-green-200 rounded-lg hover:bg-green-100 cursor-pointer">
+                        <label key={dia} className="flex items-center gap-2 p-3 border border-white/10 rounded-2xl hover:bg-white/10 cursor-pointer">
                           <input
                             type="checkbox"
                             checked={formData.dias.includes(dia)}
@@ -831,7 +2166,7 @@ const Estudiantes: React.FC = () => {
                             }}
                             className="rounded"
                           />
-                          <span className="text-sm font-semibold text-green-700">{dia.slice(0, 3)}</span>
+                          <span className="text-sm font-semibold text-slate-200">{dia.slice(0, 3)}</span>
                         </label>
                       ))}
                     </div>
@@ -842,8 +2177,8 @@ const Estudiantes: React.FC = () => {
                       <Label>Turno por Día</Label>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-2">
                         {formData.dias.map((dia) => (
-                          <div key={dia} className="p-3 border-2 border-emerald-200 rounded-lg">
-                            <p className="text-xs font-bold text-emerald-800 mb-2">{dia.slice(0,3)}</p>
+                            <div key={dia} className="p-3 border border-white/10 rounded-2xl bg-white/5">
+                              <p className="text-xs font-bold text-slate-200 mb-2">{dia.slice(0,3)}</p>
                             <div className="flex gap-3">
                               {TURNOS.map((t) => (
                                 <label key={t} className="flex items-center gap-2 cursor-pointer">
@@ -858,7 +2193,7 @@ const Estudiantes: React.FC = () => {
                                     }))}
                                     className="w-4 h-4"
                                   />
-                                  <span className="text-xs font-semibold text-emerald-900">{t}</span>
+                                  <span className="text-xs font-semibold text-slate-200">{t}</span>
                                 </label>
                               ))}
                             </div>
@@ -902,3 +2237,4 @@ const Estudiantes: React.FC = () => {
 };
 
 export default Estudiantes;
+

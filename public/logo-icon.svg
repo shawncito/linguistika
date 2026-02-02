@@ -1,14 +1,7 @@
-<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Background circle (optional dark background) -->
-  <circle cx="60" cy="60" r="60" fill="#051026"/>
-  
-  <!-- Yellow half of smile -->
-  <path d="M35 30 C35 30, 35 60, 50 80 C50 80, 50 40, 35 40 Z" fill="#FFC800"/>
-  <rect x="42" y="45" width="6" height="18" rx="3" fill="#051026"/>
-  <path d="M35 80 C35 80, 42 90, 50 80" stroke="#051026" stroke-width="8" stroke-linecap="round" fill="none"/>
-  
-  <!-- Cyan half of smile -->
-  <path d="M85 30 C85 30, 85 60, 70 80 C70 80, 70 40, 85 40 Z" fill="#00AEEF"/>
-  <rect x="72" y="45" width="6" height="18" rx="3" fill="#051026"/>
-  <path d="M85 80 C85 80, 78 90, 70 80" stroke="#051026" stroke-width="8" stroke-linecap="round" fill="none"/>
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M 50 20 Q 30 20 30 40 L 30 160 Q 30 180 50 180 L 100 180 L 100 20 Z" fill="#FFC800" />
+  <path d="M 100 20 L 100 180 L 150 180 Q 170 180 170 160 L 170 40 Q 170 20 150 20 Z" fill="#00AEEF" />
+  <ellipse cx="60" cy="70" rx="8" ry="12" fill="#051026" />
+  <ellipse cx="140" cy="70" rx="8" ry="12" fill="#051026" />
+  <path d="M 70 110 Q 100 140 130 110" stroke="#051026" stroke-width="12" fill="none" stroke-linecap="round" />
 </svg>

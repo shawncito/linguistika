@@ -17,7 +17,10 @@ router.get('/', async (req, res) => {
     const estudiantesResponse = estudiantes.map(e => ({
       ...e,
       dias: e.dias ? JSON.parse(e.dias) : null,
-      estado: e.estado ? 1 : 0
+      dias_turno: e.dias_turno ? JSON.parse(e.dias_turno) : null,
+      estado: e.estado ? 1 : 0,
+      // Compat: si la columna no existe todavía, queda null
+      matricula_grupo_id: e.matricula_grupo_id ?? null,
     }));
 
     res.json(estudiantesResponse);
@@ -33,17 +36,18 @@ router.get('/:id', async (req, res) => {
       .from('estudiantes')
       .select('*')
       .eq('id', req.params.id)
-      .single();
-    
+      .maybeSingle();
+
     if (error) throw error;
-    if (!estudiante) {
-      return res.status(404).json({ error: 'Estudiante no encontrado' });
-    }
+    if (!estudiante) return res.status(404).json({ error: 'Estudiante no encontrado' });
 
     // Parse JSON fields
     const estudianteResponse = {
       ...estudiante,
-      dias: estudiante.dias ? JSON.parse(estudiante.dias) : null
+      dias: estudiante.dias ? JSON.parse(estudiante.dias) : null,
+      dias_turno: estudiante.dias_turno ? JSON.parse(estudiante.dias_turno) : null,
+      estado: estudiante.estado ? 1 : 0,
+      matricula_grupo_id: estudiante.matricula_grupo_id ?? null,
     };
 
     res.json(estudianteResponse);

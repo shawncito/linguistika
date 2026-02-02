@@ -1,13 +1,23 @@
 import express from 'express';
 import { randomUUID } from 'crypto';
-import { supabase } from '../supabase.js';
+import { supabase, supabaseAdmin, supabaseForToken } from '../supabase.js';
 
 const router = express.Router();
+
+function getDb(req) {
+  return supabaseAdmin ?? supabaseForToken(req.accessToken);
+}
+
+function isNotFoundSingleError(err) {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return msg.includes('json object requested') && msg.includes('no) rows returned');
+}
 
 // GET - Listar todas las matrículas
 router.get('/', async (req, res) => {
   try {
-    const { data: matriculas, error } = await supabase
+    const db = getDb(req);
+    const { data: matriculas, error } = await db
       .from('matriculas')
       .select(`
         *,
@@ -50,7 +60,8 @@ router.get('/', async (req, res) => {
 // GET - Obtener una matrícula por ID
 router.get('/:id', async (req, res) => {
   try {
-    const { data: matricula, error } = await supabase
+    const db = getDb(req);
+    const { data: matricula, error } = await db
       .from('matriculas')
       .select(`
         *,
@@ -60,8 +71,11 @@ router.get('/:id', async (req, res) => {
       `)
       .eq('id', req.params.id)
       .single();
-    
-    if (error) throw error;
+
+    if (error) {
+      if (isNotFoundSingleError(error)) return res.status(404).json({ error: 'Matrícula no encontrada' });
+      throw error;
+    }
     if (!matricula) {
       return res.status(404).json({ error: 'Matrícula no encontrada' });
     }
@@ -96,6 +110,7 @@ router.get('/:id', async (req, res) => {
 // POST - Crear nueva matrícula
 router.post('/', async (req, res) => {
   try {
+    const db = getDb(req);
     const { estudiante_id, estudiante_ids, curso_id, tutor_id, es_grupo = false, grupo_id = null, grupo_nombre = null } = req.body;
     const userId = req.user?.id;
     
@@ -105,11 +120,28 @@ router.post('/', async (req, res) => {
 
     // Verificar que estudiante, curso y tutor existan
     const [cursoCheck, tutorCheck] = await Promise.all([
-      supabase.from('cursos').select('*').eq('id', curso_id).single(),
-      supabase.from('tutores').select('*').eq('id', tutor_id).single()
+      db.from('cursos').select('id, estado, activo_para_matricula').eq('id', curso_id).maybeSingle(),
+      db.from('tutores').select('id, estado').eq('id', tutor_id).maybeSingle()
     ]);
+
     if (cursoCheck.error || tutorCheck.error) {
       return res.status(400).json({ error: 'Curso o tutor no existen' });
+    }
+
+    if (!cursoCheck.data || !tutorCheck.data) {
+      return res.status(400).json({ error: 'Curso o tutor no existen' });
+    }
+
+    // Verificar que el curso esté activo y disponible para matrícula
+    if (cursoCheck.data.estado === false) {
+      return res.status(409).json({ error: 'El curso está inactivo. Actívalo para poder matricular.' });
+    }
+    if (cursoCheck.data.activo_para_matricula === false) {
+      return res.status(409).json({ error: 'El curso no está activo para matrícula.' });
+    }
+
+    if (tutorCheck.data.estado === false) {
+      return res.status(409).json({ error: 'El tutor está inactivo. Actívalo para poder matricular.' });
     }
 
     // Normalizar lista de estudiantes
@@ -124,7 +156,7 @@ router.post('/', async (req, res) => {
     }
 
     // Validar existencia de los estudiantes
-    const { data: estRows, error: estErr } = await supabase
+    const { data: estRows, error: estErr } = await db
       .from('estudiantes')
       .select('id')
       .in('id', listaEstudiantes);
@@ -152,7 +184,7 @@ router.post('/', async (req, res) => {
         estado: true
       };
 
-      const { data: nueva, error } = await supabase
+      const { data: nueva, error } = await db
         .from('matriculas')
         .insert([registro])
         .select(`
@@ -165,7 +197,7 @@ router.post('/', async (req, res) => {
       const m = nueva[0];
       
       // Obtener nombres de estudiantes para respuesta
-      const { data: estRows } = await supabase
+      const { data: estRows } = await db
         .from('estudiantes')
         .select('id, nombre')
         .in('id', listaEstudiantes);
@@ -196,7 +228,7 @@ router.post('/', async (req, res) => {
         estado: true
       };
 
-      const { data: nueva, error } = await supabase
+      const { data: nueva, error } = await db
         .from('matriculas')
         .insert([registro])
         .select(`
@@ -226,10 +258,11 @@ router.post('/', async (req, res) => {
 // PUT - Actualizar matrícula
 router.put('/:id', async (req, res) => {
   try {
+    const db = getDb(req);
     const { estudiante_id, curso_id, tutor_id, estado, es_grupo = false, grupo_id = null, grupo_nombre = null } = req.body;
     const userId = req.user?.id;
-    
-    const { data: matricula, error } = await supabase
+
+    const { data: matricula, error } = await db
       .from('matriculas')
       .update({
         estudiante_id,
@@ -264,6 +297,147 @@ router.put('/:id', async (req, res) => {
     };
     
     res.json(formatted);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST - Crear matrícula grupal desde un grupo importado (bulk)
+// Convierte estudiantes_bulk -> estudiantes (si no existen) y crea UNA matrícula con estudiante_ids[]
+router.post('/from-bulk-grupo', async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const { matricula_grupo_id, grupo_nombre } = req.body ?? {};
+
+    // Importante: usar un cliente con permisos (service role o JWT) porque estas rutas
+    // corren detrás de requireAuth y pueden estar protegidas por RLS.
+    const db = supabaseAdmin ?? (req.accessToken ? supabaseForToken(req.accessToken) : supabase);
+
+    const gid = String(matricula_grupo_id ?? '').trim();
+    if (!gid) {
+      return res.status(400).json({ error: 'matricula_grupo_id requerido' });
+    }
+
+    const { data: grupo, error: gErr } = await db
+      .from('matriculas_grupo')
+      .select('id, curso_id, tutor_id, nombre_grupo, estado')
+      .eq('id', gid)
+      .maybeSingle();
+    if (gErr) throw gErr;
+    if (!grupo) return res.status(404).json({ error: 'Grupo no encontrado' });
+
+    const { data: links, error: lErr } = await db
+      .from('estudiantes_en_grupo')
+      .select('estudiante_bulk_id')
+      .eq('matricula_grupo_id', gid);
+    if (lErr) throw lErr;
+
+    const bulkIds = (links ?? []).map((x) => x.estudiante_bulk_id).filter(Boolean);
+    if (!bulkIds.length) {
+      return res.status(400).json({ error: 'Este grupo no tiene estudiantes adjuntos.' });
+    }
+
+    const { data: bulkStudents, error: bErr } = await db
+      .from('estudiantes_bulk')
+      .select('id, nombre, correo, telefono, estado')
+      .in('id', bulkIds);
+    if (bErr) throw bErr;
+
+    // Mapear existentes por email/teléfono para evitar duplicados
+    const emails = Array.from(new Set((bulkStudents ?? []).map((s) => String(s.correo ?? '').trim()).filter(Boolean)));
+    const phones = Array.from(new Set((bulkStudents ?? []).map((s) => String(s.telefono ?? '').trim()).filter(Boolean)));
+
+    const [{ data: existingByEmail, error: eEmailErr }, { data: existingByPhone, error: ePhoneErr }] = await Promise.all([
+      emails.length ? db.from('estudiantes').select('id, email').in('email', emails) : Promise.resolve({ data: [], error: null }),
+      phones.length ? db.from('estudiantes').select('id, telefono').in('telefono', phones) : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (eEmailErr) throw eEmailErr;
+    if (ePhoneErr) throw ePhoneErr;
+
+    const emailToId = new Map((existingByEmail ?? []).map((r) => [String(r.email ?? '').trim().toLowerCase(), r.id]));
+    const phoneToId = new Map((existingByPhone ?? []).map((r) => [String(r.telefono ?? '').trim(), r.id]));
+
+    const createdStudentIds = [];
+    for (const s of bulkStudents ?? []) {
+      const email = String(s.correo ?? '').trim();
+      const phone = String(s.telefono ?? '').trim();
+      const emailKey = email ? email.toLowerCase() : '';
+
+      let estudianteId = null;
+      if (emailKey && emailToId.has(emailKey)) estudianteId = emailToId.get(emailKey);
+      if (!estudianteId && phone && phoneToId.has(phone)) estudianteId = phoneToId.get(phone);
+
+      if (!estudianteId) {
+        const { data: created, error: cErr } = await db
+          .from('estudiantes')
+          .insert({
+            nombre: String(s.nombre ?? '').trim(),
+            email: email || null,
+            telefono: phone || null,
+            grado: null,
+            dias: null,
+            turno: null,
+            dias_turno: null,
+            created_by: userId,
+            estado: true,
+          })
+          .select('id, email, telefono')
+          .single();
+        if (cErr) throw cErr;
+        estudianteId = created.id;
+        if (created.email) emailToId.set(String(created.email).trim().toLowerCase(), created.id);
+        if (created.telefono) phoneToId.set(String(created.telefono).trim(), created.id);
+      }
+
+      if (estudianteId) createdStudentIds.push(estudianteId);
+    }
+
+    if (!createdStudentIds.length) {
+      return res.status(400).json({ error: 'No se pudieron convertir estudiantes del grupo.' });
+    }
+
+    const registro = {
+      estudiante_id: null,
+      estudiante_ids: createdStudentIds,
+      curso_id: grupo.curso_id,
+      tutor_id: grupo.tutor_id,
+      es_grupo: true,
+      grupo_id: randomUUID(),
+      grupo_nombre: (grupo_nombre ?? grupo.nombre_grupo ?? null) ? String(grupo_nombre ?? grupo.nombre_grupo).trim() : null,
+      created_by: userId,
+      estado: true,
+    };
+
+    const { data: nueva, error: mErr } = await db
+      .from('matriculas')
+      .insert([registro])
+      .select(`
+        *,
+        cursos:curso_id (nombre),
+        tutores:tutor_id (nombre)
+      `);
+    if (mErr) throw mErr;
+
+    const m = (nueva || [])[0];
+
+    // Obtener nombres de estudiantes para respuesta
+    const { data: estRows, error: estErr } = await db
+      .from('estudiantes')
+      .select('id, nombre')
+      .in('id', createdStudentIds);
+    if (estErr) throw estErr;
+
+    return res.status(201).json({
+      ...m,
+      curso_nombre: m.cursos?.nombre,
+      tutor_nombre: m.tutores?.nombre,
+      es_grupo: true,
+      grupo_id: m.grupo_id,
+      grupo_nombre: m.grupo_nombre,
+      estudiante_ids: m.estudiante_ids,
+      estudiantes_detalle: estRows || [],
+      source_bulk_grupo_id: gid,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

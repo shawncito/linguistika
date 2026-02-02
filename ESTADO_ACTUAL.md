@@ -135,25 +135,32 @@ Archivos modificados:
 | Frontend: Tutores.tsx | ✅ Listo | Inputs de tiempo HH:MM por día |
 | Frontend: Cursos.tsx | ✅ Listo | Tutor dropdown + badge display |
 | Frontend: Matriculas.tsx | ✅ Listo | Validación tutor-curso |
-| **Testing** | ❌ PENDIENTE | Roundtrip completo en browser |
-| **Documentación** | 🟡 PARCIAL | ESTADO_ACTUAL.md + guía de testing |
+| **Testing** | 🟡 PARCIAL | Roundtrip automatizado por script + validación en UI pendiente |
+| **Documentación** | 🟡 PARCIAL | ESTADO_ACTUAL.md + guías varias |
 
 ---
 
 ## 🎯 PRÓXIMOS PASOS
 
-1. **Ejecutar roundtrip completo:**
-   - Crear 2 tutores (María García, Carlos López)
-   - Crear 2 alumnos (Juan Pérez, Sofia Martínez)
-   - Crear curso compatible (Francés Avanzado + María)
-   - Intentar crear curso incompatible (debe fallar)
-   - Crear matrícula grupal (Juan + Sofia en Francés)
+1. **Ejecutar roundtrip automatizado (API + Auth + grupos + sesiones + movimientos):**
+  - Desde `backend\`:
+    - `powershell -NoProfile -ExecutionPolicy Bypass -File ..\roundtrip.ps1 -BaseUrl "http://localhost:5000/api" -Email "<email>" -Password "<password>" -CheckPagoPhase`
+  - El script genera un `RunTag` y guarda state en `.roundtrip-state.json`.
+  - Por defecto deja los datos creados (listos para validar UI y la fase de pagos).
 
-2. **Validar en Supabase:**
-   - Tabla `tutores`: 2 registros con dias_horarios JSON correcto
-   - Tabla `cursos`: Curso con tutor_id = ID de María
-   - Tabla `matriculas`: Grupo de 2 alumnos
-   - Tabla `estudiantes_matriculas`: 2 filas (estudiante A + B en matrícula)
+2. **Limpieza (cuando termines de probar):**
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File ..\roundtrip.ps1 -BaseUrl "http://localhost:5000/api" -Email "<email>" -Password "<password>" -CleanupOnly`
+
+3. **Validar en Supabase:**
+  - Tabla `tutores`: registros con `dias_horarios` JSON correcto
+  - Tabla `cursos`: curso con `tutor_id` asignado
+  - Tablas de grupo/sesiones/movimientos: se crean al completar sesión
+
+4. **Siguiente fase: Pagos**
+  - Requiere usuario con rol `admin` o `contador`.
+  - Validar acceso a endpoints:
+    - `GET /api/pagos`
+    - `GET /api/finanzas/movimientos` (puede requerir `SUPABASE_SERVICE_KEY` en backend)
 
 3. **Capturar evidencia:**
    - Screenshots de UI (Tutores, Cursos, Matrículas)

@@ -15,7 +15,10 @@ import {
 
 const TOKEN_KEY = 'linguistika_token';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL =
+  (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('api') : null) ||
+  import.meta.env.VITE_API_URL ||
+  'http://localhost:5000/api';
 
 export const auth = {
   getToken: () => localStorage.getItem(TOKEN_KEY),
@@ -35,6 +38,14 @@ http.interceptors.request.use((config) => {
   if (token) {
     config.headers = (config.headers ?? {}) as any;
     (config.headers as any).Authorization = `Bearer ${token}`;
+  }
+
+  // Si es FormData, NO fijar Content-Type manualmente.
+  // El navegador debe colocar el boundary correcto para multipart.
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    config.headers = (config.headers ?? {}) as any;
+    delete (config.headers as any)['Content-Type'];
+    delete (config.headers as any)['content-type'];
   }
   return config;
 });
@@ -105,6 +116,95 @@ export const api = {
     },
   },
 
+  bulk: {
+    downloadTemplate: async (tipo: 'estudiantes_bulk' | 'grupo_matricula'): Promise<Blob> => {
+      const res = await http.get(`/bulk/template/${tipo}`, { responseType: 'blob' as any });
+      return res.data as any;
+    },
+    uploadExcel: async (file: File): Promise<any> => {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await http.post('/bulk/upload', form);
+      return res.data as any;
+    },
+
+    // Lectura administrativa: ver lo subido
+    listGrupos: async (): Promise<any[]> => {
+      const res = await http.get('/bulk/grupos');
+      return res.data as any[];
+    },
+    getGrupo: async (id: string): Promise<any> => {
+      const res = await http.get(`/bulk/grupos/${id}`);
+      return res.data as any;
+    },
+    listEstudiantesBulk: async (): Promise<any[]> => {
+      const res = await http.get('/bulk/estudiantes');
+      return res.data as any[];
+    },
+
+    createEstudianteBulk: async (data: {
+      nombre: string;
+      correo?: string | null;
+      telefono?: string | null;
+      requiere_perfil_completo?: boolean;
+      estado?: boolean;
+    }): Promise<any> => {
+      const res = await http.post('/bulk/estudiantes', data);
+      return res.data as any;
+    },
+
+    createGrupo: async (data: {
+      curso_id: number;
+      tutor_id: number;
+      nombre_grupo?: string | null;
+      cantidad_estudiantes_esperados?: number | null;
+      fecha_inicio?: string | null;
+      fecha_fin?: string | null;
+      turno?: string | null;
+      notas?: string | null;
+      estado?: string | null;
+    }): Promise<any> => {
+      const res = await http.post('/bulk/grupos', data);
+      return res.data as any;
+    },
+    updateGrupo: async (id: string, data: any): Promise<any> => {
+      const res = await http.put(`/bulk/grupos/${id}`, data);
+      return res.data as any;
+    },
+    deleteGrupo: async (id: string): Promise<{ ok: boolean; id: string }> => {
+      const res = await http.delete(`/bulk/grupos/${id}`);
+      return res.data as any;
+    },
+
+    updateEstudianteBulk: async (id: number, data: any): Promise<any> => {
+      const res = await http.put(`/bulk/estudiantes/${id}`, data);
+      return res.data as any;
+    },
+    deleteEstudianteBulk: async (id: number): Promise<any> => {
+      const res = await http.delete(`/bulk/estudiantes/${id}`);
+      return res.data as any;
+    },
+
+    assignEstudiantesToGrupo: async (
+      grupoId: string,
+      estudianteBulkIds: number[] = [],
+      estudianteIds: number[] = []
+    ): Promise<any> => {
+      const res = await http.post(`/bulk/grupos/${grupoId}/estudiantes`, {
+        estudiante_bulk_ids: estudianteBulkIds,
+        estudiante_ids: estudianteIds,
+      });
+      return res.data as any;
+    },
+    unassignEstudiantes: async (estudianteBulkIds: number[] = [], estudianteIds: number[] = []): Promise<any> => {
+      const res = await http.post('/bulk/estudiantes/unassign', {
+        estudiante_bulk_ids: estudianteBulkIds,
+        estudiante_ids: estudianteIds,
+      });
+      return res.data as any;
+    },
+  },
+
   tutores: {
     getAll: async (): Promise<Tutor[]> => {
       const res = await http.get<Tutor[]>('/tutores');
@@ -147,6 +247,9 @@ export const api = {
     delete: async (id: number): Promise<void> => {
       await http.delete(`/cursos/${id}`);
     },
+    deleteCascade: async (id: number): Promise<void> => {
+      await http.delete(`/cursos/${id}?cascade=1`);
+    },
   },
 
   estudiantes: {
@@ -179,6 +282,10 @@ export const api = {
     create: async (data: Partial<Matricula>): Promise<Matricula> => {
       const res = await http.post<Matricula>('/matriculas', data);
       return res.data;
+    },
+    createFromBulkGrupo: async (matricula_grupo_id: string, grupo_nombre?: string | null): Promise<any> => {
+      const res = await http.post('/matriculas/from-bulk-grupo', { matricula_grupo_id, grupo_nombre: grupo_nombre ?? null });
+      return res.data as any;
     },
     update: async (id: number, data: Partial<Matricula>): Promise<Matricula> => {
       const res = await http.put<Matricula>(`/matriculas/${id}`, data);

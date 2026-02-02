@@ -79,6 +79,107 @@ const Dashboard: React.FC = () => {
     return value;
   };
 
+  const getDiaVariants = (diaSemana: string): string[] => {
+    const base = String(diaSemana || '').trim();
+    const lower = base.toLowerCase();
+    const noAccent = lower
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .trim();
+    const short = base.slice(0, 3);
+    const shortLower = short.toLowerCase();
+    const shortNoAccent = shortLower
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .trim();
+
+    const variants = new Set<string>([
+      base,
+      lower,
+      noAccent,
+      short,
+      shortLower,
+      shortNoAccent,
+      base.toUpperCase(),
+      short.toUpperCase(),
+    ]);
+
+    // Alias comunes por día (por si en BD guardaron abreviado o sin acento)
+    const aliasMap: Record<string, string[]> = {
+      lunes: ['lun', 'lunes'],
+      martes: ['mar', 'martes'],
+      miercoles: ['mie', 'mié', 'miercoles', 'miércoles'],
+      jueves: ['jue', 'jueves'],
+      viernes: ['vie', 'viernes'],
+      sabado: ['sab', 'sáb', 'sabado', 'sábado'],
+      domingo: ['dom', 'domingo'],
+    };
+    const key = Object.keys(aliasMap).find((k) => noAccent === k);
+    if (key) {
+      for (const a of aliasMap[key]) {
+        variants.add(a);
+        variants.add(a.toUpperCase());
+      }
+    }
+
+    return Array.from(variants);
+  };
+
+  const pickDiaKey = (obj: any, diaSemana: string): string | null => {
+    if (!obj || typeof obj !== 'object') return null;
+    const variants = getDiaVariants(diaSemana);
+    for (const v of variants) {
+      if (Object.prototype.hasOwnProperty.call(obj, v)) return v;
+    }
+    // Fallback: búsqueda por normalización (por si hay espacios/acentos raros)
+    const entries = Object.keys(obj);
+    const target = String(diaSemana)
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '');
+    const targetShort = target.slice(0, 3);
+    for (const k of entries) {
+      const nk = String(k)
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/\p{Diacritic}/gu, '');
+      if (nk === target || nk === targetShort) return k;
+    }
+    return null;
+  };
+
+  const getCursoScheduleForDay = (curso: any, diaSemana: string) => {
+    const scheduleRaw = parseMaybeJSON(curso?.dias_schedule);
+    const turnosRaw = parseMaybeJSON(curso?.dias_turno);
+
+    // 1) dias_schedule como objeto por día
+    if (scheduleRaw && typeof scheduleRaw === 'object' && !Array.isArray(scheduleRaw)) {
+      const key = pickDiaKey(scheduleRaw, diaSemana);
+      if (key) return { kind: 'schedule', value: scheduleRaw[key] } as const;
+    }
+
+    // 2) dias_schedule como lista de sesiones
+    if (Array.isArray(scheduleRaw)) {
+      const variants = new Set(getDiaVariants(diaSemana).map((x) => String(x).toLowerCase()));
+      const match = scheduleRaw.find((s: any) => {
+        const d = String(s?.dia ?? s?.dia_semana ?? s?.day ?? '').trim();
+        if (!d) return false;
+        return variants.has(d.toLowerCase());
+      });
+      if (match) return { kind: 'schedule', value: match } as const;
+    }
+
+    // 3) fallback a dias_turno
+    if (turnosRaw && typeof turnosRaw === 'object' && !Array.isArray(turnosRaw)) {
+      const key = pickDiaKey(turnosRaw, diaSemana);
+      if (key) return { kind: 'turno', value: turnosRaw[key] } as const;
+    }
+
+    return null;
+  };
+
   const renderHorarioBadges = (m: any) => {
     const scheduleRaw = parseMaybeJSON(m.curso_dias_schedule as any);
     const turnosRaw = parseMaybeJSON(m.curso_dias_turno as any);
@@ -268,16 +369,17 @@ const Dashboard: React.FC = () => {
         const curso = cursos[index];
         const tutor = tutores[index];
         const estudiante = estudiantes[index];
+        const sched = getCursoScheduleForDay(curso, diaSemana);
         // Verificar si el curso tiene horario definido (dias_schedule) para este día de la semana
-        if (curso?.dias_schedule && (curso.dias_schedule as any)[diaSemana]) {
-          const schedule = (curso.dias_schedule as any)[diaSemana];
+        if (sched?.kind === 'schedule' && sched.value) {
+          const schedule = sched.value as any;
           sesiones.push({
             matricula_id: matricula.id,
             curso_nombre: curso.nombre,
             estudiante_nombre: estudiante.nombre,
             tutor_nombre: tutor.nombre,
-            hora_inicio: schedule.hora_inicio,
-            hora_fin: schedule.hora_fin,
+            hora_inicio: schedule.hora_inicio || schedule.horaInicio || schedule.start || '—',
+            hora_fin: schedule.hora_fin || schedule.horaFin || schedule.end || '—',
             duracion_horas: schedule.duracion_horas || 0,
             turno: schedule.turno,
             tutor_id: tutor.id,
@@ -286,8 +388,8 @@ const Dashboard: React.FC = () => {
             avisado: false,
             confirmado: false
           });
-        } else if (curso?.dias_turno && (curso.dias_turno as any)[diaSemana]) {
-          const turno = (curso.dias_turno as any)[diaSemana];
+        } else if (sched?.kind === 'turno' && sched.value) {
+          const turno = sched.value as any;
           sesiones.push({
             matricula_id: matricula.id,
             curso_nombre: curso.nombre,
@@ -377,19 +479,38 @@ const Dashboard: React.FC = () => {
           const curso = cursos[index];
           const tutor = tutores[index];
           const estudiante = estudiantes[index];
-          
-          if (curso?.dias_schedule && (curso.dias_schedule as any)[diaSemana]) {
-            const schedule = (curso.dias_schedule as any)[diaSemana];
+
+          const sched = getCursoScheduleForDay(curso, diaSemana);
+          if (sched?.kind === 'schedule' && sched.value) {
+            const schedule = sched.value as any;
             
             sesiones.push({
               matricula_id: matricula.id,
               curso_nombre: curso.nombre,
               estudiante_nombre: estudiante.nombre,
               tutor_nombre: tutor.nombre,
-              hora_inicio: schedule.hora_inicio,
-              hora_fin: schedule.hora_fin,
+              hora_inicio: schedule.hora_inicio || schedule.horaInicio || schedule.start || '—',
+              hora_fin: schedule.hora_fin || schedule.horaFin || schedule.end || '—',
               duracion_horas: schedule.duracion_horas || 0,
               turno: schedule.turno,
+              tutor_id: tutor.id,
+              estudiante_id: estudiante.id,
+              curso_id: curso.id,
+              avisado: false,
+              confirmado: false,
+              fecha: dateStr
+            });
+          } else if (sched?.kind === 'turno' && sched.value) {
+            const turno = sched.value as any;
+            sesiones.push({
+              matricula_id: matricula.id,
+              curso_nombre: curso.nombre,
+              estudiante_nombre: estudiante.nombre,
+              tutor_nombre: tutor.nombre,
+              hora_inicio: '—',
+              hora_fin: '—',
+              duracion_horas: 0,
+              turno: turno,
               tutor_id: tutor.id,
               estudiante_id: estudiante.id,
               curso_id: curso.id,

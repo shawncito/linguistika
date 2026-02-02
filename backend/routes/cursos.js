@@ -1,13 +1,159 @@
 import express from 'express';
-import { supabase } from '../supabase.js';
+import { supabaseAdmin, supabaseForToken } from '../supabase.js';
 import { validateTutorCourseSchedule } from '../utils/scheduleValidator.js';
 
 const router = express.Router();
 
+function getDb(req) {
+  return supabaseAdmin ?? supabaseForToken(req.accessToken);
+}
+
+function isForeignKeyViolation(err) {
+  // Postgres FK violation code
+  return String(err?.code ?? '') === '23503' || String(err?.message ?? '').toLowerCase().includes('foreign key');
+}
+
+function isMissingTableOrColumn(err) {
+  const code = String(err?.code ?? '');
+  const msg = String(err?.message ?? '').toLowerCase();
+  return code === '42P01' || code === '42703' || msg.includes('does not exist') || msg.includes('column') && msg.includes('not found');
+}
+
+async function safeSelectIdsEq(db, table, idColumn, filterColumn, value) {
+  try {
+    const { data, error } = await db.from(table).select(idColumn).eq(filterColumn, value);
+    if (error && !isMissingTableOrColumn(error)) throw error;
+    return (data ?? []).map((r) => r?.[idColumn]).filter((v) => v != null);
+  } catch (e) {
+    if (!isMissingTableOrColumn(e)) throw e;
+    return [];
+  }
+}
+
+async function safeSelectIdsIn(db, table, idColumn, filterColumn, values) {
+  const list = (values ?? []).filter((v) => v != null);
+  if (list.length === 0) return [];
+  try {
+    const { data, error } = await db.from(table).select(idColumn).in(filterColumn, list);
+    if (error && !isMissingTableOrColumn(error)) throw error;
+    return (data ?? []).map((r) => r?.[idColumn]).filter((v) => v != null);
+  } catch (e) {
+    if (!isMissingTableOrColumn(e)) throw e;
+    return [];
+  }
+}
+
+async function countRefs(db, table, column, value) {
+  try {
+    const { count, error } = await db
+      .from(table)
+      .select(column, { count: 'exact', head: true })
+      .eq(column, value);
+    if (error) return null;
+    return count ?? 0;
+  } catch {
+    return null;
+  }
+}
+
+async function countRefsIn(db, table, column, values) {
+  const list = (values ?? []).filter((v) => v != null);
+  if (list.length === 0) return 0;
+  try {
+    const { count, error } = await db
+      .from(table)
+      .select(column, { count: 'exact', head: true })
+      .in(column, list);
+    if (error) return null;
+    return count ?? 0;
+  } catch {
+    return null;
+  }
+}
+
+async function getCursoDeleteBlockers(db, cursoId) {
+  const matriculaIds = await safeSelectIdsEq(db, 'matriculas', 'id', 'curso_id', cursoId);
+  const grupoIds = await safeSelectIdsEq(db, 'matriculas_grupo', 'id', 'curso_id', cursoId);
+  const claseIds = await safeSelectIdsEq(db, 'clases', 'id', 'curso_id', cursoId);
+  const claseIdsByMatricula = await safeSelectIdsIn(db, 'clases', 'id', 'matricula_id', matriculaIds);
+  const allClaseIds = Array.from(new Set([...(claseIds ?? []), ...(claseIdsByMatricula ?? [])]));
+
+  const blockers = {
+    matriculas_grupo: await countRefs(db, 'matriculas_grupo', 'curso_id', cursoId),
+    matriculas: await countRefs(db, 'matriculas', 'curso_id', cursoId),
+    clases: await countRefs(db, 'clases', 'curso_id', cursoId),
+    sesiones_clases: await countRefs(db, 'sesiones_clases', 'curso_id', cursoId),
+    movimientos_financieros: await countRefs(db, 'movimientos_financieros', 'curso_id', cursoId),
+    movimientos_dinero: await countRefs(db, 'movimientos_dinero', 'curso_id', cursoId),
+  };
+
+  // Bloqueos indirectos típicos (por clase/grupo/movimiento)
+  const pagos = await countRefsIn(db, 'pagos', 'clase_id', allClaseIds);
+  if (pagos != null && pagos > 0) blockers.pagos = pagos;
+
+  const horas = await countRefsIn(db, 'horas_trabajo', 'clase_id', allClaseIds);
+  if (horas != null && horas > 0) blockers.horas_trabajo = horas;
+
+  const movsPorGrupo = await countRefsIn(db, 'movimientos_financieros', 'matricula_grupo_id', grupoIds);
+  if (movsPorGrupo != null && movsPorGrupo > 0) blockers.movimientos_financieros_grupo = movsPorGrupo;
+
+  const movsPorClase = await countRefsIn(db, 'movimientos_financieros', 'clase_id', allClaseIds);
+  if (movsPorClase != null && movsPorClase > 0) blockers.movimientos_financieros_clase = movsPorClase;
+
+  // limpiar nulls (si una tabla/col no existe o no hay permisos)
+  for (const k of Object.keys(blockers)) {
+    if (blockers[k] == null) delete blockers[k];
+  }
+  return blockers;
+}
+
+async function safeUpdateEq(db, table, patch, column, value) {
+  try {
+    const { error } = await db.from(table).update(patch).eq(column, value);
+    if (error && !isMissingTableOrColumn(error)) throw error;
+  } catch (e) {
+    if (!isMissingTableOrColumn(e)) throw e;
+  }
+}
+
+async function safeDeleteEq(db, table, column, value) {
+  try {
+    const { error } = await db.from(table).delete().eq(column, value);
+    if (error && !isMissingTableOrColumn(error)) throw error;
+  } catch (e) {
+    if (!isMissingTableOrColumn(e)) throw e;
+  }
+}
+
+async function safeDeleteIn(db, table, column, values) {
+  const list = (values ?? []).filter((v) => v != null);
+  if (list.length === 0) return;
+  try {
+    const { error } = await db.from(table).delete().in(column, list);
+    if (error && !isMissingTableOrColumn(error)) throw error;
+  } catch (e) {
+    if (!isMissingTableOrColumn(e)) throw e;
+  }
+}
+
+async function deleteGrupoCascade(db, grupoId) {
+  const gid = Number(grupoId);
+  if (!Number.isFinite(gid)) return;
+
+  // estudiantes normales (si existe columna)
+  await safeUpdateEq(db, 'estudiantes', { matricula_grupo_id: null, updated_at: new Date().toISOString() }, 'matricula_grupo_id', gid);
+  // movimientos financieros (si existe tabla/col)
+  await safeUpdateEq(db, 'movimientos_financieros', { matricula_grupo_id: null, updated_at: new Date().toISOString() }, 'matricula_grupo_id', gid);
+  // links bulk (si existe) y grupo
+  await safeDeleteEq(db, 'estudiantes_en_grupo', 'matricula_grupo_id', gid);
+  await safeDeleteEq(db, 'matriculas_grupo', 'id', gid);
+}
+
 // GET - Listar todos los cursos
 router.get('/', async (req, res) => {
   try {
-    const { data: cursos, error } = await supabase
+    const db = getDb(req);
+    const { data: cursos, error } = await db
       .from('cursos')
       .select('*')
       .order('created_at', { ascending: false });
@@ -36,12 +182,13 @@ router.get('/', async (req, res) => {
 // GET - Obtener un curso por ID
 router.get('/:id', async (req, res) => {
   try {
-    const { data: curso, error } = await supabase
+    const db = getDb(req);
+    const { data: curso, error } = await db
       .from('cursos')
       .select('*')
       .eq('id', req.params.id)
-      .single();
-    
+      .maybeSingle();
+
     if (error) throw error;
     if (!curso) {
       return res.status(404).json({ error: 'Curso no encontrado' });
@@ -68,6 +215,7 @@ router.get('/:id', async (req, res) => {
 // POST - Crear nuevo curso
 router.post('/', async (req, res) => {
   try {
+    const db = getDb(req);
     const { 
       nombre, descripcion, nivel, max_estudiantes = null,
       tipo_clase = 'grupal', dias = null, dias_turno = null, dias_schedule = null,
@@ -83,11 +231,11 @@ router.post('/', async (req, res) => {
 
     // Si se proporciona tutor_id, validar compatibilidad
     if (tutor_id && (dias_schedule || dias_turno)) {
-      const { data: tutor, error: tutorError } = await supabase
+      const { data: tutor, error: tutorError } = await db
         .from('tutores')
         .select('*')
         .eq('id', tutor_id)
-        .single();
+        .maybeSingle();
       
       if (tutorError || !tutor) {
         return res.status(404).json({ error: 'Tutor no encontrado' });
@@ -115,7 +263,7 @@ router.post('/', async (req, res) => {
     // Si es tutoría, max_estudiantes debe ser null
     const maxEstudiantes = tipo_clase === 'tutoria' ? null : (max_estudiantes || 10);
 
-    const { data: curso, error } = await supabase
+    const { data: curso, error } = await db
       .from('cursos')
       .insert({
         nombre,
@@ -164,6 +312,7 @@ router.post('/', async (req, res) => {
 // PUT - Actualizar curso
 router.put('/:id', async (req, res) => {
   try {
+    const db = getDb(req);
     const userId = req.user?.id;
     
     // Construir objeto de actualización solo con campos presentes
@@ -192,7 +341,7 @@ router.put('/:id', async (req, res) => {
     if (req.body.tutor_id !== undefined) updateData.tutor_id = req.body.tutor_id || null;
     if (req.body.estado !== undefined) updateData.estado = req.body.estado === 1 || req.body.estado === true;
 
-    const { data: curso, error } = await supabase
+    const { data: curso, error } = await db
       .from('cursos')
       .update(updateData)
       .eq('id', req.params.id)
@@ -223,12 +372,120 @@ router.put('/:id', async (req, res) => {
 // DELETE - Eliminar curso permanentemente
 router.delete('/:id', async (req, res) => {
   try {
-    const { error } = await supabase
+    const db = getDb(req);
+    const id = req.params.id;
+    const cascade = ['1', 'true', 'yes', 'si'].includes(String(req.query?.cascade ?? '').toLowerCase());
+
+    if (cascade) {
+      try {
+        // IDs relacionados (para poder limpiar dependencias por IN)
+        const grupoIds = await safeSelectIdsEq(db, 'matriculas_grupo', 'id', 'curso_id', id);
+        const matriculaIds = await safeSelectIdsEq(db, 'matriculas', 'id', 'curso_id', id);
+        const claseIdsDirect = await safeSelectIdsEq(db, 'clases', 'id', 'curso_id', id);
+        const claseIdsByMatricula = await safeSelectIdsIn(db, 'clases', 'id', 'matricula_id', matriculaIds);
+        const claseIds = Array.from(new Set([...(claseIdsDirect ?? []), ...(claseIdsByMatricula ?? [])]));
+
+        // 0) limpiar movimientos/artefactos que bloquean el borrado de clases/grupos/matrículas
+        // - Pagos/Horas trabajo dependen de clases
+        await safeDeleteIn(db, 'pagos', 'clase_id', claseIds);
+        await safeDeleteIn(db, 'horas_trabajo', 'clase_id', claseIds);
+
+        // - Movimientos (dos esquemas conviven: movimientos_financieros y movimientos_dinero)
+        //   a) movimientos_dinero apunta directo a curso_id/matricula_id/sesion_id
+        await safeDeleteEq(db, 'movimientos_dinero', 'curso_id', id);
+        await safeDeleteIn(db, 'movimientos_dinero', 'matricula_id', matriculaIds);
+
+        //   b) movimientos_financieros puede apuntar a curso/grupo/clase
+        const mfIdsByCurso = await safeSelectIdsEq(db, 'movimientos_financieros', 'id', 'curso_id', id);
+        const mfIdsByGrupo = await safeSelectIdsIn(db, 'movimientos_financieros', 'id', 'matricula_grupo_id', grupoIds);
+        const mfIdsByClase = await safeSelectIdsIn(db, 'movimientos_financieros', 'id', 'clase_id', claseIds);
+        const mfIds = Array.from(new Set([...(mfIdsByCurso ?? []), ...(mfIdsByGrupo ?? []), ...(mfIdsByClase ?? [])]));
+
+        // comprobantes_ingresos depende de movimientos_financieros
+        await safeDeleteIn(db, 'comprobantes_ingresos', 'movimiento_financiero_id', mfIds);
+        // ahora sí, borrar movimientos_financieros
+        await safeDeleteEq(db, 'movimientos_financieros', 'curso_id', id);
+        await safeDeleteIn(db, 'movimientos_financieros', 'matricula_grupo_id', grupoIds);
+        await safeDeleteIn(db, 'movimientos_financieros', 'clase_id', claseIds);
+
+        // 1) borrar grupos asociados al curso
+        try {
+          const { data: grupos, error: gErr } = await db.from('matriculas_grupo').select('id').eq('curso_id', id);
+          if (gErr && !isMissingTableOrColumn(gErr)) throw gErr;
+          for (const g of grupos ?? []) {
+            await deleteGrupoCascade(db, g.id);
+          }
+        } catch (e) {
+          if (!isMissingTableOrColumn(e)) throw e;
+        }
+
+        // 2) borrar clases (directas y/o por matrícula)
+        await safeDeleteEq(db, 'clases', 'curso_id', id);
+        await safeDeleteIn(db, 'clases', 'matricula_id', matriculaIds);
+
+        // 2.1) borrar sesiones_clases (si se usa agenda por sesiones)
+        await safeDeleteEq(db, 'sesiones_clases', 'curso_id', id);
+
+        // 3) borrar matrículas por curso_id
+        await safeDeleteEq(db, 'matriculas', 'curso_id', id);
+      } catch (e) {
+        if (isForeignKeyViolation(e)) {
+          const blockers = await getCursoDeleteBlockers(db, id);
+          const detailsParts = [];
+          if (blockers.matriculas_grupo) detailsParts.push(`grupos: ${blockers.matriculas_grupo}`);
+          if (blockers.matriculas) detailsParts.push(`matrículas: ${blockers.matriculas}`);
+          if (blockers.clases) detailsParts.push(`clases: ${blockers.clases}`);
+          if (blockers.sesiones_clases) detailsParts.push(`sesiones: ${blockers.sesiones_clases}`);
+          if (blockers.movimientos_financieros) detailsParts.push(`movimientos_fin: ${blockers.movimientos_financieros}`);
+          if (blockers.movimientos_dinero) detailsParts.push(`movimientos_dinero: ${blockers.movimientos_dinero}`);
+          if (blockers.pagos) detailsParts.push(`pagos: ${blockers.pagos}`);
+          if (blockers.horas_trabajo) detailsParts.push(`horas_trabajo: ${blockers.horas_trabajo}`);
+
+          return res.status(409).json({
+            error: `No se pudo eliminar en cascada: aún hay dependencias (${detailsParts.join(', ') || 'desconocidas'}).`,
+            blockers,
+            cleanup_attempted: true,
+            details: String(e?.message ?? e),
+          });
+        }
+        throw e;
+      }
+    }
+
+    const { data: deleted, error } = await db
       .from('cursos')
       .delete()
-      .eq('id', req.params.id);
-    
-    if (error) throw error;
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      if (isForeignKeyViolation(error)) {
+        const blockers = await getCursoDeleteBlockers(db, id);
+        const hasKnownBlockers = Object.keys(blockers).length > 0;
+        const detailsParts = [];
+        if (blockers.matriculas_grupo) detailsParts.push(`grupos: ${blockers.matriculas_grupo}`);
+        if (blockers.matriculas) detailsParts.push(`matrículas: ${blockers.matriculas}`);
+        if (blockers.clases) detailsParts.push(`clases: ${blockers.clases}`);
+        if (blockers.sesiones_clases) detailsParts.push(`sesiones: ${blockers.sesiones_clases}`);
+        if (blockers.movimientos_financieros) detailsParts.push(`movimientos_fin: ${blockers.movimientos_financieros}`);
+        if (blockers.movimientos_dinero) detailsParts.push(`movimientos_dinero: ${blockers.movimientos_dinero}`);
+        if (blockers.pagos) detailsParts.push(`pagos: ${blockers.pagos}`);
+        if (blockers.horas_trabajo) detailsParts.push(`horas_trabajo: ${blockers.horas_trabajo}`);
+
+        return res.status(409).json({
+          error: hasKnownBlockers
+            ? `No se puede eliminar el curso porque está en uso (${detailsParts.join(', ')}). Elimina esos registros primero o inactiva el curso.`
+            : 'No se puede eliminar el curso porque está siendo usado en otros registros. Elimina primero los registros relacionados o inactiva el curso.',
+          blockers,
+          cleanup_attempted: cascade,
+          details: error.message,
+        });
+      }
+      throw error;
+    }
+
+    if (!deleted) return res.status(404).json({ error: 'Curso no encontrado' });
     res.json({ message: 'Curso eliminado correctamente' });
   } catch (error) {
     res.status(500).json({ error: error.message });

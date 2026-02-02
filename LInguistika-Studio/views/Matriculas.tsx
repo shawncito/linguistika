@@ -27,6 +27,12 @@ const Matriculas: React.FC = () => {
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [cursos, setCursos] = useState<Curso[]>([]);
   const [tutores, setTutores] = useState<Tutor[]>([]);
+  const [bulkGrupos, setBulkGrupos] = useState<any[]>([]);
+  const [bulkGrupoDetalle, setBulkGrupoDetalle] = useState<any | null>(null);
+  const [bulkGrupoDetalleLoading, setBulkGrupoDetalleLoading] = useState(false);
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkConfirmLoading, setBulkConfirmLoading] = useState(false);
+  const [bulkConfirmPayload, setBulkConfirmPayload] = useState<{ bulkId: string; grupoNombre: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
     const [viewMode, setViewMode] = useState<'tabla' | 'tarjetas'>('tarjetas');
@@ -42,27 +48,62 @@ const Matriculas: React.FC = () => {
     tutor_id: 0,
     es_grupo: false,
     grupo_nombre: '' as string | '',
-    estudiante_ids: [] as number[]
+    estudiante_ids: [] as number[],
+    grupo_origen: 'manual' as 'manual' | 'excel',
+    bulk_grupo_id: '' as string,
   });
 
   const loadData = async () => {
     setLoading(true);
-    const [m, e, c, t] = await Promise.all([
+    const [m, e, c, t, bg] = await Promise.all([
       api.matriculas.getAll(),
       api.estudiantes.getAll(),
       api.cursos.getAll(),
-      api.tutores.getAll()
+      api.tutores.getAll(),
+      api.bulk.listGrupos().catch(() => []),
     ]);
     setMatriculas(m);
     setEstudiantes(e);
     setCursos(c);
     setTutores(t);
+    setBulkGrupos(bg as any);
     setLoading(false);
   };
 
   useEffect(() => {
     loadData();
   }, []);
+
+  // Cargar detalle del grupo importado seleccionado (para previsualización)
+  useEffect(() => {
+    const id = String(formData.bulk_grupo_id || '').trim();
+    if (!showModal || !formData.es_grupo || formData.grupo_origen !== 'excel' || !id) {
+      setBulkGrupoDetalle(null);
+      setBulkGrupoDetalleLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setBulkGrupoDetalleLoading(true);
+    api.bulk
+      .getGrupo(id)
+      .then((data) => {
+        if (cancelled) return;
+        setBulkGrupoDetalle(data);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setBulkGrupoDetalle(null);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setBulkGrupoDetalleLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showModal, formData.es_grupo, formData.grupo_origen, formData.bulk_grupo_id]);
 
   // Suscripción en tiempo real a matrículas y entidades relacionadas
   useEffect(() => {
@@ -96,6 +137,34 @@ const Matriculas: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Modo: crear matrícula desde grupo existente
+    if (formData.es_grupo && formData.grupo_origen === 'excel') {
+      if (!formData.bulk_grupo_id) return alert('Selecciona un grupo importado.');
+
+      // Mini-confirm antes de crear
+      if (!bulkConfirmOpen) {
+        setBulkConfirmPayload({
+          bulkId: String(formData.bulk_grupo_id),
+          grupoNombre: (formData.grupo_nombre || null) ? String(formData.grupo_nombre).trim() : null,
+        });
+        setBulkConfirmOpen(true);
+        return;
+      }
+
+      try {
+        setBulkConfirmLoading(true);
+        await api.matriculas.createFromBulkGrupo(formData.bulk_grupo_id, formData.grupo_nombre || null);
+        resetForm();
+        loadData();
+        return;
+      } catch (error) {
+        setErrors({ submit: getErrorMessage(error) });
+        return;
+      } finally {
+        setBulkConfirmLoading(false);
+      }
+    }
     
     // Obtener tutor_id del curso seleccionado
     const cursoSeleccionado = cursos.find(c => c.id === formData.curso_id);
@@ -171,7 +240,9 @@ const Matriculas: React.FC = () => {
       tutor_id: matricula.tutor_id,
       es_grupo: matricula.es_grupo,
       grupo_nombre: matricula.grupo_nombre || '',
-      estudiante_ids: []
+      estudiante_ids: [],
+      grupo_origen: 'manual',
+      bulk_grupo_id: '',
     });
     setShowModal(true);
   };
@@ -189,7 +260,19 @@ const Matriculas: React.FC = () => {
 
   const resetForm = () => {
     setEditingId(null);
-    setFormData({ estudiante_id: 0, curso_id: 0, tutor_id: 0, es_grupo: false, grupo_nombre: '', estudiante_ids: [] });
+    setFormData({
+      estudiante_id: 0,
+      curso_id: 0,
+      tutor_id: 0,
+      es_grupo: false,
+      grupo_nombre: '',
+      estudiante_ids: [],
+      grupo_origen: 'manual',
+      bulk_grupo_id: '',
+    });
+    setBulkConfirmOpen(false);
+    setBulkConfirmLoading(false);
+    setBulkConfirmPayload(null);
     setShowModal(false);
   };
 
@@ -794,6 +877,56 @@ const Matriculas: React.FC = () => {
                         placeholder="Ej: Grupo A1 Nocturno"
                       />
                     </div>
+
+                    <div className="md:col-span-2">
+                      <Label>Origen del grupo</Label>
+                      <Select
+                        value={formData.grupo_origen}
+                        onChange={(e) => {
+                          const next = e.target.value as 'manual' | 'excel';
+                          setFormData(prev => ({
+                            ...prev,
+                            grupo_origen: next,
+                            estudiante_ids: next === 'manual' ? prev.estudiante_ids : [],
+                            bulk_grupo_id: next === 'excel' ? prev.bulk_grupo_id : '',
+                          }));
+                        }}
+                        className="mt-2"
+                      >
+                        <option value="manual">Seleccionar alumnos manualmente</option>
+                        <option value="excel">Usar grupo existente</option>
+                      </Select>
+                    </div>
+
+                    {formData.grupo_origen === 'excel' && (
+                      <div className="md:col-span-2">
+                        <Label>Grupo *</Label>
+                        <Select
+                          value={formData.bulk_grupo_id}
+                          onChange={(e) => {
+                            const id = e.target.value;
+                            const g = bulkGrupos.find(bg => String(bg.id) === String(id));
+                            setFormData(prev => ({
+                              ...prev,
+                              bulk_grupo_id: id,
+                              curso_id: g?.curso_id ? Number(g.curso_id) : prev.curso_id,
+                              tutor_id: g?.tutor_id ? Number(g.tutor_id) : prev.tutor_id,
+                            }));
+                          }}
+                          className="mt-2"
+                        >
+                          <option value="">Selecciona un grupo...</option>
+                          {bulkGrupos.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.nombre_grupo} ({g.linked_count ?? 0} estudiantes) - {g.curso_nombre ?? 'Sin curso'}
+                            </option>
+                          ))}
+                        </Select>
+                        <p className="text-xs text-slate-300 mt-2">
+                          Al matricular, los estudiantes del grupo se convertirán a estudiantes normales (si aún no existen) y se creará una matrícula grupal.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -815,6 +948,61 @@ const Matriculas: React.FC = () => {
                         </option>
                       ))}
                     </Select>
+                  </div>
+                ) : formData.grupo_origen === 'excel' ? (
+                  <div className="p-4 border border-white/10 rounded-xl bg-white/5">
+                    <Label>Estudiantes del grupo</Label>
+                    <p className="text-sm text-slate-200 mt-2">Se usarán los estudiantes adjuntos al grupo seleccionado.</p>
+
+                    {!formData.bulk_grupo_id ? (
+                      <p className="text-sm text-slate-300 mt-2">Selecciona un grupo arriba.</p>
+                    ) : bulkGrupoDetalleLoading ? (
+                      <p className="text-sm text-slate-300 mt-2">Cargando previsualización…</p>
+                    ) : !bulkGrupoDetalle ? (
+                      <p className="text-sm text-slate-300 mt-2">No se pudo cargar el detalle del grupo.</p>
+                    ) : (
+                      <div className="mt-3">
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <Badge className="bg-white/10 text-white border border-white/10">
+                            {bulkGrupoDetalle?.grupo?.linked_count ?? (bulkGrupoDetalle?.estudiantes?.length ?? 0)} estudiantes
+                          </Badge>
+                          {bulkGrupoDetalle?.grupo?.curso_nombre && (
+                            <Badge className="bg-white/10 text-white border border-white/10">
+                              Curso: {bulkGrupoDetalle.grupo.curso_nombre}
+                            </Badge>
+                          )}
+                          {bulkGrupoDetalle?.grupo?.tutor_nombre && (
+                            <Badge className="bg-white/10 text-white border border-white/10">
+                              Tutor: {bulkGrupoDetalle.grupo.tutor_nombre}
+                            </Badge>
+                          )}
+                        </div>
+
+                        {(() => {
+                          const students = (bulkGrupoDetalle?.estudiantes ?? []) as any[];
+                          void students;
+                          return null;
+                        })()}
+
+                        <div className="mt-3 max-h-64 overflow-auto p-2 border border-white/10 rounded-xl bg-white/5">
+                          {(bulkGrupoDetalle?.estudiantes ?? []).length === 0 ? (
+                            <p className="text-sm text-slate-300">Este grupo no tiene estudiantes adjuntos.</p>
+                          ) : (
+                            (bulkGrupoDetalle?.estudiantes ?? []).map((s: any) => (
+                              <div key={s.id} className="flex items-center justify-between gap-3 p-2 rounded-lg hover:bg-white/10">
+                                <div>
+                                  <div className="text-sm font-bold text-white">{s.nombre}</div>
+                                  <div className="text-xs text-slate-300">
+                                    {(s.correo || '—')} · {(s.telefono || '—')}
+                                  </div>
+                                </div>
+                                <Badge className="bg-white/10 text-white border border-white/10">OK</Badge>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div>
@@ -850,6 +1038,7 @@ const Matriculas: React.FC = () => {
                     value={formData.curso_id} 
                     onChange={(e) => handleSelectChange('curso_id', e.target.value)}
                     className="mt-2"
+                    disabled={formData.es_grupo && formData.grupo_origen === 'excel'}
                   >
                     <option value={0}>Selecciona un curso...</option>
                     {cursos.filter(c => c.estado === 1).map(c => (
@@ -890,13 +1079,81 @@ const Matriculas: React.FC = () => {
                 <Button
                   type="submit"
                   variant="primary"
-                  disabled={!formData.curso_id || (formData.es_grupo ? formData.estudiante_ids.length === 0 : !formData.estudiante_id)}
+                  disabled={
+                    !formData.curso_id ||
+                    (!formData.es_grupo
+                      ? !formData.estudiante_id
+                      : (formData.grupo_origen === 'manual'
+                        ? formData.estudiante_ids.length === 0
+                        : (!formData.bulk_grupo_id || bulkGrupoDetalleLoading || ((bulkGrupoDetalle?.estudiantes ?? []).length === 0))))
+                  }
                   className="px-8 bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026] font-bold disabled:opacity-50"
                 >
-                  {editingId ? 'Actualizar Matrícula' : 'Matricular Alumno'}
+                  {editingId ? 'Actualizar Matrícula' : (formData.es_grupo ? 'Crear Matrícula de Grupo' : 'Matricular Alumno')}
                 </Button>
               </div>
             </form>
+
+            {/* Mini-confirm para grupo importado */}
+            {bulkConfirmOpen && formData.es_grupo && formData.grupo_origen === 'excel' && (
+              <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4">
+                <Card className="w-full max-w-lg bg-[#0F2445] border border-white/10 shadow-2xl">
+                  <div className="p-6 border-b border-white/10 bg-white/5">
+                    <h3 className="text-lg font-black text-white">Confirmar matrícula de grupo</h3>
+                    <p className="text-sm text-slate-300 mt-1">Revisa el resumen antes de crear la matrícula.</p>
+                  </div>
+                  <div className="p-6 space-y-4">
+                    {(() => {
+                      const selected = bulkGrupos.find(g => String(g.id) === String(formData.bulk_grupo_id));
+                      const detalle = bulkGrupoDetalle?.grupo;
+                      const estudiantesGrupo = (bulkGrupoDetalle?.estudiantes ?? []) as any[];
+                      const count = estudiantesGrupo.length;
+                      return (
+                        <div className="space-y-2 text-sm text-slate-200">
+                          <div><span className="text-slate-400">Grupo:</span> <span className="font-bold text-white">{formData.grupo_nombre || detalle?.nombre_grupo || selected?.nombre_grupo || '—'}</span></div>
+                          <div><span className="text-slate-400">Curso:</span> <span className="font-bold text-white">{detalle?.curso_nombre || selected?.curso_nombre || '—'}</span></div>
+                          <div><span className="text-slate-400">Tutor:</span> <span className="font-bold text-white">{detalle?.tutor_nombre || selected?.tutor_nombre || '—'}</span></div>
+                          <div><span className="text-slate-400">Estudiantes:</span> <span className="font-bold text-white">{count}</span></div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div className="p-6 border-t border-white/10 flex gap-3 justify-end">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        setBulkConfirmOpen(false);
+                        setBulkConfirmPayload(null);
+                      }}
+                    >
+                      Volver
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={bulkConfirmLoading}
+                      className="bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026] font-bold disabled:opacity-60"
+                      onClick={async () => {
+                        if (!bulkConfirmPayload?.bulkId) return;
+                        try {
+                          setBulkConfirmLoading(true);
+                          await api.matriculas.createFromBulkGrupo(bulkConfirmPayload.bulkId, bulkConfirmPayload.grupoNombre ?? null);
+                          resetForm();
+                          loadData();
+                        } catch (error) {
+                          setErrors({ submit: getErrorMessage(error) });
+                        } finally {
+                          setBulkConfirmLoading(false);
+                        }
+                      }}
+                    >
+                      {bulkConfirmLoading ? 'Creando…' : 'Confirmar y crear'}
+                    </Button>
+                  </div>
+                </Card>
+              </div>
+            )}
           </Card>
         </div>
       )}

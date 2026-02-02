@@ -238,8 +238,43 @@ const Cursos: React.FC = () => {
 
   const handleDelete = async (id: number) => {
     if (window.confirm('¿Estás seguro de eliminar este curso?')) {
-      await api.cursos.delete(id);
-      loadData();
+      try {
+        await api.cursos.delete(id);
+        loadData();
+      } catch (e: any) {
+        const data = e?.response?.data;
+        const blockers = data?.blockers;
+        const parts: string[] = [];
+        if (blockers?.matriculas_grupo) parts.push(`Grupos: ${blockers.matriculas_grupo}`);
+        if (blockers?.matriculas) parts.push(`Matrículas: ${blockers.matriculas}`);
+        if (blockers?.clases) parts.push(`Clases: ${blockers.clases}`);
+        if (blockers?.movimientos_financieros) parts.push(`Movimientos: ${blockers.movimientos_financieros}`);
+
+        const msg =
+          data?.error
+          || data?.message
+          || (parts.length ? `No se puede eliminar. ${parts.join(' · ')}` : '')
+          || e?.message
+          || 'No se pudo eliminar el curso';
+
+        // Si el backend reporta dependencias, ofrecer borrado en cascada (grupos + matrículas)
+        if ((e?.response?.status === 409) && blockers && (blockers.matriculas_grupo || blockers.matriculas)) {
+          const confirmMsg = `${msg}\n\n¿Deseas eliminar automáticamente esas dependencias (grupos/matrículas) y luego borrar el curso? Esto es PERMANENTE.`;
+          if (window.confirm(confirmMsg)) {
+            try {
+              await api.cursos.deleteCascade(id);
+              loadData();
+              return;
+            } catch (e2: any) {
+              const data2 = e2?.response?.data;
+              window.alert(data2?.error || data2?.message || e2?.message || 'No se pudo eliminar el curso con cascada');
+              return;
+            }
+          }
+        }
+
+        window.alert(msg);
+      }
     }
   };
 
