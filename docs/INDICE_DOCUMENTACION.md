@@ -11,6 +11,7 @@ Guía completa de toda la documentación disponible en el proyecto.
 2. **[guias/00_COMIENZA_AQUI.md](guias/00_COMIENZA_AQUI.md)** - Primer paso recomendado
 3. **[guias/QUICKSTART.md](guias/QUICKSTART.md)** - Instalación rápida
 4. **[guias/GUIA_WINDOWS.md](guias/GUIA_WINDOWS.md)** - Instalación específica para Windows
+5. **[guias/RUNBOOK_DEBUG_PRODUCCION.md](guias/RUNBOOK_DEBUG_PRODUCCION.md)** - Debug y checklist de producción
 
 ---
 
@@ -37,4 +38,4 @@ Guía completa de toda la documentación disponible en el proyecto.
 
 ---
 
-**Última actualización:** 19 Enero 2026
+**Última actualización:** 5 Febrero 2026

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { api } from '../services/api';
 import { supabaseClient } from '../lib/supabaseClient';
 import { Curso, Tutor } from '../types';
@@ -14,6 +14,55 @@ const NIVELES = ['None', 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 const getErrorMessage = (error: any) =>
   error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Error al guardar curso';
 
+type BulkCursosResult = {
+  ok: boolean;
+  bulkType?: string;
+  attempted?: number;
+  created?: number;
+  failed?: number;
+  successes?: Array<{ rowNumber: number; id?: number; nombre?: string }>;
+  failures?: Array<{ rowNumber: number; nombre?: string | null; error: string }>;
+};
+
+const formatCurso409 = (error: any): Record<string, string> => {
+  const data = error?.response?.data ?? {};
+  const code = String(data?.code ?? '').trim();
+
+  if (code === 'TUTOR_NOT_APTO') {
+    const detail = Array.isArray(data?.details) ? data.details.join(' ') : '';
+    return {
+      submit: `⚠️ TUTOR NO APTO: El tutor seleccionado no puede impartir el nivel del curso. ${detail}`.trim(),
+      tutor: detail || 'El tutor no es apto para este nivel.'
+    };
+  }
+
+  if (code === 'TUTOR_SCHEDULE_INCOMPATIBLE') {
+    const detailList = Array.isArray(data?.details) ? data.details : [];
+    const detail = detailList.length ? detailList.join(' ') : '';
+    return {
+      submit: `⚠️ HORARIO INCOMPATIBLE: El tutor no cubre todos los días/horas del curso. ${detail}`.trim(),
+      tutor: detail || 'Horarios incompatibles'
+    };
+  }
+
+  if (code === 'TUTOR_SCHEDULE_CONFLICT') {
+    const conflicts = Array.isArray(data?.conflicts) ? data.conflicts : [];
+    const first = conflicts[0];
+    const firstName = first?.curso_nombre ? `"${first.curso_nombre}"` : 'otro curso';
+    const overlap = first?.overlaps?.[0];
+    const overlapMsg = overlap?.dia && overlap?.a?.hora_inicio && overlap?.a?.hora_fin
+      ? `${overlap.dia} ${overlap.a.hora_inicio}-${overlap.a.hora_fin}`
+      : '';
+    return {
+      submit: `⚠️ CHOQUE DE HORARIO: El tutor ya tiene ${firstName} en esa franja${overlapMsg ? ` (${overlapMsg})` : ''}. Ajusta el horario o elige otro tutor.`,
+      tutor: 'Choque de horario con otro curso'
+    };
+  }
+
+  const fallback = data?.error || data?.message || getErrorMessage(error);
+  return { submit: String(fallback) };
+};
+
 const Cursos: React.FC = () => {
   const [cursos, setCursos] = useState<Curso[]>([]);
   const [tutores, setTutores] = useState<Tutor[]>([]);
@@ -27,6 +76,7 @@ const Cursos: React.FC = () => {
     descripcion: '',
     nivel: 'None',
     tipo_clase: 'grupal',
+    tipo_pago: 'sesion',
     max_estudiantes: 10,
     dias: [] as string[],
     dias_schedule: {} as Record<string, {
@@ -49,6 +99,11 @@ const Cursos: React.FC = () => {
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<'tabla' | 'tarjetas'>('tarjetas');
   const [nivelFiltro, setNivelFiltro] = useState('');
+
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkCursosResult | null>(null);
+  const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Función para calcular duración en horas
   const calcularDuracionHoras = (horaInicio: string, horaFin: string): number => {
@@ -162,6 +217,7 @@ const Cursos: React.FC = () => {
         descripcion: formData.descripcion.trim(),
         nivel: formData.nivel,
         tipo_clase: formData.tipo_clase,
+        tipo_pago: formData.tipo_pago,
         max_estudiantes: formData.tipo_clase === 'tutoria' ? null : formData.max_estudiantes,
         dias: formData.dias,
         dias_schedule: formData.dias_schedule,
@@ -183,15 +239,47 @@ const Cursos: React.FC = () => {
       resetForm();
       loadData();
     } catch (error: any) {
-      // Manejar error de conflicto de horarios
-      if (error.response?.status === 409) {
-        setErrors({ 
-          submit: '⚠️ CONFLICTO DE HORARIOS: El tutor seleccionado no está disponible en los días y horarios del curso. Por favor, selecciona otro tutor o ajusta el horario del curso.',
-          tutor: error.response?.data?.details?.join(', ') || 'Horarios incompatibles'
-        });
-      } else {
-        setErrors({ submit: getErrorMessage(error) });
+      if (error?.response?.status === 409) {
+        setErrors(formatCurso409(error));
+        return;
       }
+      setErrors({ submit: getErrorMessage(error) });
+    }
+  };
+
+  const downloadCursosTemplate = async () => {
+    try {
+      const blob = await api.bulk.downloadTemplate('cursos_bulk');
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'template_cursos_bulk.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      window.alert(getErrorMessage(e));
+    }
+  };
+
+  const uploadCursosBulk = async () => {
+    if (!bulkFile) {
+      window.alert('Selecciona un archivo .xlsx');
+      return;
+    }
+    setBulkUploading(true);
+    setBulkResult(null);
+    try {
+      const res = await api.bulk.uploadExcel(bulkFile);
+      setBulkResult(res);
+      if (res?.created > 0) {
+        loadData();
+      }
+    } catch (e: any) {
+      setBulkResult({ ok: false, failures: [{ rowNumber: 0, nombre: null, error: getErrorMessage(e) }] });
+    } finally {
+      setBulkUploading(false);
     }
   };
 
@@ -202,6 +290,7 @@ const Cursos: React.FC = () => {
       descripcion: '',
       nivel: 'None',
       tipo_clase: 'grupal',
+      tipo_pago: 'sesion',
       max_estudiantes: 10,
       dias: [],
       dias_schedule: {},
@@ -222,6 +311,7 @@ const Cursos: React.FC = () => {
       descripcion: curso.descripcion || '',
       nivel: curso.nivel || 'None',
       tipo_clase: curso.tipo_clase || 'grupal',
+      tipo_pago: curso.tipo_pago || 'sesion',
       max_estudiantes: curso.max_estudiantes || 10,
       dias: Array.isArray(curso.dias) ? curso.dias : [],
       dias_turno: curso.dias_turno || {},
@@ -351,6 +441,85 @@ const Cursos: React.FC = () => {
                 <Layers className="w-4 h-4" /> Tarjetas
               </Button>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-white/10">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BookOpen className="w-5 h-5" style={{ color: '#FFC800' }} /> Carga masiva
+            </CardTitle>
+            <CardDescription>Descarga el template y sube cursos en lote</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex gap-2">
+              <Button size="sm" className="font-bold" onClick={downloadCursosTemplate}>
+                Descargar template
+              </Button>
+              <Button
+                size="sm"
+                className="font-bold bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10"
+                onClick={() => bulkFileInputRef.current?.click()}
+              >
+                Elegir archivo
+              </Button>
+            </div>
+
+            <input
+              ref={bulkFileInputRef}
+              type="file"
+              accept=".xlsx"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                setBulkFile(f);
+                setBulkResult(null);
+              }}
+            />
+
+            <div className="text-xs text-slate-300">
+              {bulkFile ? `Archivo: ${bulkFile.name}` : 'Ningún archivo seleccionado.'}
+            </div>
+
+            <Button
+              size="sm"
+              className="w-full font-bold"
+              disabled={!bulkFile || bulkUploading}
+              onClick={uploadCursosBulk}
+            >
+              {bulkUploading ? 'Procesando…' : 'Subir y procesar'}
+            </Button>
+
+            {bulkResult && (
+              <div className="mt-2 rounded-xl border border-white/10 bg-[#0F2445] p-3 space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-bold text-white">Resultado</span>
+                  <span className="text-slate-300">{bulkResult?.bulkType ?? ''}</span>
+                </div>
+                {'attempted' in bulkResult && (
+                  <div className="text-xs text-slate-300">
+                    Filas procesadas: <b className="text-slate-100">{bulkResult.attempted ?? 0}</b> · Creadas: <b className="text-slate-100">{bulkResult.created ?? 0}</b> · Fallidas: <b className="text-slate-100">{bulkResult.failed ?? 0}</b>
+                  </div>
+                )}
+
+                {(bulkResult.failures?.length ?? 0) > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-xs font-bold text-[#FFC800]">Errores (se omitieron esas filas)</div>
+                    <ul className="text-xs text-slate-200 space-y-1 max-h-40 overflow-auto pr-1">
+                      {(bulkResult.failures ?? []).slice(0, 20).map((f, idx) => (
+                        <li key={`${f.rowNumber}-${idx}`} className="border border-white/10 rounded-lg p-2 bg-black/10">
+                          <div className="font-bold">Fila {f.rowNumber}{f.nombre ? ` · ${f.nombre}` : ''}</div>
+                          <div className="text-slate-300">{f.error}</div>
+                        </li>
+                      ))}
+                    </ul>
+                    {(bulkResult.failures ?? []).length > 20 && (
+                      <div className="text-[11px] text-slate-400">Mostrando 20 de {(bulkResult.failures ?? []).length} errores.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -754,6 +923,22 @@ const Cursos: React.FC = () => {
               {/* Costos del Curso */}
               <div>
                 <Label className="text-lg font-semibold">💰 Costos</Label>
+                <div className="mt-3">
+                  <Label>Tipo de pago *</Label>
+                  <Select
+                    value={formData.tipo_pago}
+                    onChange={(e) => setFormData(prev => ({ ...prev, tipo_pago: e.target.value as any }))}
+                    className="bg-slate-50 border-slate-200"
+                  >
+                    <option value="sesion">Por sesión (se registra al marcar “dada”)</option>
+                    <option value="mensual">Mensual (se genera en cierre mensual)</option>
+                  </Select>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {formData.tipo_pago === 'mensual'
+                      ? 'En “mensual” los movimientos se generan cuando se ejecuta el cierre mensual.'
+                      : 'En “por sesión” se generan movimientos al marcar cada sesión como dada.'}
+                  </p>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
                   <div>
                     <Label>Costo del Curso (₡) *</Label>
@@ -861,7 +1046,7 @@ const Cursos: React.FC = () => {
         {cursosFiltrados.map((curso) => (
           <Card 
             key={curso.id} 
-            className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30"
+            className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30 flex flex-col h-full min-h-[560px]"
           >
             <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-[#FFC800] to-[#00AEEF] opacity-60" />
             
@@ -932,23 +1117,12 @@ const Cursos: React.FC = () => {
             </CardHeader>
 
             {curso.descripcion && (
-              <div className="px-6 mb-4">
+              <div className="px-6 mb-4 flex-shrink-0">
                 <p className="text-sm text-slate-300 line-clamp-2">{curso.descripcion}</p>
               </div>
             )}
 
-            <div className="px-6 space-y-4 pb-6">
-              <Button
-                size="sm"
-                onClick={() => toggleEstado(curso)}
-                className={`w-full gap-2 font-bold border ${curso.estado === 1 
-                  ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50' 
-                  : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
-              >
-                {curso.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                {curso.estado === 1 ? 'Activo' : 'Inactivo'}
-              </Button>
-
+            <div className="px-6 pb-6 flex-1 flex flex-col gap-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-slate-300">
                   <UsersIcon className="w-4 h-4 text-cyan-300 flex-shrink-0" />
@@ -1002,6 +1176,19 @@ const Cursos: React.FC = () => {
                   })}
                 </div>
               )}
+
+              <div className="mt-auto">
+                <Button
+                  size="sm"
+                  onClick={() => toggleEstado(curso)}
+                  className={`w-full gap-2 font-bold border ${curso.estado === 1 
+                    ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50' 
+                    : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+                >
+                  {curso.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                  {curso.estado === 1 ? 'Activo' : 'Inactivo'}
+                </Button>
+              </div>
             </div>
           </Card>
         ))}

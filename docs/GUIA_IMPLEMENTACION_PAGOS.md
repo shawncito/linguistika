@@ -1,5 +1,28 @@
 # 🚀 Guía de Implementación - Fases Completadas y Pendientes
 
+## 🧾 Actualización (rama `pago`): Liquidación desde `movimientos_dinero`
+
+En la versión actual, el flujo primordial de pagos se apoya en lo que ya genera el sistema al completar sesiones:
+- `movimientos_dinero.tipo = 'pago_tutor_pendiente'` (queda en `estado = 'pendiente'`)
+- La “liquidación” consiste en agrupar esos pendientes por tutor y rango de fechas, crear un registro en `pagos` y marcar los movimientos como `completado`.
+
+### Migraciones nuevas (recomendadas)
+
+1) Vincular movimientos con el pago (evita doble-liquidación):
+- `backend/migrations/004_add_pago_id_to_movimientos_dinero.sql`
+
+2) Guardar el periodo en `pagos` (auditoría por rango):
+- `backend/migrations/004_add_periodo_to_pagos.sql`
+
+Nota: el backend tiene fallback si aún no ejecutas estas migraciones (funciona, pero sin `pago_id`/periodo no hay idempotencia perfecta).
+
+### Endpoints agregados
+
+- `GET /api/pagos/pendientes/resumen?tutor_id=...&fecha_inicio=YYYY-MM-DD&fecha_fin=YYYY-MM-DD`
+  - Devuelve cantidad y total de `pago_tutor_pendiente` en `estado=pendiente`.
+- `POST /api/pagos/liquidar`
+  - Crea un registro en `pagos` y actualiza los movimientos pendientes a `completado`.
+
 ## ✅ COMPLETADO
 
 ### Fase 1A: Remover Tarifa por Hora de Tutores

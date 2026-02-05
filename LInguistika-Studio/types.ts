@@ -25,6 +25,7 @@ export interface Tutor {
   email: string;
   telefono: string;
   especialidad: string;
+  tarifa_por_hora?: number | null;
   color?: string | null;
   horario_preferido?: string | null;
   dias?: string[] | null;
@@ -44,6 +45,7 @@ export interface Curso {
   nivel: string | 'None' | 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
   max_estudiantes?: number | null;
   tipo_clase?: 'grupal' | 'tutoria';
+  tipo_pago?: 'sesion' | 'mensual';
   dias?: string[] | null;
   dias_turno?: Record<string, 'Tarde' | 'Noche'> | null;
   dias_schedule?: Record<string, {
@@ -158,6 +160,8 @@ export interface Pago {
   cantidad_clases?: number;
   monto: number;
   fecha_pago: string;
+  periodo_inicio?: string | null;
+  periodo_fin?: string | null;
   estado: EstadoPago;
   descripcion: string;
   created_at: string;

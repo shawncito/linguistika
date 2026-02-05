@@ -1,4 +1,10 @@
 node_modules/
+.roundtrip-pass.txt
+.roundtrip-state.json
+.roundtrip-comprobante.*
+.roundtrip-*.pdf
+.roundtrip-*.txt
+.roundtrip-*.json
 dist/
 build/
 *.log
@@ -6,6 +12,12 @@ build/
 .env.*
 .env.local
 .env.*.local
+backend/.env
+backend/.env.*
+
+# Permitir plantillas
+!.env.example
+!**/.env.example
 .DS_Store
 .vscode/
 .idea/
@@ -15,6 +27,9 @@ linguistika.db
 
 # Roundtrip local state
 .roundtrip-state.json
+
+# Uploads locales (comprobantes, etc.)
+backend/uploads/
 
 # Desktop/Electron build artifacts
 release/

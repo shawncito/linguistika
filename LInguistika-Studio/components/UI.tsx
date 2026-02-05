@@ -147,12 +147,13 @@ export const Dialog: React.FC<{
   children: React.ReactNode;
   maxWidthClass?: string;
   contentClassName?: string;
-}> = ({ isOpen, onClose, title, children, maxWidthClass = 'max-w-lg', contentClassName = '' }) => {
+  zIndex?: number;
+}> = ({ isOpen, onClose, title, children, maxWidthClass = 'max-w-lg', contentClassName = '', zIndex = 100 }) => {
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity" onClick={onClose} />
-      <div className={`relative z-[101] w-full ${maxWidthClass} bg-[#0F2445] rounded-3xl border border-white/10 shadow-2xl shadow-black/40 animate-in fade-in zoom-in duration-300 ${contentClassName}`}>
+    <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex }}>
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity" style={{ zIndex }} onClick={onClose} />
+      <div className={`relative w-full ${maxWidthClass} bg-[#0F2445] rounded-3xl border border-white/10 shadow-2xl shadow-black/40 animate-in fade-in zoom-in duration-300 ${contentClassName}`} style={{ zIndex: zIndex + 1 }}>
         <div className="flex items-center justify-between p-6 border-b border-white/10">
           <h2 className="text-xl font-bold text-white">{title}</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-2 rounded-full hover:bg-white/10">

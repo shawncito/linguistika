@@ -145,6 +145,11 @@ const Estudiantes: React.FC = () => {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
+  const [bulkPreviewOpen, setBulkPreviewOpen] = useState(false);
+  const [bulkPreviewBusy, setBulkPreviewBusy] = useState(false);
+  const [bulkPreview, setBulkPreview] = useState<any | null>(null);
+  const [bulkPreviewErr, setBulkPreviewErr] = useState<string | null>(null);
+
   const loadData = async () => {
     setLoading(true);
     const [data, bulkData, gruposData] = await Promise.all([
@@ -188,6 +193,26 @@ const Estudiantes: React.FC = () => {
       setBulkMsg('Selecciona un archivo .xlsx');
       return;
     }
+
+    // Primero: previsualización/validación (sin insertar)
+    setBulkMsg(null);
+    setBulkPreviewErr(null);
+    setBulkPreview(null);
+    setBulkPreviewBusy(true);
+    try {
+      const prev = await api.bulk.previewExcel(bulkFile);
+      setBulkPreview(prev);
+      setBulkPreviewOpen(true);
+    } catch (e: any) {
+      setBulkPreviewErr(e?.response?.data?.error || e?.message || 'No se pudo previsualizar el archivo');
+      setBulkPreviewOpen(true);
+    } finally {
+      setBulkPreviewBusy(false);
+    }
+  };
+
+  const confirmImportBulkExcel = async () => {
+    if (!bulkFile) return;
     setBulkMsg(null);
     setBulkBusy(true);
     try {
@@ -203,8 +228,10 @@ const Estudiantes: React.FC = () => {
       if (linked) parts.push(`Vinculados a grupo: ${linked}.`);
       parts.push('Revisa la bandeja “Grupos” para organizarlos.');
       setBulkMsg(parts.join(' '));
+
+      setBulkPreviewOpen(false);
       setBulkFile(null);
-      // Refrescar bandejas
+
       const [bulkData, gruposData] = await Promise.all([api.bulk.listEstudiantesBulk(), api.bulk.listGrupos()]);
       setBulkEstudiantes(bulkData as any);
       setBulkGrupos(gruposData as any);
@@ -702,8 +729,8 @@ const Estudiantes: React.FC = () => {
     return gid ? (grupoNameById.get(gid) || `Grupo #${gid}`) : 'Sin grupo';
   };
 
-  const StudentCardItem = ({ est }: { est: UnifiedStudent }) => (
-    <Card className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30">
+  const StudentCardItem: React.FC<{ est: UnifiedStudent }> = ({ est }) => (
+    <Card className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30 flex flex-col h-full">
       <div className="absolute top-0 left-0 w-full h-1.5 opacity-80" style={{ backgroundColor: getGradoColor(est.grado) }} />
 
       <CardHeader className="pb-4 border-none">
@@ -785,22 +812,7 @@ const Estudiantes: React.FC = () => {
         </div>
       </CardHeader>
 
-      <div className="px-6 space-y-3 pb-6">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <Button
-            size="sm"
-            onClick={() => {
-              if (est.kind === 'normal') return toggleEstado(est as any);
-              return toggleBulkEstado({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any);
-            }}
-            className={`gap-2 border ${est.estado === 1
-              ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
-              : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
-          >
-            {est.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-            {est.estado === 1 ? 'Activo' : 'Inactivo'}
-          </Button>
-        </div>
+      <CardContent className="px-6 pb-6 flex-1 flex flex-col gap-3">
 
         {est.email && (
           <div className="flex items-center gap-3 text-sm">
@@ -839,7 +851,23 @@ const Estudiantes: React.FC = () => {
             ))}
           </div>
         )}
-      </div>
+
+        <div className="mt-auto pt-2">
+          <Button
+            size="sm"
+            onClick={() => {
+              if (est.kind === 'normal') return toggleEstado(est as any);
+              return toggleBulkEstado({ id: est.id, nombre: est.nombre, correo: est.email ?? null, telefono: est.telefono ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any);
+            }}
+            className={`w-full gap-2 border ${est.estado === 1
+              ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
+              : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+          >
+            {est.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+            {est.estado === 1 ? 'Activo' : 'Inactivo'}
+          </Button>
+        </div>
+      </CardContent>
     </Card>
   );
 
@@ -1897,9 +1925,12 @@ const Estudiantes: React.FC = () => {
                     accept=".xlsx"
                     onChange={(e) => setBulkFile(e.target.files?.[0] ?? null)}
                   />
-                  <Button size="sm" onClick={uploadBulkExcel} disabled={bulkBusy || !bulkFile} className="font-bold">
-                    {bulkBusy ? 'Procesando…' : 'Subir y procesar'}
+                  <Button size="sm" onClick={uploadBulkExcel} disabled={bulkBusy || bulkPreviewBusy || !bulkFile} className="font-bold">
+                    {bulkPreviewBusy ? 'Previsualizando…' : (bulkBusy ? 'Procesando…' : 'Previsualizar')}
                   </Button>
+                  <div className="text-xs text-slate-400 font-semibold">
+                    La importación real se ejecuta solo después de confirmar la previsualización.
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1964,6 +1995,131 @@ const Estudiantes: React.FC = () => {
             </Card>
           )}
         </div>
+      </Dialog>
+
+      <Dialog
+        isOpen={bulkPreviewOpen}
+        onClose={() => setBulkPreviewOpen(false)}
+        title="Previsualización de importación"
+        maxWidthClass="max-w-5xl"
+      >
+        {bulkPreviewErr ? (
+          <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm font-bold text-rose-100">
+            {bulkPreviewErr}
+          </div>
+        ) : null}
+
+        {!bulkPreviewErr && bulkPreview ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="info" className="font-extrabold">{String(bulkPreview.bulkType || 'bulk')}</Badge>
+              {bulkPreview?.warnings?.duplicate_emails_in_file?.length ? (
+                <Badge className="bg-rose-500/15 text-rose-200 border border-rose-400/40 font-extrabold">
+                  Duplicados en Excel: {bulkPreview.warnings.duplicate_emails_in_file.length}
+                </Badge>
+              ) : null}
+              {bulkPreview?.warnings?.duplicate_emails_in_estudiantes?.length ? (
+                <Badge className="bg-rose-500/15 text-rose-200 border border-rose-400/40 font-extrabold">
+                  Ya existen en Estudiantes: {bulkPreview.warnings.duplicate_emails_in_estudiantes.length}
+                </Badge>
+              ) : null}
+              {bulkPreview?.truncated ? (
+                <Badge variant="warning" className="font-extrabold">Vista truncada</Badge>
+              ) : null}
+            </div>
+
+            {/* Preview de grupos (si aplica) */}
+            {bulkPreview?.grupos?.preview ? (
+              <div className="space-y-2">
+                <div className="text-sm font-black text-white uppercase tracking-widest">Grupos</div>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-white/5">
+                      <TableHead>#</TableHead>
+                      <TableHead>Grupo</TableHead>
+                      <TableHead>Curso</TableHead>
+                      <TableHead>Tutor</TableHead>
+                      <TableHead>Validación</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(bulkPreview.grupos.preview || []).slice(0, 20).map((g: any) => {
+                      const hasErr = !!g.curso_error || !!g.tutor_error;
+                      return (
+                        <TableRow key={String(g.rowNumber)}>
+                          <TableCell className="text-slate-300 font-bold">{g.rowNumber}</TableCell>
+                          <TableCell className="font-black text-white">{g.nombre_grupo}</TableCell>
+                          <TableCell className="text-slate-200">{g.curso_ref} {g.curso_id ? <span className="text-slate-400">(#{g.curso_id})</span> : null}</TableCell>
+                          <TableCell className="text-slate-200">{g.tutor_nombre} {g.tutor_id ? <span className="text-slate-400">(#{g.tutor_id})</span> : null}</TableCell>
+                          <TableCell>
+                            {hasErr ? (
+                              <Badge className="bg-rose-500/15 text-rose-200 border border-rose-400/40 font-extrabold">{g.curso_error || g.tutor_error}</Badge>
+                            ) : (
+                              <Badge variant="success" className="font-extrabold">OK</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+                {bulkPreview?.grupos?.errors?.length ? (
+                  <div className="text-xs text-rose-200 font-bold">Errores de parseo: {bulkPreview.grupos.errors.length}</div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Preview de estudiantes */}
+            {bulkPreview?.estudiantes?.preview || bulkPreview?.preview ? (
+              <div className="space-y-2">
+                <div className="text-sm font-black text-white uppercase tracking-widest">Estudiantes</div>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-white/5">
+                      <TableHead>#</TableHead>
+                      <TableHead>Nombre</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Grupo</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(((bulkPreview.estudiantes?.preview ?? bulkPreview.preview) || []) as any[]).slice(0, 20).map((s: any) => (
+                      <TableRow key={String(s.rowNumber)}>
+                        <TableCell className="text-slate-300 font-bold">{s.rowNumber}</TableCell>
+                        <TableCell className="font-black text-white">{s.nombre}</TableCell>
+                        <TableCell className="text-slate-200">{s.correo || '—'}</TableCell>
+                        <TableCell className="text-slate-200">{s.grupo_nombre || '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="flex items-center justify-between gap-3 mt-6">
+          <Button variant="secondary" onClick={() => setBulkPreviewOpen(false)} className="font-bold">Cancelar</Button>
+          <Button
+            variant="primary"
+            onClick={confirmImportBulkExcel}
+            disabled={
+              bulkBusy
+              || !bulkFile
+              || !!bulkPreviewErr
+              || ((bulkPreview?.grupos?.preview || []).some((g: any) => !!g.curso_error || !!g.tutor_error))
+            }
+            className="font-black"
+          >
+            {bulkBusy ? 'Importando…' : 'Confirmar e importar'}
+          </Button>
+        </div>
+
+        {bulkPreview?.grupos?.preview && ((bulkPreview?.grupos?.preview || []).some((g: any) => !!g.curso_error || !!g.tutor_error)) ? (
+          <div className="mt-3 text-xs text-slate-300 font-semibold">
+            Corrige los errores de Curso/Tutor en el Excel para poder importar.
+          </div>
+        ) : null}
       </Dialog>
 
       {/* Modal edición estudiante bulk */}

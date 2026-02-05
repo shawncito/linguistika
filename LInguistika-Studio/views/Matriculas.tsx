@@ -22,6 +22,30 @@ const DIA_A_IDX: Record<string, number> = {
 const getErrorMessage = (error: any) =>
   error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Error al guardar matrícula';
 
+const getBulkGrupoStudents = (bulkGrupoDetalle: any): any[] => {
+  const raw = bulkGrupoDetalle?.estudiantes;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === 'object') {
+    const bulkArr = Array.isArray(raw.bulk) ? raw.bulk : [];
+    const normalesArr = Array.isArray(raw.normales) ? raw.normales : [];
+
+    const normalesMapped = normalesArr.map((n: any) => ({
+      id: `N-${n.id}`,
+      nombre: n.nombre,
+      correo: n.email ?? n.correo ?? null,
+      telefono: n.telefono ?? null,
+      _source: 'normal',
+    }));
+    const bulkMapped = bulkArr.map((b: any) => ({
+      ...b,
+      _source: 'bulk',
+    }));
+    return [...normalesMapped, ...bulkMapped];
+  }
+  return [];
+};
+
 const Matriculas: React.FC = () => {
   const [matriculas, setMatriculas] = useState<Matricula[]>([]);
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
@@ -962,9 +986,12 @@ const Matriculas: React.FC = () => {
                       <p className="text-sm text-slate-300 mt-2">No se pudo cargar el detalle del grupo.</p>
                     ) : (
                       <div className="mt-3">
+                        {(() => {
+                          const bulkStudents = getBulkGrupoStudents(bulkGrupoDetalle);
+                          return (<>
                         <div className="flex flex-wrap gap-2 items-center">
                           <Badge className="bg-white/10 text-white border border-white/10">
-                            {bulkGrupoDetalle?.grupo?.linked_count ?? (bulkGrupoDetalle?.estudiantes?.length ?? 0)} estudiantes
+                            {bulkGrupoDetalle?.grupo?.linked_count ?? bulkStudents.length} estudiantes
                           </Badge>
                           {bulkGrupoDetalle?.grupo?.curso_nombre && (
                             <Badge className="bg-white/10 text-white border border-white/10">
@@ -978,17 +1005,11 @@ const Matriculas: React.FC = () => {
                           )}
                         </div>
 
-                        {(() => {
-                          const students = (bulkGrupoDetalle?.estudiantes ?? []) as any[];
-                          void students;
-                          return null;
-                        })()}
-
                         <div className="mt-3 max-h-64 overflow-auto p-2 border border-white/10 rounded-xl bg-white/5">
-                          {(bulkGrupoDetalle?.estudiantes ?? []).length === 0 ? (
+                          {bulkStudents.length === 0 ? (
                             <p className="text-sm text-slate-300">Este grupo no tiene estudiantes adjuntos.</p>
                           ) : (
-                            (bulkGrupoDetalle?.estudiantes ?? []).map((s: any) => (
+                            bulkStudents.map((s: any) => (
                               <div key={s.id} className="flex items-center justify-between gap-3 p-2 rounded-lg hover:bg-white/10">
                                 <div>
                                   <div className="text-sm font-bold text-white">{s.nombre}</div>
@@ -996,11 +1017,13 @@ const Matriculas: React.FC = () => {
                                     {(s.correo || '—')} · {(s.telefono || '—')}
                                   </div>
                                 </div>
-                                <Badge className="bg-white/10 text-white border border-white/10">OK</Badge>
+                                <Badge className="bg-white/10 text-white border border-white/10">{s._source === 'normal' ? 'Vinculado' : 'Bulk'}</Badge>
                               </div>
                             ))
                           )}
                         </div>
+                          </>);
+                        })()}
                       </div>
                     )}
                   </div>
@@ -1085,7 +1108,7 @@ const Matriculas: React.FC = () => {
                       ? !formData.estudiante_id
                       : (formData.grupo_origen === 'manual'
                         ? formData.estudiante_ids.length === 0
-                        : (!formData.bulk_grupo_id || bulkGrupoDetalleLoading || ((bulkGrupoDetalle?.estudiantes ?? []).length === 0))))
+                        : (!formData.bulk_grupo_id || bulkGrupoDetalleLoading || (getBulkGrupoStudents(bulkGrupoDetalle).length === 0))))
                   }
                   className="px-8 bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026] font-bold disabled:opacity-50"
                 >
@@ -1106,7 +1129,7 @@ const Matriculas: React.FC = () => {
                     {(() => {
                       const selected = bulkGrupos.find(g => String(g.id) === String(formData.bulk_grupo_id));
                       const detalle = bulkGrupoDetalle?.grupo;
-                      const estudiantesGrupo = (bulkGrupoDetalle?.estudiantes ?? []) as any[];
+                      const estudiantesGrupo = getBulkGrupoStudents(bulkGrupoDetalle);
                       const count = estudiantesGrupo.length;
                       return (
                         <div className="space-y-2 text-sm text-slate-200">

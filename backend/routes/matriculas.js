@@ -326,22 +326,38 @@ router.post('/from-bulk-grupo', async (req, res) => {
     if (gErr) throw gErr;
     if (!grupo) return res.status(404).json({ error: 'Grupo no encontrado' });
 
-    const { data: links, error: lErr } = await db
-      .from('estudiantes_en_grupo')
-      .select('estudiante_bulk_id')
-      .eq('matricula_grupo_id', gid);
+    const [{ data: links, error: lErr }, { data: normales, error: nErr }] = await Promise.all([
+      db
+        .from('estudiantes_en_grupo')
+        .select('estudiante_bulk_id')
+        .eq('matricula_grupo_id', gid),
+      // Soporte: estudiantes ya "vinculados" al grupo por columna matricula_grupo_id (si existe)
+      db
+        .from('estudiantes')
+        .select('id, nombre, email, telefono, estado')
+        .eq('matricula_grupo_id', Number(gid)),
+    ]);
+
+    // Si la columna matricula_grupo_id no existe, Supabase devolverá error; degradamos a []
+    if (nErr && !(String(nErr.message || '').toLowerCase().includes('column') && String(nErr.message || '').toLowerCase().includes('matricula_grupo_id'))) {
+      throw nErr;
+    }
     if (lErr) throw lErr;
 
     const bulkIds = (links ?? []).map((x) => x.estudiante_bulk_id).filter(Boolean);
-    if (!bulkIds.length) {
+
+    const { data: bulkStudents, error: bErr } = bulkIds.length
+      ? await db
+          .from('estudiantes_bulk')
+          .select('id, nombre, correo, telefono, estado')
+          .in('id', bulkIds)
+      : { data: [], error: null };
+    if (bErr) throw bErr;
+
+    const normalIds = Array.from(new Set((normales ?? []).map((s) => s?.id).filter(Boolean)));
+    if (!bulkIds.length && !normalIds.length) {
       return res.status(400).json({ error: 'Este grupo no tiene estudiantes adjuntos.' });
     }
-
-    const { data: bulkStudents, error: bErr } = await db
-      .from('estudiantes_bulk')
-      .select('id, nombre, correo, telefono, estado')
-      .in('id', bulkIds);
-    if (bErr) throw bErr;
 
     // Mapear existentes por email/teléfono para evitar duplicados
     const emails = Array.from(new Set((bulkStudents ?? []).map((s) => String(s.correo ?? '').trim()).filter(Boolean)));
@@ -358,6 +374,8 @@ router.post('/from-bulk-grupo', async (req, res) => {
     const phoneToId = new Map((existingByPhone ?? []).map((r) => [String(r.telefono ?? '').trim(), r.id]));
 
     const createdStudentIds = [];
+    // Incluir estudiantes ya vinculados (normales)
+    for (const nid of normalIds) createdStudentIds.push(nid);
     for (const s of bulkStudents ?? []) {
       const email = String(s.correo ?? '').trim();
       const phone = String(s.telefono ?? '').trim();
@@ -392,13 +410,14 @@ router.post('/from-bulk-grupo', async (req, res) => {
       if (estudianteId) createdStudentIds.push(estudianteId);
     }
 
-    if (!createdStudentIds.length) {
+    const uniqueStudentIds = Array.from(new Set(createdStudentIds.filter(Boolean)));
+    if (!uniqueStudentIds.length) {
       return res.status(400).json({ error: 'No se pudieron convertir estudiantes del grupo.' });
     }
 
     const registro = {
       estudiante_id: null,
-      estudiante_ids: createdStudentIds,
+      estudiante_ids: uniqueStudentIds,
       curso_id: grupo.curso_id,
       tutor_id: grupo.tutor_id,
       es_grupo: true,
@@ -424,7 +443,7 @@ router.post('/from-bulk-grupo', async (req, res) => {
     const { data: estRows, error: estErr } = await db
       .from('estudiantes')
       .select('id, nombre')
-      .in('id', createdStudentIds);
+      .in('id', uniqueStudentIds);
     if (estErr) throw estErr;
 
     return res.status(201).json({

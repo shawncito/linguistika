@@ -436,7 +436,7 @@ const Tutores: React.FC = () => {
                 {tutoresFiltrados.map((tutor) => (
                   <Card
                     key={tutor.id}
-                    className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30"
+                    className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30 flex flex-col h-full"
                   >
                     <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-[#FFC800] to-[#00AEEF] opacity-80" />
 
@@ -492,75 +492,79 @@ const Tutores: React.FC = () => {
                       </div>
                     </CardHeader>
 
-                    <div className="px-6 space-y-4 pb-6">
-                      <Button
-                        size="sm"
-                        onClick={() => toggleEstado(tutor)}
-                        className={`w-full gap-2 font-bold border ${tutor.estado === 1
-                          ? "bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50"
-                          : "bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50"}`}
-                      >
-                        {tutor.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                        {tutor.estado === 1 ? "Activo" : "Inactivo"}
-                      </Button>
+                    <CardContent className="px-6 pb-6 flex-1 flex flex-col gap-4">
+                      <div className="flex-1 space-y-4">
+                        {tutor.email && (
+                          <div className="flex items-center gap-3 text-sm">
+                            <Mail className="w-4 h-4 text-slate-400" />
+                            <p className="text-slate-200 font-semibold truncate">{tutor.email}</p>
+                          </div>
+                        )}
 
-                      {tutor.email && (
-                        <div className="flex items-center gap-3 text-sm">
-                          <Mail className="w-4 h-4 text-slate-400" />
-                          <p className="text-slate-600 font-medium truncate">{tutor.email}</p>
-                        </div>
-                      )}
+                        {tutor.telefono && (
+                          <div className="flex items-center gap-3 text-sm">
+                            <Phone className="w-4 h-4 text-slate-400" />
+                            <p className="text-slate-200 font-semibold">{tutor.telefono}</p>
+                          </div>
+                        )}
 
-                      {tutor.telefono && (
-                        <div className="flex items-center gap-3 text-sm">
-                          <Phone className="w-4 h-4 text-slate-400" />
-                          <p className="text-slate-600 font-medium">{tutor.telefono}</p>
-                        </div>
-                      )}
+                        {tutor.dias_horarios && Object.keys(tutor.dias_horarios).length > 0 && (
+                          <div className="pt-4 border-t border-white/10">
+                            <p className="text-xs font-black text-slate-400 uppercase mb-2 tracking-widest">Horario</p>
+                            <div className="space-y-2">
+                              {sortDiaEntries(tutor.dias_horarios || {}).map(([dia, horario]: [string, any]) => (
+                                <div key={dia} className="text-xs bg-white/5 text-slate-200 px-3 py-2 rounded-lg border border-white/10 font-semibold flex justify-between">
+                                  <span>{dia.slice(0, 3)}</span>
+                                  <span>{horario.hora_inicio} - {horario.hora_fin}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
 
-                      {tutor.telefono && (
+                        {(tutor.es_especializado || (tutor.niveles_apto && (tutor.niveles_apto as any[]).length > 0)) && (
+                          <div className="pt-4 border-t border-white/10">
+                            <p className="text-xs font-black text-slate-400 uppercase mb-2 tracking-widest">Especializacion</p>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {tutor.es_especializado && (
+                                <Badge variant="success">Especializado</Badge>
+                              )}
+                              {Array.isArray(tutor.niveles_apto) && tutor.niveles_apto.map((n) => (
+                                <span key={n} className="text-xs bg-emerald-500/15 text-emerald-200 px-3 py-1 rounded-full border border-emerald-400/30 font-semibold">
+                                  Nivel {n}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-auto space-y-3 pt-2">
                         <Button
                           size="sm"
-                          className="w-full bg-[#25D366]/20 text-[#25D366] border border-[#25D366]/40 hover:bg-[#25D366]/30"
-                          onClick={() => {
-                            const url = toWhatsAppUrl(tutor.telefono);
-                            if (url) window.open(url, "_blank");
-                          }}
+                          onClick={() => toggleEstado(tutor)}
+                          className={`w-full gap-2 font-bold border ${tutor.estado === 1
+                            ? "bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50"
+                            : "bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50"}`}
                         >
-                          Contactar por WhatsApp
+                          {tutor.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                          {tutor.estado === 1 ? "Activo" : "Inactivo"}
                         </Button>
-                      )}
 
-                      {tutor.dias_horarios && Object.keys(tutor.dias_horarios).length > 0 && (
-                        <div className="mt-4 pt-4 border-t border-slate-200">
-                          <p className="text-xs font-bold text-slate-400 uppercase mb-2">Horario</p>
-                          <div className="space-y-2">
-                            {sortDiaEntries(tutor.dias_horarios || {}).map(([dia, horario]: [string, any]) => (
-                              <div key={dia} className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded-lg border border-blue-200 font-semibold flex justify-between">
-                                <span>{dia.slice(0, 3)}</span>
-                                <span>{horario.hora_inicio} - {horario.hora_fin}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {(tutor.es_especializado || (tutor.niveles_apto && (tutor.niveles_apto as any[]).length > 0)) && (
-                        <div className="mt-4 pt-4 border-t border-slate-200">
-                          <p className="text-xs font-bold text-slate-400 uppercase mb-2">Especializacion</p>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {tutor.es_especializado && (
-                              <Badge variant="success">Especializado</Badge>
-                            )}
-                            {Array.isArray(tutor.niveles_apto) && tutor.niveles_apto.map((n) => (
-                              <span key={n} className="text-xs bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-200 font-semibold">
-                                Nivel {n}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                        {tutor.telefono && (
+                          <Button
+                            size="sm"
+                            className="w-full bg-[#25D366]/20 text-[#25D366] border border-[#25D366]/40 hover:bg-[#25D366]/30"
+                            onClick={() => {
+                              const url = toWhatsAppUrl(tutor.telefono);
+                              if (url) window.open(url, "_blank");
+                            }}
+                          >
+                            Contactar por WhatsApp
+                          </Button>
+                        )}
+                      </div>
+                    </CardContent>
                   </Card>
                 ))}
               </div>
@@ -759,14 +763,16 @@ const Tutores: React.FC = () => {
                         type="checkbox"
                         checked={formData.dias.includes(dia)}
                         onChange={(e) => {
-                          if (e.target.checked) {
-                            setFormData(prev => ({ ...prev, dias: sortDias([...prev.dias, dia]) }));
-                          } else {
-                            const nextDias = prev.dias.filter(d => d !== dia);
-                            const nextHorarios = { ...prev.dias_horarios };
+                          setFormData((prev) => {
+                            if (e.target.checked) {
+                              return { ...prev, dias: sortDias([...(prev.dias || []), dia]) };
+                            }
+
+                            const nextDias = (prev.dias || []).filter((d) => d !== dia);
+                            const nextHorarios = { ...(prev.dias_horarios || {}) };
                             delete nextHorarios[dia];
                             return { ...prev, dias: sortDias(nextDias), dias_horarios: nextHorarios };
-                          }
+                          });
                         }}
                         className="rounded"
                       />

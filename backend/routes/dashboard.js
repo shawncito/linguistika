@@ -1,12 +1,54 @@
 import express from 'express';
 import { supabase } from '../supabase.js';
+import { requireRoles } from '../middleware/roles.js';
 
 const router = express.Router();
+
+const isValidYYYYMM = (value) => typeof value === 'string' && /^\d{4}-\d{2}$/.test(value);
+
+const monthRange = (ym) => {
+  const [yStr, mStr] = String(ym).split('-');
+  const y = Number(yStr);
+  const m = Number(mStr);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return null;
+  const start = `${yStr}-${mStr}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${yStr}-${mStr}-${String(lastDay).padStart(2, '0')}`;
+  return { start, end };
+};
+
+const addMonths = (ym, delta) => {
+  const [yStr, mStr] = String(ym).split('-');
+  const y = Number(yStr);
+  const m = Number(mStr);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return null;
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  d.setUTCMonth(d.getUTCMonth() + delta);
+  const yy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${yy}-${mm}`;
+};
+
+const movementFlags = (tipoRaw) => {
+  const tipo = String(tipoRaw || '');
+  const isIngreso = tipo === 'ingreso_estudiante' || tipo.startsWith('ingreso_');
+  const isEgreso = tipo === 'pago_tutor_pendiente' || tipo === 'pago_tutor' || tipo.startsWith('pago_') || tipo.startsWith('egreso_');
+  return { isIngreso, isEgreso };
+};
 
 // GET - Dashboard: Obtener tutorías del día (ruta con acento)
 router.get('/tutorías/:fecha', async (req, res) => {
   try {
     const { fecha } = req.params;
+
+    // Excluir sesiones que ya fueron marcadas como dadas/canceladas en sesiones_clases
+    const { data: sesionesBloqueadas, error: sbErr } = await supabase
+      .from('sesiones_clases')
+      .select('matricula_id, estado')
+      .eq('fecha', fecha)
+      .in('estado', ['dada', 'cancelada']);
+    if (sbErr) throw sbErr;
+    const bloqueadasSet = new Set((sesionesBloqueadas || []).map((r) => r.matricula_id));
     
     const { data: tutorías, error } = await supabase
       .from('clases')
@@ -17,6 +59,7 @@ router.get('/tutorías/:fecha', async (req, res) => {
         hora_fin,
         estado,
         matriculas!inner (
+          id,
           estudiante_id,
           tutor_id,
           curso_id,
@@ -31,19 +74,24 @@ router.get('/tutorías/:fecha', async (req, res) => {
     
     if (error) throw error;
     
-    const formatted = tutorías.map(t => ({
+    const formatted = tutorías
+      .map(t => ({
       id: t.id,
       fecha: t.fecha,
       hora_inicio: t.hora_inicio,
       hora_fin: t.hora_fin,
       estado: t.estado,
+      matricula_id: t.matriculas?.id,
       estudiante_id: t.matriculas?.estudiante_id,
       estudiante_nombre: t.matriculas?.estudiantes?.nombre,
       tutor_id: t.matriculas?.tutor_id,
       tutor_nombre: t.matriculas?.tutores?.nombre,
       curso_nombre: t.matriculas?.cursos?.nombre,
       tarifa_por_hora: t.matriculas?.tutores?.tarifa_por_hora
-    }));
+    }))
+      .filter((t) => {
+        return !t?.matricula_id || !bloqueadasSet.has(t.matricula_id);
+      });
     
     res.json(formatted);
   } catch (error) {
@@ -56,6 +104,15 @@ router.get('/tutorías/:fecha', async (req, res) => {
 router.get('/tutorias/:fecha', async (req, res) => {
   try {
     const { fecha } = req.params;
+
+    // Excluir sesiones que ya fueron marcadas como dadas/canceladas en sesiones_clases
+    const { data: sesionesBloqueadas, error: sbErr } = await supabase
+      .from('sesiones_clases')
+      .select('matricula_id, estado')
+      .eq('fecha', fecha)
+      .in('estado', ['dada', 'cancelada']);
+    if (sbErr) throw sbErr;
+    const bloqueadasSet = new Set((sesionesBloqueadas || []).map((r) => r.matricula_id));
 
     // 1) Intentar obtener sesiones desde la tabla 'clases' (solo si ya fueron persistidas)
     const { data: tutorias, error } = await supabase
@@ -99,7 +156,7 @@ router.get('/tutorias/:fecha', async (req, res) => {
       curso_nombre: t.matriculas?.cursos?.nombre,
       turno: null,
       duracion_horas: null
-    }));
+    })).filter((t) => !t?.matricula_id || !bloqueadasSet.has(t.matricula_id));
 
     // 2) Fallback: si no hay registros en 'clases', calcular sesiones desde MATRÍCULAS ACTIVAS + horarios del curso
     // Solo aparecen sesiones si existe una matrícula activa (estado=true)
@@ -128,6 +185,7 @@ router.get('/tutorias/:fecha', async (req, res) => {
       const sesiones = [];
       // Para cada matrícula activa, verificar si el curso tiene clase en el día solicitado
       for (const m of (matriculasActivas || [])) {
+        if (bloqueadasSet.has(m.id)) continue;
         const curso = m.cursos;
         let diasScheduleObj = null;
         let diasTurnoObj = null;
@@ -372,6 +430,108 @@ router.get('/estadisticas/general', async (req, res) => {
   }
 });
 
+// GET - Métricas financieras (admin/contador)
+// Query: mes=YYYY-MM&tutor_id?
+router.get('/metricas', requireRoles(['admin', 'contador']), async (req, res) => {
+  try {
+    const mes = isValidYYYYMM(req.query.mes)
+      ? String(req.query.mes)
+      : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Costa_Rica' }).slice(0, 7);
+
+    const tutorIdRaw = req.query.tutor_id;
+    const tutorId = tutorIdRaw ? Number.parseInt(String(tutorIdRaw), 10) : null;
+    const tutorIdValid = Number.isFinite(tutorId) && tutorId > 0 ? tutorId : null;
+
+    const range = monthRange(mes);
+    if (!range) return res.status(400).json({ error: 'mes inválido. Usa YYYY-MM' });
+
+    const start6Mes = addMonths(mes, -5);
+    const range6 = start6Mes ? monthRange(start6Mes) : null;
+    const start6 = range6?.start ?? range.start;
+    const end = range.end;
+
+    let q = supabase
+      .from('movimientos_dinero')
+      .select('id, tipo, monto, fecha_pago, tutor_id, tutor:tutor_id (nombre)')
+      .gte('fecha_pago', start6)
+      .lte('fecha_pago', end)
+      .order('fecha_pago', { ascending: true })
+      .order('id', { ascending: true });
+
+    if (tutorIdValid) q = q.eq('tutor_id', tutorIdValid);
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    const seriesMap = new Map();
+    const topTutorMap = new Map();
+
+    let ingresosMes = 0;
+    let egresosMes = 0;
+    let movimientosMes = 0;
+
+    for (const row of (data || [])) {
+      const fechaPago = String(row?.fecha_pago || '');
+      const ym = fechaPago ? fechaPago.slice(0, 7) : null;
+      const monto = Number(row?.monto) || 0;
+      const { isIngreso, isEgreso } = movementFlags(row?.tipo);
+
+      if (ym) {
+        const entry = seriesMap.get(ym) || { mes: ym, ingresos: 0, egresos: 0, neto: 0 };
+        if (isIngreso) entry.ingresos += monto;
+        if (isEgreso) entry.egresos += monto;
+        entry.neto = entry.ingresos - entry.egresos;
+        seriesMap.set(ym, entry);
+      }
+
+      if (ym === mes) {
+        movimientosMes += 1;
+        if (isIngreso) ingresosMes += monto;
+        if (isEgreso) {
+          egresosMes += monto;
+          const tid = row?.tutor_id ? Number(row.tutor_id) : null;
+          if (tid) {
+            const prev = topTutorMap.get(tid) || { tutor_id: tid, tutor_nombre: row?.tutor?.nombre || '', total: 0 };
+            prev.total += monto;
+            if (!prev.tutor_nombre && row?.tutor?.nombre) prev.tutor_nombre = row.tutor.nombre;
+            topTutorMap.set(tid, prev);
+          }
+        }
+      }
+    }
+
+    // Asegurar que la serie incluya exactamente los últimos 6 meses (incluye meses sin movimientos)
+    const months = [];
+    for (let i = -5; i <= 0; i += 1) {
+      const key = addMonths(mes, i);
+      if (!key) continue;
+      months.push(key);
+      if (!seriesMap.has(key)) seriesMap.set(key, { mes: key, ingresos: 0, egresos: 0, neto: 0 });
+    }
+
+    const series = months.map((m) => seriesMap.get(m));
+    const top_tutores = Array.from(topTutorMap.values())
+      .sort((a, b) => (Number(b.total) || 0) - (Number(a.total) || 0))
+      .slice(0, 5);
+
+    return res.json({
+      mes,
+      fecha_inicio: range.start,
+      fecha_fin: range.end,
+      ingresos: ingresosMes,
+      pagos_tutores: egresosMes,
+      neto: ingresosMes - egresosMes,
+      movimientos: movimientosMes,
+      tutor_id: tutorIdValid,
+      series,
+      top_tutores,
+      fuente: 'movimientos_dinero',
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // POST - Marcar sesión como dada (completar) y generar movimientos
 router.post('/sesion/:matriculaId/:fecha/completar', async (req, res) => {
   try {
@@ -381,13 +541,85 @@ router.post('/sesion/:matriculaId/:fecha/completar', async (req, res) => {
       .from('matriculas')
       .select(`
         id, estudiante_id, tutor_id, curso_id,
-        cursos:curso_id (nombre, costo_curso, pago_tutor, dias_schedule),
+        cursos:curso_id (nombre, tipo_pago, costo_curso, pago_tutor, dias_schedule),
         estudiantes:estudiante_id (nombre),
         tutores:tutor_id (nombre)
       `)
       .eq('id', matriculaId)
       .single();
     if (mErr || !m) return res.status(404).json({ error: 'Matrícula no encontrada' });
+
+    // Idempotencia: si ya existe una sesión dada/cancelada para esta matrícula y fecha, no duplicar
+    const { data: existingRows, error: exErr } = await supabase
+      .from('sesiones_clases')
+      .select('id, estado')
+      .eq('matricula_id', m.id)
+      .eq('fecha', fecha)
+      .in('estado', ['dada', 'cancelada'])
+      .order('id', { ascending: false })
+      .limit(1);
+    if (exErr) throw exErr;
+
+    const existing = (existingRows && existingRows.length > 0) ? existingRows[0] : null;
+    if (existing) {
+      if (existing.estado === 'cancelada') {
+        return res.status(409).json({ error: 'Esta sesión ya fue cancelada para el día. No se puede marcar como dada.', sesion_id: existing.id });
+      }
+
+      // Si es mensual, nunca generamos movimientos aquí
+      const tipoPago = String(m.cursos?.tipo_pago || 'sesion');
+      if (tipoPago === 'mensual') {
+        return res.json({ message: 'Sesión ya estaba marcada como dada (curso mensual).', sesion_id: existing.id, already_completed: true });
+      }
+
+      // Verificar/crear movimientos faltantes para esta sesión (por si hubo retry tras error)
+      const tipos = ['ingreso_estudiante', 'pago_tutor_pendiente'];
+      const { data: movs, error: movSelErr } = await supabase
+        .from('movimientos_dinero')
+        .select('id, tipo')
+        .eq('sesion_id', existing.id)
+        .in('tipo', tipos);
+      if (movSelErr) throw movSelErr;
+
+      const existentes = new Set((movs || []).map((x) => x.tipo));
+      const inserts = [];
+      if (!existentes.has('ingreso_estudiante')) {
+        inserts.push({
+          curso_id: m.curso_id,
+          matricula_id: m.id,
+          tutor_id: m.tutor_id,
+          sesion_id: existing.id,
+          tipo: 'ingreso_estudiante',
+          monto: parseFloat(m.cursos?.costo_curso || 0),
+          factura_numero: null,
+          fecha_pago: fecha,
+          fecha_comprobante: null,
+          estado: 'pendiente',
+          notas: `Ingreso por sesión completada (${m.cursos?.nombre})`
+        });
+      }
+      if (!existentes.has('pago_tutor_pendiente')) {
+        inserts.push({
+          curso_id: m.curso_id,
+          matricula_id: m.id,
+          tutor_id: m.tutor_id,
+          sesion_id: existing.id,
+          tipo: 'pago_tutor_pendiente',
+          monto: parseFloat(m.cursos?.pago_tutor || 0),
+          factura_numero: null,
+          fecha_pago: fecha,
+          fecha_comprobante: null,
+          estado: 'pendiente',
+          notas: `Pago a tutor pendiente por sesión (${m.tutores?.nombre})`
+        });
+      }
+      if (inserts.length > 0) {
+        const { error: movInsErr } = await supabase.from('movimientos_dinero').insert(inserts);
+        if (movInsErr) throw movInsErr;
+      }
+
+      return res.json({ message: 'Sesión ya estaba marcada como dada. No se duplicaron cobros.', sesion_id: existing.id, already_completed: true });
+    }
 
     // Día de la semana
     const dias = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -413,6 +645,7 @@ router.post('/sesion/:matriculaId/:fecha/completar', async (req, res) => {
     const { data: sesion, error: sErr } = await supabase
       .from('sesiones_clases')
       .insert({
+        matricula_id: m.id,
         curso_id: m.curso_id,
         tutor_id: m.tutor_id,
         fecha,
@@ -426,6 +659,13 @@ router.post('/sesion/:matriculaId/:fecha/completar', async (req, res) => {
       .select()
       .single();
     if (sErr) throw sErr;
+
+    // Generar movimientos SOLO si el curso es por sesion.
+    // Si el curso es mensual, el cobro/pago se genera en el cierre mensual.
+    const tipoPago = String(m.cursos?.tipo_pago || 'sesion');
+    if (tipoPago === 'mensual') {
+      return res.json({ message: 'Sesión marcada como dada (curso mensual). Movimientos se generan en cierre mensual.', sesion_id: sesion.id });
+    }
 
     // Generar movimientos: ingreso del estudiante y pago al tutor (pendiente)
     const ingreso = {
@@ -455,10 +695,8 @@ router.post('/sesion/:matriculaId/:fecha/completar', async (req, res) => {
       notas: `Pago a tutor pendiente por sesión (${m.tutores?.nombre})`
     };
 
-    const { error: movErr1 } = await supabase.from('movimientos_dinero').insert(ingreso);
-    if (movErr1) throw movErr1;
-    const { error: movErr2 } = await supabase.from('movimientos_dinero').insert(pagoPendiente);
-    if (movErr2) throw movErr2;
+    const { error: movErr } = await supabase.from('movimientos_dinero').insert([ingreso, pagoPendiente]);
+    if (movErr) throw movErr;
 
     res.json({ message: 'Sesión marcada como dada y movimientos generados', sesion_id: sesion.id });
   } catch (error) {
@@ -503,6 +741,7 @@ router.post('/sesion/:matriculaId/:fecha/cancelar-dia', async (req, res) => {
     const { error: sErr } = await supabase
       .from('sesiones_clases')
       .insert({
+        matricula_id: m.id,
         curso_id: m.curso_id,
         tutor_id: m.tutor_id,
         fecha,

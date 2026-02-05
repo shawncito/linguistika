@@ -1,9 +1,8 @@
 // Dashboard con calendario interactivo mejorado
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
-import { supabase } from '../services/supabaseClient';
 import { Matricula, Curso, Tutor, Estudiante, ResumenTutorEstudiantes, ResumenCursoGrupos } from '../types';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Input, Button } from '../components/UI';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Input, Button, Dialog } from '../components/UI';
 import { formatCRC } from '../lib/format';
 import { 
   Users, BookOpen, GraduationCap, 
@@ -38,6 +37,20 @@ interface SesionDelDia {
   fecha?: string;
 }
 
+interface MetricasFinancieras {
+  mes: string;
+  fecha_inicio: string;
+  fecha_fin: string;
+  ingresos: number;
+  pagos_tutores: number;
+  neto: number;
+  movimientos: number;
+  tutor_id?: number | null;
+  series?: Array<{ mes: string; ingresos: number; egresos: number; neto: number }>;
+  top_tutores?: Array<{ tutor_id: number; tutor_nombre: string; total: number }>;
+  fuente?: string;
+}
+
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<Stats | null>(null);
   // Fecha de hoy usando zona horaria de Costa Rica
@@ -59,6 +72,19 @@ const Dashboard: React.FC = () => {
   const [alumnosTutor, setAlumnosTutor] = useState<{ id: number; nombre: string }[]>([]);
   const [programacionSesion, setProgramacionSesion] = useState<{ sesion: SesionDelDia; modo: 'info' | 'programar' } | null>(null);
   const [mensajeWA, setMensajeWA] = useState('');
+  const [completandoKeys, setCompletandoKeys] = useState<Record<string, boolean>>({});
+
+  const [uiNotice, setUiNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [confirmMarcarDada, setConfirmMarcarDada] = useState<{ sesion: SesionDelDia; sesionKey: string } | null>(null);
+  const [confirmCancelarHoy, setConfirmCancelarHoy] = useState<{ sesion: SesionDelDia; sesionKey: string; motivo: string } | null>(null);
+
+  const [metricMes, setMetricMes] = useState<string>(crToday.slice(0, 7));
+  const [metricas, setMetricas] = useState<MetricasFinancieras | null>(null);
+  const [metricasDenied, setMetricasDenied] = useState(false);
+
+  const getSesionKey = useCallback((s: SesionDelDia) => {
+    return `${s.matricula_id}:${s.hora_inicio}:${s.hora_fin}:${s.curso_nombre}`;
+  }, []);
 
   // Función para obtener el día de la semana en español
   const getDiaSemana = (fecha: string): string => {
@@ -321,9 +347,17 @@ const Dashboard: React.FC = () => {
   const calcularSesionesDelDia = async (fecha: string, setSesiones: (sesiones: SesionDelDia[]) => void) => {
     try {
       // 1) Intentar obtener agenda desde backend (incluye fallback del servidor)
-      const desdeServidor = await api.dashboard.getAgenda(fecha).catch(() => []);
-      if (desdeServidor && desdeServidor.length > 0) {
-        const sesiones = desdeServidor.map((c: any) => ({
+      // IMPORTANTE: una lista vacía es un resultado válido (significa "no hay sesiones")
+      // El fallback local debe usarse solo si el backend falla.
+      let desdeServidor: any[] | null = null;
+      try {
+        desdeServidor = await api.dashboard.getAgenda(fecha);
+      } catch (e) {
+        desdeServidor = null;
+      }
+
+      if (desdeServidor !== null) {
+        const sesiones = (desdeServidor || []).map((c: any) => ({
           matricula_id: c.matricula_id ?? 0,
           curso_nombre: c.curso_nombre ?? 'Curso',
           estudiante_nombre: c.estudiante_nombre ?? 'Estudiante',
@@ -337,6 +371,7 @@ const Dashboard: React.FC = () => {
           curso_id: c.curso_id,
           avisado: Boolean(c.avisado),
           confirmado: Boolean(c.confirmado),
+          fecha: c.fecha ?? fecha,
         })) as SesionDelDia[];
         sesiones.sort((a, b) => String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
         setSesiones(sesiones);
@@ -346,17 +381,18 @@ const Dashboard: React.FC = () => {
       // 2) Fallback local desde matrículas y cursos
       // Calcular el día de la semana para la fecha seleccionada
       const diaSemana = getDiaSemana(fecha);
-      // Obtener SOLO matrículas activas (estado = true) con datos completos
-      const matriculas = (await api.matriculas.getAll()).filter(m => 
-        !!m.estado && 
-        m.curso_id != null && 
-        m.tutor_id != null && 
-        m.estudiante_id != null
-      );
+      // Obtener SOLO matrículas activas (estado = true). Soporta grupos (estudiante_id puede ser null).
+      const matriculas = (await api.matriculas.getAll()).filter((m: any) => {
+        const isActiva = !!m?.estado;
+        const hasCursoTutor = m?.curso_id != null && m?.tutor_id != null;
+        const isIndividual = m?.estudiante_id != null;
+        const isGrupo = !!m?.es_grupo && Array.isArray(m?.estudiante_ids) && m.estudiante_ids.length > 0;
+        return isActiva && hasCursoTutor && (isIndividual || isGrupo);
+      });
       setMatriculasLista(matriculas);
       const cursosPromises = matriculas.map(m => api.cursos.getById(m.curso_id));
       const tutoresPromises = matriculas.map(m => api.tutores.getById(m.tutor_id));
-      const estudiantesPromises = matriculas.map(m => api.estudiantes.getById(m.estudiante_id));
+      const estudiantesPromises = matriculas.map((m: any) => (m?.estudiante_id != null ? api.estudiantes.getById(m.estudiante_id) : Promise.resolve(undefined)));
       const [cursos, tutores, estudiantes] = await Promise.all([
         Promise.all(cursosPromises),
         Promise.all(tutoresPromises),
@@ -369,6 +405,12 @@ const Dashboard: React.FC = () => {
         const curso = cursos[index];
         const tutor = tutores[index];
         const estudiante = estudiantes[index];
+        const isGrupo = Boolean((matricula as any)?.es_grupo);
+        const grupoNombre = String((matricula as any)?.grupo_nombre || '').trim();
+        const grupoCount = Array.isArray((matricula as any)?.estudiante_ids) ? (matricula as any).estudiante_ids.length : 0;
+        const estudianteNombre = !isGrupo
+          ? (estudiante?.nombre || (matricula as any)?.estudiante_nombre || `Alumno ${(matricula as any)?.estudiante_id}`)
+          : `Grupo: ${grupoNombre || 'Sin nombre'}${grupoCount ? ` (${grupoCount})` : ''}`;
         const sched = getCursoScheduleForDay(curso, diaSemana);
         // Verificar si el curso tiene horario definido (dias_schedule) para este día de la semana
         if (sched?.kind === 'schedule' && sched.value) {
@@ -376,34 +418,36 @@ const Dashboard: React.FC = () => {
           sesiones.push({
             matricula_id: matricula.id,
             curso_nombre: curso.nombre,
-            estudiante_nombre: estudiante.nombre,
+            estudiante_nombre: estudianteNombre,
             tutor_nombre: tutor.nombre,
             hora_inicio: schedule.hora_inicio || schedule.horaInicio || schedule.start || '—',
             hora_fin: schedule.hora_fin || schedule.horaFin || schedule.end || '—',
             duracion_horas: schedule.duracion_horas || 0,
             turno: schedule.turno,
             tutor_id: tutor.id,
-            estudiante_id: estudiante.id,
+            estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
             curso_id: curso.id,
             avisado: false,
-            confirmado: false
+            confirmado: false,
+            fecha
           });
         } else if (sched?.kind === 'turno' && sched.value) {
           const turno = sched.value as any;
           sesiones.push({
             matricula_id: matricula.id,
             curso_nombre: curso.nombre,
-            estudiante_nombre: estudiante.nombre,
+            estudiante_nombre: estudianteNombre,
             tutor_nombre: tutor.nombre,
             hora_inicio: '—',
             hora_fin: '—',
             duracion_horas: 0,
             turno: turno,
             tutor_id: tutor.id,
-            estudiante_id: estudiante.id,
+            estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
             curso_id: curso.id,
             avisado: false,
-            confirmado: false
+            confirmado: false,
+            fecha
           });
         }
       });
@@ -438,6 +482,19 @@ const Dashboard: React.FC = () => {
         ingresos_pendientes: 0
       }));
       setStats(statsData);
+
+      // Métricas financieras (solo admin/contador)
+      try {
+        const m = await api.dashboard.getMetricas({ mes: metricMes });
+        setMetricas(m as any);
+        setMetricasDenied(false);
+      } catch (e: any) {
+        const status = e?.response?.status;
+        if (status === 403) {
+          setMetricasDenied(true);
+        }
+        setMetricas(null);
+      }
       
       // Calcular sesiones de HOY (usando fecha Costa Rica)
       if (hoy) {
@@ -451,16 +508,17 @@ const Dashboard: React.FC = () => {
       const daysInMonth = new Date(year, month + 1, 0).getDate();
       
       // Obtener todas las matrículas activas una sola vez
-      // FILTRAR matrículas con datos completos (sin IDs null)
-      const matriculas = (await api.matriculas.getAll()).filter(m => 
-        !!m.estado && 
-        m.curso_id != null && 
-        m.tutor_id != null && 
-        m.estudiante_id != null
-      );
+      // Incluir grupos: estudiante_id puede ser null pero estudiante_ids debe tener elementos
+      const matriculas = (await api.matriculas.getAll()).filter((m: any) => {
+        const isActiva = !!m?.estado;
+        const hasCursoTutor = m?.curso_id != null && m?.tutor_id != null;
+        const isIndividual = m?.estudiante_id != null;
+        const isGrupo = !!m?.es_grupo && Array.isArray(m?.estudiante_ids) && m.estudiante_ids.length > 0;
+        return isActiva && hasCursoTutor && (isIndividual || isGrupo);
+      });
       const cursosPromises = matriculas.map(m => api.cursos.getById(m.curso_id));
       const tutoresPromises = matriculas.map(m => api.tutores.getById(m.tutor_id));
-      const estudiantesPromises = matriculas.map(m => api.estudiantes.getById(m.estudiante_id));
+      const estudiantesPromises = matriculas.map((m: any) => (m?.estudiante_id != null ? api.estudiantes.getById(m.estudiante_id) : Promise.resolve(undefined)));
       const [cursos, tutores, estudiantes] = await Promise.all([
         Promise.all(cursosPromises),
         Promise.all(tutoresPromises),
@@ -479,6 +537,12 @@ const Dashboard: React.FC = () => {
           const curso = cursos[index];
           const tutor = tutores[index];
           const estudiante = estudiantes[index];
+          const isGrupo = Boolean((matricula as any)?.es_grupo);
+          const grupoNombre = String((matricula as any)?.grupo_nombre || '').trim();
+          const grupoCount = Array.isArray((matricula as any)?.estudiante_ids) ? (matricula as any).estudiante_ids.length : 0;
+          const estudianteNombre = !isGrupo
+            ? (estudiante?.nombre || (matricula as any)?.estudiante_nombre || `Alumno ${(matricula as any)?.estudiante_id}`)
+            : `Grupo: ${grupoNombre || 'Sin nombre'}${grupoCount ? ` (${grupoCount})` : ''}`;
 
           const sched = getCursoScheduleForDay(curso, diaSemana);
           if (sched?.kind === 'schedule' && sched.value) {
@@ -487,14 +551,14 @@ const Dashboard: React.FC = () => {
             sesiones.push({
               matricula_id: matricula.id,
               curso_nombre: curso.nombre,
-              estudiante_nombre: estudiante.nombre,
+              estudiante_nombre: estudianteNombre,
               tutor_nombre: tutor.nombre,
               hora_inicio: schedule.hora_inicio || schedule.horaInicio || schedule.start || '—',
               hora_fin: schedule.hora_fin || schedule.horaFin || schedule.end || '—',
               duracion_horas: schedule.duracion_horas || 0,
               turno: schedule.turno,
               tutor_id: tutor.id,
-              estudiante_id: estudiante.id,
+              estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
               curso_id: curso.id,
               avisado: false,
               confirmado: false,
@@ -505,14 +569,14 @@ const Dashboard: React.FC = () => {
             sesiones.push({
               matricula_id: matricula.id,
               curso_nombre: curso.nombre,
-              estudiante_nombre: estudiante.nombre,
+              estudiante_nombre: estudianteNombre,
               tutor_nombre: tutor.nombre,
               hora_inicio: '—',
               hora_fin: '—',
               duracion_horas: 0,
               turno: turno,
               tutor_id: tutor.id,
-              estudiante_id: estudiante.id,
+              estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
               curso_id: curso.id,
               avisado: false,
               confirmado: false,
@@ -566,7 +630,17 @@ const Dashboard: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedDate, hoy]);
+  }, [selectedDate, hoy, metricMes]);
+
+  const maxAbsSerie = (() => {
+    const s = metricas?.series || [];
+    let max = 0;
+    for (const it of s) {
+      const a = Math.max(Math.abs(Number(it.ingresos) || 0), Math.abs(Number(it.egresos) || 0), Math.abs(Number(it.neto) || 0));
+      if (a > max) max = a;
+    }
+    return max || 1;
+  })();
 
   useEffect(() => {
     fetchData();
@@ -578,6 +652,37 @@ const Dashboard: React.FC = () => {
       window.removeEventListener('focus', onFocus);
     };
   }, [fetchData]);
+
+  const marcarSesionComoDada = useCallback(async (sesion: SesionDelDia) => {
+    const sesionKey = getSesionKey(sesion);
+    setCompletandoKeys(prev => ({ ...prev, [sesionKey]: true }));
+    try {
+      const hoyStr = new Date().toISOString().split('T')[0];
+      // IMPORTANTE: usar la fecha "hoy" en zona Costa Rica para que coincida con la agenda.
+      // El hoyStr basado en UTC puede caer en el día anterior/siguiente cerca de medianoche.
+      const fechaToUse = sesion?.fecha || hoy || hoyStr;
+      const result = await api.dashboard.completarSesion(sesion.matricula_id, fechaToUse);
+
+      // Remover de la lista de hoy inmediatamente (experiencia UX)
+      setSesionesHoy(prev => prev.filter((s) => getSesionKey(s) !== sesionKey));
+      setUiNotice({
+        type: 'success',
+        message: result?.message || 'Clase marcada como dada.'
+      });
+
+      // Sincronizar stats/agenda
+      await fetchData();
+    } catch (e: any) {
+      console.error(e);
+      setUiNotice({ type: 'error', message: e?.response?.data?.error || e?.message || 'Error marcando la clase como dada' });
+    } finally {
+      setCompletandoKeys(prev => {
+        const next = { ...prev };
+        delete next[sesionKey];
+        return next;
+      });
+    }
+  }, [api.dashboard, fetchData, getSesionKey, hoy]);
 
   const StatCard = ({ title, value, icon, accentColor }: any) => (
     <Card className="relative overflow-hidden hover:-translate-y-1 transition-all cursor-default border-white/10">
@@ -611,6 +716,123 @@ const Dashboard: React.FC = () => {
     <div className="flex gap-6">
       {/* Contenido principal - 70% */}
       <div className="flex-1 space-y-10">
+        {uiNotice && (
+          <div className={`rounded-2xl border px-4 py-3 text-sm font-semibold flex items-start justify-between gap-4 ${
+            uiNotice.type === 'success'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+              : uiNotice.type === 'error'
+              ? 'border-red-500/30 bg-red-500/10 text-red-100'
+              : 'border-white/10 bg-white/5 text-slate-200'
+          }`}>
+            <div>{uiNotice.message}</div>
+            <button
+              className="text-slate-300 hover:text-white transition-colors"
+              onClick={() => setUiNotice(null)}
+              aria-label="Cerrar aviso"
+              title="Cerrar"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        <Dialog
+          isOpen={!!confirmMarcarDada}
+          onClose={() => setConfirmMarcarDada(null)}
+          title="Confirmar: marcar clase como dada"
+          maxWidthClass="max-w-xl"
+        >
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="text-sm font-black text-white">{confirmMarcarDada?.sesion.curso_nombre}</div>
+              <div className="text-xs text-slate-300 mt-1">{confirmMarcarDada?.sesion.estudiante_nombre}</div>
+              <div className="text-xs text-slate-400 mt-1">{confirmMarcarDada?.sesion.hora_inicio} - {confirmMarcarDada?.sesion.hora_fin}</div>
+            </div>
+
+            <div className="text-sm text-slate-200">
+              Al confirmar, la clase se marcará como <span className="font-bold">DADA</span>, se quitará de “Sesiones de Hoy” y se actualizarán los movimientos/pagos según el tipo de pago del curso.
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <Button variant="outline" className="h-11" onClick={() => setConfirmMarcarDada(null)}>
+                Volver
+              </Button>
+              <Button
+                className="h-11 bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={async () => {
+                  if (!confirmMarcarDada) return;
+                  const sesion = confirmMarcarDada.sesion;
+                  setConfirmMarcarDada(null);
+                  await marcarSesionComoDada(sesion);
+                }}
+              >
+                Confirmar
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+
+        <Dialog
+          isOpen={!!confirmCancelarHoy}
+          onClose={() => setConfirmCancelarHoy(null)}
+          title="Confirmar: cancelar solo por hoy"
+          maxWidthClass="max-w-xl"
+        >
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="text-sm font-black text-white">{confirmCancelarHoy?.sesion.curso_nombre}</div>
+              <div className="text-xs text-slate-300 mt-1">{confirmCancelarHoy?.sesion.estudiante_nombre}</div>
+              <div className="text-xs text-slate-400 mt-1">{confirmCancelarHoy?.sesion.hora_inicio} - {confirmCancelarHoy?.sesion.hora_fin}</div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="text-xs font-bold text-slate-300 uppercase tracking-widest">Motivo</div>
+              <Input
+                value={confirmCancelarHoy?.motivo ?? ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setConfirmCancelarHoy((prev) => (prev ? { ...prev, motivo: value } : prev));
+                }}
+                placeholder="Escribe el motivo de la cancelación por hoy..."
+                className="mt-3 bg-white/5 border-white/10 text-white placeholder:text-slate-400"
+              />
+              <div className="text-[11px] text-slate-400 mt-2">Este motivo es para tu control (no bloquea la cancelación).</div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <Button variant="outline" className="h-11" onClick={() => setConfirmCancelarHoy(null)}>
+                Volver
+              </Button>
+              <Button
+                variant="destructive"
+                className="h-11"
+                onClick={async () => {
+                  if (!confirmCancelarHoy) return;
+                  const sesion = confirmCancelarHoy.sesion;
+                  const hoyStr = new Date().toISOString().split('T')[0];
+                  const motivo = (confirmCancelarHoy.motivo || '').trim();
+                  if (!motivo) {
+                    setUiNotice({ type: 'error', message: 'Escribe un motivo antes de cancelar.' });
+                    return;
+                  }
+                  setConfirmCancelarHoy(null);
+                  try {
+                    await api.dashboard.cancelarSesionDia(sesion.matricula_id, hoyStr);
+                    console.log('Motivo cancelación (UI):', motivo);
+                    setUiNotice({ type: 'success', message: 'Clase cancelada (solo por hoy).' });
+                    await fetchData();
+                  } catch (e: any) {
+                    console.error(e);
+                    setUiNotice({ type: 'error', message: e?.response?.data?.error || e?.message || 'Error cancelando la clase' });
+                  }
+                }}
+              >
+                Confirmar cancelación
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+
         {/* Sesiones Hoy (arriba del calendario) */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">
@@ -636,6 +858,8 @@ const Dashboard: React.FC = () => {
                     const finDate = new Date(); finDate.setHours(hFin || 0, mFin || 0, 0, 0);
                     const puedeMarcarDada = isFinite(hIni) && isFinite(mIni) && ahora >= finDate;
                     const hoyStr = new Date().toISOString().split('T')[0];
+                    const sesionKey = getSesionKey(sesion);
+                    const isCompleting = !!completandoKeys[sesionKey];
                     return (
                       <div key={`hoy-top-${sesion.matricula_id}-${index}`} className="p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all group">
                         <div className="flex items-start justify-between gap-2 mb-2">
@@ -666,14 +890,12 @@ const Dashboard: React.FC = () => {
                           <Button
                             size="sm"
                             className={`text-[10px] px-2 py-0.5 h-7 ${puedeMarcarDada ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-white/10 text-slate-400 border border-white/10'}`}
-                            disabled={!puedeMarcarDada}
+                            disabled={!puedeMarcarDada || isCompleting}
                             onClick={async () => {
-                              const hoyStr = new Date().toISOString().split('T')[0];
-                              await api.dashboard.completarSesion(sesion.matricula_id, hoyStr);
-                              await fetchData();
+                              setConfirmMarcarDada({ sesion, sesionKey });
                             }}
                           >
-                            Marcar dada
+                            {isCompleting ? 'Marcando...' : 'Marcar dada'}
                           </Button>
                           <Button
                             size="sm"
@@ -687,12 +909,8 @@ const Dashboard: React.FC = () => {
                             variant="destructive"
                             className="text-[10px] px-2 py-0.5 h-7"
                             onClick={async () => {
-                              const motivo = window.prompt('Motivo de cancelación por hoy:');
-                              if (motivo === null) return;
-                              if (!window.confirm('¿Seguro que quieres cancelar la clase solo por hoy?')) return;
-                              await api.dashboard.cancelarSesionDia(sesion.matricula_id, hoyStr);
-                              console.log('Motivo cancelación (local):', motivo);
-                              await fetchData();
+                              // Confirmación UI (motivo dentro del Dialog)
+                              setConfirmCancelarHoy({ sesion, sesionKey, motivo: '' });
                             }}
                           >
                             Cancelar hoy
@@ -855,6 +1073,105 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
         </header>
+
+        {/* Métricas financieras (solo admin/contador) */}
+        {!metricasDenied ? (
+          <Card className="border-white/10 bg-[#0F2445]">
+            <CardHeader className="border-b border-white/10">
+              <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+                <div>
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-[#00AEEF]" /> Métricas (Tesorería)
+                  </CardTitle>
+                  <CardDescription className="text-slate-400 text-xs mt-1">
+                    Resumen mensual basado en movimientos. Fuente: {metricas?.fuente || '—'}
+                  </CardDescription>
+                </div>
+                <div className="flex items-end gap-3">
+                  <div>
+                    <div className="text-[11px] font-black text-slate-400 uppercase tracking-widest">Mes</div>
+                    <Input
+                      type="month"
+                      value={metricMes}
+                      onChange={(e) => setMetricMes(String(e.target.value || '').slice(0, 7))}
+                      className="h-11 w-44"
+                    />
+                  </div>
+                  <Button type="button" variant="outline" className="h-11" onClick={fetchData} disabled={loading}>
+                    {loading ? 'Cargando...' : 'Refrescar'}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-6 space-y-5">
+              {!metricas ? (
+                <div className="text-sm text-slate-400">No hay datos (o todavía no cargan).</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+                      <div className="text-[11px] font-black text-emerald-200 uppercase tracking-widest">Ingresos</div>
+                      <div className="text-2xl font-black text-white mt-1">{formatCRC(metricas.ingresos || 0)}</div>
+                      <div className="text-xs text-emerald-200/80 mt-1">{metricas.fecha_inicio} a {metricas.fecha_fin}</div>
+                    </div>
+                    <div className="rounded-2xl border border-rose-400/20 bg-rose-500/10 p-4">
+                      <div className="text-[11px] font-black text-rose-200 uppercase tracking-widest">Pagos a tutores</div>
+                      <div className="text-2xl font-black text-white mt-1">{formatCRC(metricas.pagos_tutores || 0)}</div>
+                      <div className="text-xs text-rose-200/80 mt-1">Movimientos: {metricas.movimientos || 0}</div>
+                    </div>
+                    <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/10 p-4">
+                      <div className="text-[11px] font-black text-cyan-200 uppercase tracking-widest">Neto (en bolsa)</div>
+                      <div className="text-2xl font-black text-white mt-1">{formatCRC(metricas.neto || 0)}</div>
+                      <div className="text-xs text-cyan-200/80 mt-1">Neto = ingresos - pagos</div>
+                    </div>
+                  </div>
+
+                  {/* Serie simple últimos 6 meses */}
+                  {Array.isArray(metricas.series) && metricas.series.length > 0 ? (
+                    <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-black text-white">Últimos 6 meses</div>
+                        <div className="text-[11px] text-slate-400 font-bold uppercase tracking-widest">Ingresos vs Pagos</div>
+                      </div>
+                      <div className="mt-4 grid grid-cols-6 gap-2 items-end">
+                        {metricas.series.map((it) => {
+                          const ing = Number(it.ingresos) || 0;
+                          const egr = Number(it.egresos) || 0;
+                          const hIng = Math.max(2, Math.round((Math.abs(ing) / maxAbsSerie) * 80));
+                          const hEgr = Math.max(2, Math.round((Math.abs(egr) / maxAbsSerie) * 80));
+                          return (
+                            <div key={it.mes} className="flex flex-col items-center gap-2">
+                              <div className="w-full flex items-end justify-center gap-1 h-[90px]">
+                                <div className="w-4 rounded-md bg-emerald-400/70 border border-emerald-400/30" style={{ height: `${hIng}px` }} title={`Ingresos: ${formatCRC(ing)}`} />
+                                <div className="w-4 rounded-md bg-rose-400/70 border border-rose-400/30" style={{ height: `${hEgr}px` }} title={`Pagos: ${formatCRC(egr)}`} />
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-black tracking-widest">{it.mes}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Top tutores por pagos */}
+                  {Array.isArray(metricas.top_tutores) && metricas.top_tutores.length > 0 ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                      <div className="text-sm font-black text-white">Top pagos a tutores</div>
+                      <div className="mt-3 space-y-2">
+                        {metricas.top_tutores.map((t) => (
+                          <div key={t.tutor_id} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
+                            <div className="text-sm text-slate-200 font-bold truncate">{t.tutor_nombre || `Tutor #${t.tutor_id}`}</div>
+                            <div className="text-sm font-black text-rose-200">{formatCRC(t.total || 0)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">

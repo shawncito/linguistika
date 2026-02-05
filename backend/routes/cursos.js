@@ -8,6 +8,121 @@ function getDb(req) {
   return supabaseAdmin ?? supabaseForToken(req.accessToken);
 }
 
+function parseJsonMaybe(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDiaKey(value) {
+  if (value == null) return '';
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function timeToMinutesSafe(time) {
+  if (!time) return null;
+  const [h, m] = String(time).split(':').map((n) => Number(n));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return h * 60 + m;
+}
+
+function scheduleOverlaps(scheduleA, scheduleB) {
+  const a = scheduleA ?? {};
+  const b = scheduleB ?? {};
+
+  const bKeyByNorm = {};
+  for (const k of Object.keys(b)) {
+    const nk = normalizeDiaKey(k);
+    if (nk && !bKeyByNorm[nk]) bKeyByNorm[nk] = k;
+  }
+
+  const conflicts = [];
+  for (const diaA of Object.keys(a)) {
+    const diaNorm = normalizeDiaKey(diaA);
+    const diaB = bKeyByNorm[diaNorm];
+    if (!diaB) continue;
+
+    const aHorario = a[diaA];
+    const bHorario = b[diaB];
+    const aStart = timeToMinutesSafe(aHorario?.hora_inicio);
+    const aEnd = timeToMinutesSafe(aHorario?.hora_fin);
+    const bStart = timeToMinutesSafe(bHorario?.hora_inicio);
+    const bEnd = timeToMinutesSafe(bHorario?.hora_fin);
+
+    if (aStart == null || aEnd == null || bStart == null || bEnd == null) continue;
+    // Overlap si hay intersección real; permitir pegado exacto (fin == inicio)
+    const overlap = aStart < bEnd && aEnd > bStart;
+    if (overlap) {
+      conflicts.push({
+        dia: diaA,
+        a: { hora_inicio: aHorario?.hora_inicio, hora_fin: aHorario?.hora_fin },
+        b: { hora_inicio: bHorario?.hora_inicio, hora_fin: bHorario?.hora_fin }
+      });
+    }
+  }
+
+  return conflicts;
+}
+
+function validateTutorAptitudeForCourse(tutor, cursoNivel) {
+  const nivel = String(cursoNivel ?? '').trim();
+  if (!nivel || nivel === 'None') return { ok: true };
+
+  const niveles = Array.isArray(tutor?.niveles_apto) ? tutor.niveles_apto : [];
+  const specialized = !!tutor?.es_especializado || niveles.length > 0;
+
+  if (!specialized) return { ok: true };
+  if (!niveles.includes(nivel)) {
+    return {
+      ok: false,
+      reason: `El tutor no está marcado como apto para el nivel ${nivel}`
+    };
+  }
+  return { ok: true };
+}
+
+async function validateTutorNoCourseConflicts(db, tutorId, nextSchedule, excludeCursoId = null) {
+  const { data: cursos, error } = await db
+    .from('cursos')
+    .select('id,nombre,nivel,dias_schedule,estado')
+    .eq('tutor_id', tutorId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+
+  const conflicts = [];
+  for (const c of cursos ?? []) {
+    if (excludeCursoId != null && String(c.id) === String(excludeCursoId)) continue;
+    if (c?.estado === false) continue;
+
+    const otherSchedule = parseJsonMaybe(c.dias_schedule);
+    if (!otherSchedule || Object.keys(otherSchedule).length === 0) continue;
+
+    const overlaps = scheduleOverlaps(nextSchedule, otherSchedule);
+    if (overlaps.length > 0) {
+      conflicts.push({
+        curso_id: c.id,
+        curso_nombre: c.nombre,
+        curso_nivel: c.nivel,
+        overlaps
+      });
+    }
+  }
+
+  return conflicts;
+}
+
 function isForeignKeyViolation(err) {
   // Postgres FK violation code
   return String(err?.code ?? '') === '23503' || String(err?.message ?? '').toLowerCase().includes('foreign key');
@@ -220,6 +335,7 @@ router.post('/', async (req, res) => {
       nombre, descripcion, nivel, max_estudiantes = null,
       tipo_clase = 'grupal', dias = null, dias_turno = null, dias_schedule = null,
       costo_curso = 0, pago_tutor = 0,
+      tipo_pago = 'sesion',
       grado_activo = false, grado_nombre = null, grado_color = null,
       tutor_id = null
     } = req.body;
@@ -229,8 +345,15 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Campo requerido: nombre' });
     }
 
-    // Si se proporciona tutor_id, validar compatibilidad
-    if (tutor_id && (dias_schedule || dias_turno)) {
+    // Si se proporciona tutor_id, validar SIEMPRE: aptitud + compatibilidad + no-conflicto
+    if (tutor_id) {
+      const scheduleObj = typeof dias_schedule === 'string' ? parseJsonMaybe(dias_schedule) : dias_schedule;
+      if (!scheduleObj || Object.keys(scheduleObj).length === 0) {
+        return res.status(400).json({
+          error: 'No se puede asignar tutor sin horario (dias_schedule) definido'
+        });
+      }
+
       const { data: tutor, error: tutorError } = await db
         .from('tutores')
         .select('*')
@@ -241,13 +364,22 @@ router.post('/', async (req, res) => {
         return res.status(404).json({ error: 'Tutor no encontrado' });
       }
 
+      const aptitude = validateTutorAptitudeForCourse(tutor, nivel);
+      if (!aptitude.ok) {
+        return res.status(409).json({
+          error: 'Tutor no apto para este curso',
+          code: 'TUTOR_NOT_APTO',
+          details: [aptitude.reason]
+        });
+      }
+
       // Validar compatibilidad de horarios
       const tutorObj = {
         ...tutor,
         dias_horarios: tutor.dias_horarios // Ya viene como objeto desde Supabase JSONB
       };
       const cursoObj = {
-        dias_schedule: dias_schedule,
+        dias_schedule: scheduleObj,
         dias_turno: dias_turno
       };
 
@@ -255,7 +387,17 @@ router.post('/', async (req, res) => {
       if (!validation.compatible) {
         return res.status(409).json({
           error: 'Horarios incompatibles',
+          code: 'TUTOR_SCHEDULE_INCOMPATIBLE',
           details: validation.issues
+        });
+      }
+
+      const scheduleConflicts = await validateTutorNoCourseConflicts(db, tutor_id, scheduleObj, null);
+      if (scheduleConflicts.length > 0) {
+        return res.status(409).json({
+          error: 'Choque de horario: este tutor ya tiene otro curso en esa franja',
+          code: 'TUTOR_SCHEDULE_CONFLICT',
+          conflicts: scheduleConflicts
         });
       }
     }
@@ -271,6 +413,7 @@ router.post('/', async (req, res) => {
         nivel: nivel || 'None',
         max_estudiantes: maxEstudiantes,
         tipo_clase,
+        tipo_pago,
         dias: dias ? JSON.stringify(dias) : null,
         dias_schedule: dias_schedule ? JSON.stringify(dias_schedule) : null,
         costo_curso: parseFloat(costo_curso) || 0,
@@ -296,6 +439,7 @@ router.post('/', async (req, res) => {
       dias: curso.dias ? JSON.parse(curso.dias) : null,
       dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null,
       dias_schedule: curso.dias_schedule ? JSON.parse(curso.dias_schedule) : null,
+      tipo_pago: curso.tipo_pago,
       grado_activo: curso.grado_activo,
       grado_nombre: curso.grado_nombre,
       grado_color: curso.grado_color,
@@ -314,6 +458,17 @@ router.put('/:id', async (req, res) => {
   try {
     const db = getDb(req);
     const userId = req.user?.id;
+
+    // Necesitamos el estado actual para validar (tutor_id/horario/nivel) incluso si no vienen en el body
+    const { data: existingCurso, error: existingErr } = await db
+      .from('cursos')
+      .select('id,nombre,nivel,tutor_id,dias_schedule,dias_turno')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (existingErr) throw existingErr;
+    if (!existingCurso) {
+      return res.status(404).json({ error: 'Curso no encontrado' });
+    }
     
     // Construir objeto de actualización solo con campos presentes
     const updateData = {
@@ -335,11 +490,65 @@ router.put('/:id', async (req, res) => {
     if (req.body.dias_schedule !== undefined) updateData.dias_schedule = req.body.dias_schedule ? JSON.stringify(req.body.dias_schedule) : null;
     if (req.body.costo_curso !== undefined) updateData.costo_curso = parseFloat(req.body.costo_curso) || 0;
     if (req.body.pago_tutor !== undefined) updateData.pago_tutor = parseFloat(req.body.pago_tutor) || 0;
+    if (req.body.tipo_pago !== undefined) updateData.tipo_pago = req.body.tipo_pago;
     if (req.body.grado_activo !== undefined) updateData.grado_activo = !!req.body.grado_activo;
     if (req.body.grado_nombre !== undefined) updateData.grado_nombre = req.body.grado_nombre || null;
     if (req.body.grado_color !== undefined) updateData.grado_color = req.body.grado_color || null;
     if (req.body.tutor_id !== undefined) updateData.tutor_id = req.body.tutor_id || null;
     if (req.body.estado !== undefined) updateData.estado = req.body.estado === 1 || req.body.estado === true;
+
+    // Validación obligatoria si el curso queda con tutor asignado
+    const nextTutorId = req.body.tutor_id !== undefined ? (req.body.tutor_id || null) : (existingCurso.tutor_id ?? null);
+    const nextNivel = req.body.nivel !== undefined ? req.body.nivel : existingCurso.nivel;
+    const nextSchedule = req.body.dias_schedule !== undefined
+      ? (typeof req.body.dias_schedule === 'string' ? parseJsonMaybe(req.body.dias_schedule) : (req.body.dias_schedule || null))
+      : parseJsonMaybe(existingCurso.dias_schedule);
+
+    if (nextTutorId) {
+      if (!nextSchedule || Object.keys(nextSchedule).length === 0) {
+        return res.status(400).json({
+          error: 'No se puede asignar tutor sin horario (dias_schedule) definido'
+        });
+      }
+
+      const { data: tutor, error: tutorError } = await db
+        .from('tutores')
+        .select('*')
+        .eq('id', nextTutorId)
+        .maybeSingle();
+      if (tutorError || !tutor) {
+        return res.status(404).json({ error: 'Tutor no encontrado' });
+      }
+
+      const aptitude = validateTutorAptitudeForCourse(tutor, nextNivel);
+      if (!aptitude.ok) {
+        return res.status(409).json({
+          error: 'Tutor no apto para este curso',
+          code: 'TUTOR_NOT_APTO',
+          details: [aptitude.reason]
+        });
+      }
+
+      const tutorObj = { ...tutor, dias_horarios: tutor.dias_horarios };
+      const cursoObj = { dias_schedule: nextSchedule, dias_turno: parseJsonMaybe(existingCurso.dias_turno) };
+      const validation = validateTutorCourseSchedule(tutorObj, cursoObj);
+      if (!validation.compatible) {
+        return res.status(409).json({
+          error: 'Horarios incompatibles',
+          code: 'TUTOR_SCHEDULE_INCOMPATIBLE',
+          details: validation.issues
+        });
+      }
+
+      const scheduleConflicts = await validateTutorNoCourseConflicts(db, nextTutorId, nextSchedule, req.params.id);
+      if (scheduleConflicts.length > 0) {
+        return res.status(409).json({
+          error: 'Choque de horario: este tutor ya tiene otro curso en esa franja',
+          code: 'TUTOR_SCHEDULE_CONFLICT',
+          conflicts: scheduleConflicts
+        });
+      }
+    }
 
     const { data: curso, error } = await db
       .from('cursos')
@@ -356,6 +565,7 @@ router.put('/:id', async (req, res) => {
       dias: curso.dias ? JSON.parse(curso.dias) : null,
       dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null,
       dias_schedule: curso.dias_schedule ? JSON.parse(curso.dias_schedule) : null,
+      tipo_pago: curso.tipo_pago,
       grado_activo: curso.grado_activo,
       grado_nombre: curso.grado_nombre,
       grado_color: curso.grado_color,

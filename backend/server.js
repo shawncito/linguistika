@@ -21,13 +21,29 @@ import { fileURLToPath } from 'url';
 
 dotenv.config();
 
+// Evita caídas por errores transitorios de red (ej. Supabase timeouts).
+// Nota: en producción normalmente conviene reiniciar, pero en local esto evita que te "saque".
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ UnhandledRejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('❌ UncaughtException:', err);
+});
+
 export function createApp() {
   const app = express();
+
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
 
   // Middleware
   app.use(cors());
   app.use(bodyParser.json());
   app.use(bodyParser.urlencoded({ extended: true }));
+
+  // Archivos estáticos (comprobantes, etc.)
+  app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
   // Inicializar base de datos
   const db = new Database();

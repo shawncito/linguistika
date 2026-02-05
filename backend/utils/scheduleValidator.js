@@ -14,6 +14,16 @@ export function validateTutorCourseSchedule(tutor, curso) {
   const issues = [];
   let compatible = true;
 
+  const normalizeDiaKey = (value) => {
+    if (value == null) return '';
+    return String(value)
+      .trim()
+      .toLowerCase()
+      // quitar tildes/diacríticos: Miércoles -> miercoles
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+  };
+
   // Validación básica
   if (!tutor || !curso) {
     return { compatible: false, issues: ['❌ Datos de tutor o curso no encontrados'] };
@@ -34,16 +44,32 @@ export function validateTutorCourseSchedule(tutor, curso) {
   const diasCurso = Object.keys(cursoSchedule);
   const diasTutor = Object.keys(tutor.dias_horarios);
 
+  // Normalizar días para evitar fallos por tildes/case (Miércoles vs Miercoles)
+  const tutorKeyByNorm = {};
+  for (const k of diasTutor) {
+    const nk = normalizeDiaKey(k);
+    if (nk && !tutorKeyByNorm[nk]) tutorKeyByNorm[nk] = k;
+  }
+
+  const cursoKeyByNorm = {};
+  for (const k of diasCurso) {
+    const nk = normalizeDiaKey(k);
+    if (nk && !cursoKeyByNorm[nk]) cursoKeyByNorm[nk] = k;
+  }
+
   for (const dia of diasCurso) {
+    const diaNorm = normalizeDiaKey(dia);
+    const diaTutorKey = tutorKeyByNorm[diaNorm];
+
     // ✅ VALIDACIÓN 1: ¿Existe el día en la disponibilidad del tutor?
-    if (!diasTutor.includes(dia)) {
+    if (!diaTutorKey) {
       compatible = false;
       issues.push(`❌ El tutor NO está disponible el ${dia}`);
       continue;
     }
 
     // ✅ VALIDACIÓN 2: ¿El rango de horas del curso está dentro del rango del tutor?
-    const tutorHorario = tutor.dias_horarios[dia];
+    const tutorHorario = tutor.dias_horarios[diaTutorKey];
     const cursoHorario = cursoSchedule[dia];
 
     if (!tutorHorario || !cursoHorario) {

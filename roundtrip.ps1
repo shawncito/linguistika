@@ -5,11 +5,25 @@ param(
     [string]$Email = "",
     [string]$Password = "",
 
+    # Opcional: ruta a un archivo local que contenga la contraseña en texto plano.
+    # Útil para automatizar sin escribir la contraseña en el comando.
+    [string]$PasswordFile = "",
+
+    # Tipo de pago del curso creado por el script
+    [ValidateSet('sesion','mensual')]
+    [string]$TipoPago = 'sesion',
+
     # Etiqueta para identificar datos creados por este script (evita colisiones y permite limpieza segura)
     [string]$RunTag = "",
 
     # Solo ejecutar limpieza (no crea datos)
     [switch]$CleanupOnly,
+
+    # Limpieza por prefijo (para cuando no hay .roundtrip-state.json).
+    # Por defecto hace DRY_RUN; para borrar debes pasar -CleanupByPrefixApply.
+    [switch]$CleanupByPrefix,
+    [switch]$CleanupByPrefixApply,
+    [string]$CleanupPrefix = "RT-",
 
     # Limpieza de datos legacy (creados por versiones antiguas del script con emails fijos)
     [switch]$CleanupLegacyTestData,
@@ -18,7 +32,12 @@ param(
     [switch]$TestCascadeDelete,
 
     # Verificar endpoints de pagos/finanzas (sin insertar pagos)
-    [switch]$CheckPagoPhase
+    [switch]$CheckPagoPhase,
+
+    # Simular ~1 mes de uso (sesiones, pagos, manuales, libro diario)
+    [switch]$SimulateMonth,
+    [int]$SimDays = 30,
+    [string]$SimStartDate = ""
 )
 
 $StateFile = Join-Path $PSScriptRoot ".roundtrip-state.json"
@@ -105,6 +124,85 @@ function Try-InvokeJson($Method, $Url, $Headers, $BodyObj, [string]$Label) {
     }
 }
 
+function Expect-HttpFailure($Method, $Url, $Headers, $BodyObj, [int]$ExpectedStatus, [string]$Label) {
+    try {
+        Invoke-Json $Method $Url $Headers $BodyObj | Out-Null
+        Write-Host "WARN $Label (se esperaba HTTP $ExpectedStatus, pero respondio OK)" -ForegroundColor Yellow
+        return $false
+    } catch {
+        $msg = ($_ | Out-String)
+        if ($msg -like ("*HTTP $ExpectedStatus*") -or $msg -match ("HTTP\\s+" + $ExpectedStatus)) {
+            Write-Host "OK $Label (HTTP $ExpectedStatus)" -ForegroundColor Cyan
+            return $true
+        }
+        Write-Host "WARN $Label (error inesperado; se esperaba HTTP $ExpectedStatus)" -ForegroundColor Yellow
+        Write-Host $msg -ForegroundColor DarkGray
+        return $false
+    }
+}
+
+function Expect-MultipartFailure([string]$Url, [hashtable]$Headers, [string]$FilePath, [string]$ContentType, [int]$ExpectedStatus, [string]$Label) {
+    try {
+        Invoke-MultipartFileUpload $Url $Headers $FilePath $ContentType | Out-Null
+        Write-Host "WARN $Label (se esperaba HTTP $ExpectedStatus, pero respondio OK)" -ForegroundColor Yellow
+        return $false
+    } catch {
+        $msg = ($_ | Out-String)
+        if ($msg -like ("*HTTP $ExpectedStatus*") -or $msg -match ("HTTP\\s+" + $ExpectedStatus)) {
+            Write-Host "OK $Label (HTTP $ExpectedStatus)" -ForegroundColor Cyan
+            return $true
+        }
+        Write-Host "WARN $Label (error inesperado; se esperaba HTTP $ExpectedStatus)" -ForegroundColor Yellow
+        Write-Host $msg -ForegroundColor DarkGray
+        return $false
+    }
+}
+
+function Invoke-MultipartFileUpload([string]$Url, [hashtable]$Headers, [string]$FilePath, [string]$ContentType = "application/pdf") {
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "Archivo no existe: $FilePath"
+    }
+
+    try { Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue } catch { }
+
+    $client = New-Object System.Net.Http.HttpClient
+    try {
+        if ($Headers -and $Headers.Authorization) {
+            $auth = $Headers.Authorization
+            $client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $auth) | Out-Null
+        }
+
+        $multipart = New-Object System.Net.Http.MultipartFormDataContent
+        $stream = [System.IO.File]::OpenRead($FilePath)
+        try {
+            $fileContent = New-Object System.Net.Http.StreamContent($stream)
+            $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($ContentType)
+            $multipart.Add($fileContent, "file", [System.IO.Path]::GetFileName($FilePath))
+
+            $resp = $client.PostAsync($Url, $multipart).Result
+            $body = $resp.Content.ReadAsStringAsync().Result
+            if (-not $resp.IsSuccessStatusCode) {
+                throw "HTTP $([int]$resp.StatusCode) ${Url}`n${body}"
+            }
+            if ([string]::IsNullOrWhiteSpace($body)) { return $null }
+            return ($body | ConvertFrom-Json)
+        } finally {
+            try { $stream.Close() } catch { }
+        }
+    } finally {
+        try { $client.Dispose() } catch { }
+    }
+}
+
+function Parse-ISODate([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    try {
+        return [datetime]::ParseExact($Value, 'yyyy-MM-dd', $null)
+    } catch {
+        return $null
+    }
+}
+
 function Cleanup-ByState($state, $BaseUrl, $headers) {
     if (-not $state) {
         Write-Host "WARN No hay state guardado para limpiar." -ForegroundColor Yellow
@@ -180,8 +278,37 @@ function Cleanup-Legacy($BaseUrl, $headers) {
 }
 
 if ([string]::IsNullOrWhiteSpace($Email)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:ROUNDTRIP_EMAIL)) {
+        $Email = $env:ROUNDTRIP_EMAIL
+    }
+}
+if ([string]::IsNullOrWhiteSpace($Email)) {
     $Email = Read-Host "Email (Supabase Auth)"
 }
+if ([string]::IsNullOrWhiteSpace($Password)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:ROUNDTRIP_PASSWORD)) {
+        $Password = $env:ROUNDTRIP_PASSWORD
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($Password)) {
+    $pf = $PasswordFile
+    if ([string]::IsNullOrWhiteSpace($pf) -and -not [string]::IsNullOrWhiteSpace($env:ROUNDTRIP_PASSWORD_FILE)) {
+        $pf = $env:ROUNDTRIP_PASSWORD_FILE
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($pf) -and (Test-Path -LiteralPath $pf)) {
+        try {
+            $rawPass = Get-Content -LiteralPath $pf -Raw
+            if (-not [string]::IsNullOrWhiteSpace($rawPass)) {
+                $Password = $rawPass.Trim()
+            }
+        } catch {
+            # ignorar y caer al prompt
+        }
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($Password)) {
     $secure = Read-Host "Password" -AsSecureString
     $Password = Get-PlainPassword $secure
@@ -200,8 +327,13 @@ $headers = @{
 
 if ($CleanupOnly) {
     $state = Load-State $StateFile
-    if (-not $state -and -not $CleanupLegacyTestData) {
-        Write-Host "WARN No existe $StateFile. Para limpiar sin state: use -CleanupLegacyTestData (solo emails legacy) o ejecute primero el script normal para que guarde state." -ForegroundColor Yellow
+
+    if (-not $state -and -not $CleanupLegacyTestData -and -not $CleanupByPrefix) {
+        Write-Host "WARN No existe $StateFile." -ForegroundColor Yellow
+        Write-Host "- Para limpiar solo datos legacy: use -CleanupLegacyTestData" -ForegroundColor DarkYellow
+        Write-Host "- Para limpiar por prefijo (recomendado): use -CleanupByPrefix [-RunTag <tag>] [-CleanupByPrefixApply]" -ForegroundColor DarkYellow
+        Write-Host "  Ejemplo seguro (solo una corrida): .\roundtrip.ps1 -CleanupOnly -CleanupByPrefix -RunTag <tag> -CleanupByPrefixApply" -ForegroundColor DarkGray
+        Write-Host "  Ejemplo mas amplio (TODO lo RT-*): .\roundtrip.ps1 -CleanupOnly -CleanupByPrefix -CleanupPrefix RT- -CleanupByPrefixApply" -ForegroundColor DarkGray
         exit 1
     }
 
@@ -211,6 +343,42 @@ if ($CleanupOnly) {
     if ($state) {
         Cleanup-ByState $state $BaseUrl $headers
     }
+
+    if ($CleanupByPrefix) {
+        Write-Host "=== CLEANUP POR PREFIJO ===" -ForegroundColor Yellow
+        $scriptPath = Join-Path $PSScriptRoot "backend\scripts\cleanupRoundtrip.js"
+        if (-not (Test-Path -LiteralPath $scriptPath)) {
+            Write-Host "WARN No existe: $scriptPath" -ForegroundColor Yellow
+            Write-Host "No se puede ejecutar limpieza por prefijo." -ForegroundColor DarkYellow
+            exit 1
+        }
+
+        $args = @($scriptPath)
+        if (-not [string]::IsNullOrWhiteSpace($RunTag)) {
+            $args += @('--runTag', $RunTag)
+        } else {
+            $args += @('--prefix', $CleanupPrefix)
+        }
+
+        if ($CleanupByPrefixApply) {
+            $args += '--apply'
+            Write-Host "APPLY: se borraran registros que matcheen el criterio" -ForegroundColor DarkYellow
+        } else {
+            Write-Host "DRY_RUN: no se borrara nada (usa -CleanupByPrefixApply para aplicar)" -ForegroundColor DarkYellow
+        }
+
+        try {
+            & node @args
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "WARN cleanupRoundtrip.js fallo (exit=$LASTEXITCODE)" -ForegroundColor Yellow
+                exit $LASTEXITCODE
+            }
+        } catch {
+            Write-Host "WARN No se pudo ejecutar node cleanupRoundtrip.js" -ForegroundColor Yellow
+            Write-Host $_ -ForegroundColor DarkGray
+            exit 1
+        }
+    }
     exit 0
 }
 
@@ -218,6 +386,23 @@ if ([string]::IsNullOrWhiteSpace($RunTag)) {
     $RunTag = New-RunTag
 }
 $Prefix = "RT-$RunTag"
+
+$SimStart = $null
+$SimEnd = $null
+if ($SimulateMonth) {
+    if ($SimDays -lt 7) { $SimDays = 30 }
+    if ($SimDays -gt 60) { $SimDays = 60 }
+
+    $parsed = Parse-ISODate $SimStartDate
+    if ($parsed) {
+        $SimStart = $parsed.Date
+    } else {
+        $SimStart = (Get-Date).Date.AddDays(-1 * ($SimDays - 1))
+    }
+    $SimEnd = $SimStart.AddDays($SimDays - 1)
+    Write-Host "SIMULATE MONTH: $($SimStart.ToString('yyyy-MM-dd')) -> $($SimEnd.ToString('yyyy-MM-dd')) ($SimDays dias)" -ForegroundColor DarkYellow
+    Write-Host "" 
+}
 
 Write-Host "=== ROUNDTRIP COMPLETO ===" -ForegroundColor Yellow
 Write-Host "RunTag: $RunTag" -ForegroundColor DarkYellow
@@ -235,6 +420,7 @@ $tutorBody = @{
         "Lunes" = @{hora_inicio = "09:00"; hora_fin = "11:00"}
         "Martes" = @{hora_inicio = "14:00"; hora_fin = "16:00"}
         "Miercoles" = @{hora_inicio = "10:00"; hora_fin = "12:00"}
+        "Miércoles" = @{hora_inicio = "10:00"; hora_fin = "12:00"}
     }
 }
 
@@ -278,9 +464,12 @@ $cursoBody = @{
     max_estudiantes = 10
     costo_curso = 15000
     pago_tutor = 5000
+    tipo_pago = $TipoPago
     dias_schedule = @{
         "Lunes" = @{hora_inicio = "09:00"; hora_fin = "11:00"}
         "Martes" = @{hora_inicio = "14:00"; hora_fin = "16:00"}
+        "Miercoles" = @{hora_inicio = "10:00"; hora_fin = "12:00"}
+        "Miércoles" = @{hora_inicio = "10:00"; hora_fin = "12:00"}
     }
     tutor_id = $tutor.id
 }
@@ -323,7 +512,7 @@ $grupoBody = @{
     tutor_id = $tutor.id
     nombre_grupo = "$Prefix Grupo Frances A1 (Test)"
     cantidad_estudiantes_esperados = 2
-    fecha_inicio = "2026-02-01"
+    fecha_inicio = $(if ($SimulateMonth -and $SimStart) { $SimStart.ToString('yyyy-MM-dd') } else { "2026-02-01" })
     turno = "Tarde"
     estado = "activa"
 }
@@ -339,24 +528,203 @@ $assigned = Invoke-Json "POST" "$BaseUrl/bulk/grupos/$($grupo.id)/estudiantes" $
 Write-Host "OK Estudiantes asignados al grupo (normales): $($assigned.assigned_normales)" -ForegroundColor Cyan
 Write-Host ""
 
-# 4.2 COMPLETAR SESIÓN PARA GENERAR sesiones_clases + movimientos_dinero
-Write-Host "4.2 COMPLETAR SESION (genera movimientos)" -ForegroundColor Green
+# 4.1.1 CREAR MATRICULA GRUPAL DESDE EL GRUPO (es_grupo=true)
+Write-Host "4.1.1 CREAR MATRICULA GRUPAL (desde grupo)" -ForegroundColor Green
+$matriculaGrupo = $null
+try {
+    $matriculaGrupo = Invoke-Json "POST" "$BaseUrl/matriculas/from-bulk-grupo" $headers @{ matricula_grupo_id = "$($grupo.id)"; grupo_nombre = $grupo.nombre_grupo }
+    $mgid = $null
+    if ($matriculaGrupo -and $matriculaGrupo.matricula -and $matriculaGrupo.matricula.id) {
+        $mgid = $matriculaGrupo.matricula.id
+    } elseif ($matriculaGrupo -and $matriculaGrupo.id) {
+        $mgid = $matriculaGrupo.id
+    }
+    Write-Host "OK Matricula grupal creada (ID: $mgid)" -ForegroundColor Cyan
+} catch {
+    Write-Host "WARN No se pudo crear matrícula grupal desde el grupo" -ForegroundColor Yellow
+    Write-Host $_ -ForegroundColor DarkGray
+}
+Write-Host ""
 
-function Get-NextMonday([datetime]$From) {
-    $d = $From.Date
-    while ($d.DayOfWeek -ne [System.DayOfWeek]::Monday) { $d = $d.AddDays(1) }
-    return $d
+# 4.2 COMPLETAR SESIONES
+if ($SimulateMonth) {
+    if ($TipoPago -eq 'mensual') {
+        Write-Host "4.2 COMPLETAR SESIONES (mensual: sesiones dadas; movimientos por cierre mensual)" -ForegroundColor Green
+    } else {
+        Write-Host "4.2 COMPLETAR SESIONES (sesion: genera movimientos por clase)" -ForegroundColor Green
+    }
+
+    # Crear artefactos temporales (no ensuciar el repo)
+    $ArtifactsDir = Join-Path ([System.IO.Path]::GetTempPath()) "linguistika-roundtrip"
+    try { New-Item -ItemType Directory -Path $ArtifactsDir -Force | Out-Null } catch { }
+
+    # Crear comprobante dummy (PDF) para adjuntos
+    $dummyPath = Join-Path $ArtifactsDir "roundtrip-$RunTag-comprobante.pdf"
+    if (-not (Test-Path -LiteralPath $dummyPath)) {
+        $pdfText = "%PDF-1.4`n%RT`n1 0 obj`n<<>>`nendobj`ntrailer`n<<>>`n%%EOF`n"
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes($pdfText)
+        [System.IO.File]::WriteAllBytes($dummyPath, $bytes)
+    }
+
+    $grupoMatId = $null
+    if ($matriculaGrupo) {
+        if ($matriculaGrupo.matricula -and $matriculaGrupo.matricula.id) { $grupoMatId = [int]$matriculaGrupo.matricula.id }
+        elseif ($matriculaGrupo.id) { $grupoMatId = [int]$matriculaGrupo.id }
+    }
+
+    $d = $SimStart
+    $completed = 0
+    while ($d -le $SimEnd) {
+        $iso = $d.ToString('yyyy-MM-dd')
+        $dow = $d.DayOfWeek
+
+        # Consultar agenda (prueba dashboard)
+        Try-InvokeJson "GET" "$BaseUrl/dashboard/tutorias/$iso" $headers $null "Agenda $iso"
+
+        # Solo completar clases en días del horario del curso (Lunes/Martes/Miercoles)
+        if ($dow -eq [System.DayOfWeek]::Monday -or $dow -eq [System.DayOfWeek]::Tuesday -or $dow -eq [System.DayOfWeek]::Wednesday) {
+            $c1 = Try-InvokeJson "POST" "$BaseUrl/dashboard/sesion/$($matricula1.id)/$iso/completar" $headers @{} "Completar sesion M1 $iso"
+            $c2 = Try-InvokeJson "POST" "$BaseUrl/dashboard/sesion/$($matricula2.id)/$iso/completar" $headers @{} "Completar sesion M2 $iso"
+            if ($grupoMatId) {
+                Try-InvokeJson "POST" "$BaseUrl/dashboard/sesion/$grupoMatId/$iso/completar" $headers @{} "Completar sesion GRUPO $iso" | Out-Null
+            }
+            $completed++
+        }
+
+        # Cada 7 días: registrar movimientos manuales (entrada y salida)
+        $dayIndex = [int]([Math]::Floor(($d - $SimStart).TotalDays))
+        if ($dayIndex -in 3, 10, 17, 24) {
+            # Entrada manual vinculada a estudiante 1 (ej: pago servicio/otros)
+            $movIn = Try-InvokeJson "POST" "$BaseUrl/pagos/movimientos/manual" $headers @{ direccion = 'entrada'; monto = 2500; fecha = $iso; metodo = 'sinpe'; referencia = "RT-IN-$iso"; categoria = 'Ingreso extra'; detalle = "Ingreso manual del día $iso"; estudiante_id = $estudiante1.id } "Movimiento manual ENTRADA $iso"
+            if ($movIn -and $movIn.id) {
+                try {
+                    $up = Invoke-MultipartFileUpload "$BaseUrl/pagos/movimientos/$($movIn.id)/comprobante" $headers $dummyPath "application/pdf"
+                    Write-Host "OK Adjuntado comprobante a movimiento $($movIn.id)" -ForegroundColor Cyan
+                } catch {
+                    Write-Host "WARN No se pudo adjuntar comprobante" -ForegroundColor Yellow
+                    Write-Host $_ -ForegroundColor DarkGray
+                }
+            }
+
+            # Salida manual (ej: pago de servicio)
+            Try-InvokeJson "POST" "$BaseUrl/pagos/movimientos/manual" $headers @{ direccion = 'salida'; monto = 1800; fecha = $iso; metodo = 'efectivo'; referencia = "RT-OUT-$iso"; categoria = 'Servicio'; detalle = "Pago de servicio del día $iso" } "Movimiento manual SALIDA $iso" | Out-Null
+
+            # Salida manual vinculada al tutor (ej: reembolso)
+            Try-InvokeJson "POST" "$BaseUrl/pagos/movimientos/manual" $headers @{ direccion = 'salida'; monto = 1200; fecha = $iso; metodo = 'transferencia'; referencia = "RT-REEMB-$iso"; categoria = 'Reembolso'; detalle = "Reembolso tutor del día $iso"; tutor_id = $tutor.id } "Reembolso tutor $iso" | Out-Null
+        }
+
+        $d = $d.AddDays(1)
+    }
+
+    Write-Host "OK Simulación: días con clases procesados: $completed" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Si es mensual, ejecutar cierre mensual para generar movimientos
+    if ($TipoPago -eq 'mensual') {
+        Write-Host "4.3 CIERRE MENSUAL (FORZADO)" -ForegroundColor Green
+        $anio = [int]$SimEnd.ToString('yyyy')
+        $mes = [int]$SimEnd.ToString('MM')
+        Try-InvokeJson "POST" "$BaseUrl/pagos/cierre-mensual" $headers @{ anio = $anio; mes = $mes; force = $true } "Cierre mensual" | Out-Null
+        Write-Host "" 
+    }
+
+    # Marcar pagos de estudiantes (pendientes -> completado)
+    Write-Host "4.4 LIQUIDAR INGRESOS ESTUDIANTES" -ForegroundColor Green
+    Try-InvokeJson "POST" "$BaseUrl/pagos/ingresos/liquidar-estudiante" $headers @{ estudiante_id = $estudiante1.id; metodo = 'sinpe'; referencia = "RT-PAGO-$($SimEnd.ToString('yyyyMMdd'))"; fecha_comprobante = $SimEnd.ToString('yyyy-MM-dd') } "Pago estudiante 1" | Out-Null
+    Try-InvokeJson "POST" "$BaseUrl/pagos/ingresos/liquidar-estudiante" $headers @{ estudiante_id = $estudiante2.id; metodo = 'transferencia'; referencia = "RT-PAGO2-$($SimEnd.ToString('yyyyMMdd'))"; fecha_comprobante = $SimEnd.ToString('yyyy-MM-dd') } "Pago estudiante 2" | Out-Null
+    Write-Host ""
+
+    # Liquidar pagos de tutor (pendientes -> pago)
+    Write-Host "4.5 LIQUIDAR PENDIENTES TUTOR" -ForegroundColor Green
+    Try-InvokeJson "POST" "$BaseUrl/pagos/liquidar" $headers @{ tutor_id = $tutor.id; descripcion = "RT Liquidación mensual ($RunTag)"; estado = 'pagado'; fecha_inicio = $SimStart.ToString('yyyy-MM-dd'); fecha_fin = $SimEnd.ToString('yyyy-MM-dd') } "Liquidar tutor" | Out-Null
+    Write-Host ""
+
+    # Consultar libro diario en 3 fechas
+    Write-Host "4.6 CONSULTAR LIBRO DIARIO" -ForegroundColor Green
+    $f1 = $SimStart.ToString('yyyy-MM-dd')
+    $f2 = $SimStart.AddDays([Math]::Min(7, $SimDays-1)).ToString('yyyy-MM-dd')
+    $f3 = $SimEnd.ToString('yyyy-MM-dd')
+    Try-InvokeJson "GET" "$BaseUrl/pagos/libro-diario?fecha=$f1" $headers $null "Libro $f1" | Out-Null
+    Try-InvokeJson "GET" "$BaseUrl/pagos/libro-diario?fecha=$f2" $headers $null "Libro $f2" | Out-Null
+    Try-InvokeJson "GET" "$BaseUrl/pagos/libro-diario?fecha=$f3" $headers $null "Libro $f3" | Out-Null
+    Write-Host ""
+
+    # Pruebas extra: robustez (negativos / seguridad / idempotencia)
+    Write-Host "4.7 ROBUSTEZ COMPLETA (NEGATIVOS / SEGURIDAD / IDEMPOTENCIA)" -ForegroundColor Green
+
+    # 1) Request sin auth (espera 401)
+    $noAuthHeaders = @{ "Content-Type" = "application/json" }
+    Expect-HttpFailure "GET" "$BaseUrl/tutores" $noAuthHeaders $null 401 "GET /tutores sin Authorization" | Out-Null
+
+    # 2) Validaciones de negocio (espera 400)
+    Expect-HttpFailure "POST" "$BaseUrl/pagos/movimientos/manual" $headers @{ direccion = 'entrada'; monto = 0; fecha = $f3; metodo = 'efectivo'; referencia = 'RT-BAD-M0'; categoria = 'Test'; detalle = 'Monto 0 debe fallar' } 400 "Movimiento manual monto=0" | Out-Null
+    Expect-HttpFailure "POST" "$BaseUrl/pagos/movimientos/manual" $headers @{ direccion = 'x'; monto = 100; fecha = $f3; metodo = 'efectivo'; referencia = 'RT-BAD-DIR'; categoria = 'Test'; detalle = 'Direccion invalida debe fallar' } 400 "Movimiento manual direccion invalida" | Out-Null
+
+    # 3) Upload inválido (tipo no permitido) (espera 400)
+    $txtPath = Join-Path $ArtifactsDir "roundtrip-$RunTag-comprobante.txt"
+    if (-not (Test-Path -LiteralPath $txtPath)) {
+        Set-Content -LiteralPath $txtPath -Value "NOT_A_PDF" -Encoding UTF8
+    }
+    $movForBadUpload = Try-InvokeJson "POST" "$BaseUrl/pagos/movimientos/manual" $headers @{ direccion = 'entrada'; monto = 100; fecha = $f3; metodo = 'efectivo'; referencia = "RT-UPBAD-$f3"; categoria = 'Test'; detalle = 'Movimiento para probar upload invalido' } "Movimiento para upload invalido" 
+    if ($movForBadUpload -and $movForBadUpload.id) {
+        Expect-MultipartFailure "$BaseUrl/pagos/movimientos/$($movForBadUpload.id)/comprobante" $headers $txtPath "text/plain" 400 "Adjuntar TXT (debe fallar)" | Out-Null
+    } else {
+        Write-Host "WARN No se pudo crear movimiento para probar upload invalido" -ForegroundColor Yellow
+    }
+
+    # 4) Cierre mensual repetido (no debe tumbar el server)
+    if ($TipoPago -eq 'mensual') {
+        $anio = [int]$SimEnd.ToString('yyyy')
+        $mes = [int]$SimEnd.ToString('MM')
+        Try-InvokeJson "POST" "$BaseUrl/pagos/cierre-mensual" $headers @{ anio = $anio; mes = $mes; force = $true } "Cierre mensual (reintento)" | Out-Null
+    }
+    Write-Host ""
+
+    # Limpieza de artefactos temporales
+    foreach ($p in @($dummyPath, $txtPath)) {
+        try {
+            if ($p -and (Test-Path -LiteralPath $p)) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+        } catch { }
+    }
+} else {
+    # Modo clásico: una sesión en lunes
+    if ($TipoPago -eq 'mensual') {
+        Write-Host "4.2 COMPLETAR SESION (mensual: NO genera movimientos al instante)" -ForegroundColor Green
+    } else {
+        Write-Host "4.2 COMPLETAR SESION (sesion: genera movimientos)" -ForegroundColor Green
+    }
+
+    function Get-NextMonday([datetime]$From) {
+        $d = $From.Date
+        while ($d.DayOfWeek -ne [System.DayOfWeek]::Monday) { $d = $d.AddDays(1) }
+        return $d
+    }
+
+    $fechaLunes = (Get-NextMonday (Get-Date)).ToString('yyyy-MM-dd')
+    Write-Host "-> Fecha usada (Lunes): $fechaLunes" -ForegroundColor DarkYellow
+
+    $comp1 = Invoke-Json "POST" "$BaseUrl/dashboard/sesion/$($matricula1.id)/$fechaLunes/completar" $headers @{}
+    Write-Host "OK Sesion completada para matricula 1 (sesion_id: $($comp1.sesion_id))" -ForegroundColor Cyan
+
+    $comp2 = Invoke-Json "POST" "$BaseUrl/dashboard/sesion/$($matricula2.id)/$fechaLunes/completar" $headers @{}
+    Write-Host "OK Sesion completada para matricula 2 (sesion_id: $($comp2.sesion_id))" -ForegroundColor Cyan
+    Write-Host ""
 }
 
-$fechaLunes = (Get-NextMonday (Get-Date)).ToString('yyyy-MM-dd')
-Write-Host "-> Fecha usada (Lunes): $fechaLunes" -ForegroundColor DarkYellow
-
-$comp1 = Invoke-Json "POST" "$BaseUrl/dashboard/sesion/$($matricula1.id)/$fechaLunes/completar" $headers @{}
-Write-Host "OK Sesion completada para matricula 1 (sesion_id: $($comp1.sesion_id))" -ForegroundColor Cyan
-
-$comp2 = Invoke-Json "POST" "$BaseUrl/dashboard/sesion/$($matricula2.id)/$fechaLunes/completar" $headers @{}
-Write-Host "OK Sesion completada para matricula 2 (sesion_id: $($comp2.sesion_id))" -ForegroundColor Cyan
-Write-Host ""
+if ($CheckPagoPhase -and $TipoPago -eq 'mensual') {
+    Write-Host "4.3 CIERRE MENSUAL (FORZADO) PARA GENERAR MOVIMIENTOS" -ForegroundColor Green
+    $now = Get-Date
+    $anio = [int]$now.ToString('yyyy')
+    $mes = [int]$now.ToString('MM')
+    try {
+        $cierre = Invoke-Json "POST" "$BaseUrl/pagos/cierre-mensual" $headers @{ anio = $anio; mes = $mes; force = $true }
+        Write-Host "OK Cierre mensual ejecutado: insertados=$($cierre.insertados) skipped=$($cierre.skipped_existentes)" -ForegroundColor Cyan
+    } catch {
+        Write-Host "WARN No se pudo ejecutar cierre mensual" -ForegroundColor Yellow
+        Write-Host $_ -ForegroundColor DarkGray
+    }
+    Write-Host ""
+}
 
 # 5. VERIFICAR DATOS EN BASE DE DATOS
 Write-Host "5. VERIFICAR DATOS EN BASE DE DATOS" -ForegroundColor Green
@@ -406,6 +774,9 @@ if ($CheckPagoPhase) {
     Write-Host "7. CHECK FASE PAGOS" -ForegroundColor Green
     # Pagos requiere rol admin/contador
     Try-InvokeJson "GET" "$BaseUrl/pagos" $headers $null "Endpoint /pagos accesible (admin/contador)"
+
+    # Pendientes de tutor (si hay movimientos)
+    Try-InvokeJson "GET" "$BaseUrl/pagos/pendientes/resumen?tutor_id=$($tutor.id)" $headers $null "Resumen pendientes tutor (movimientos_dinero)"
 
     # Finanzas puede requerir SUPABASE_SERVICE_KEY en backend
     Try-InvokeJson "GET" "$BaseUrl/finanzas/movimientos?curso_id=$($curso.id)" $headers $null "Endpoint /finanzas/movimientos (si hay service key)"

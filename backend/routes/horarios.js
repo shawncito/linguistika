@@ -3,6 +3,31 @@ import { supabase } from '../supabase.js';
 
 const router = express.Router();
 
+function timeToMinutesSafe(time) {
+  if (!time) return null;
+  const [h, m] = String(time).split(':').map((n) => Number(n));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return h * 60 + m;
+}
+
+function normalizeDia(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function getDiaFromISODate(fechaISO) {
+  // Usar mediodía local para evitar problemas de zona horaria
+  const d = new Date(`${fechaISO}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  // JS: 0=domingo..6=sábado
+  const map = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+  return map[d.getDay()] || null;
+}
+
 // GET - Listar todos los horarios de un tutor
 router.get('/tutor/:tutor_id', async (req, res) => {
   try {
@@ -115,6 +140,74 @@ router.post('/clases/crear', async (req, res) => {
     
     if (!matricula_id || !fecha || !hora_inicio || !hora_fin) {
       return res.status(400).json({ error: 'Campos requeridos: matricula_id, fecha, hora_inicio, hora_fin' });
+    }
+
+    // Validación de horarios del tutor (uso real): impedir programar fuera del rango permitido
+    const { data: mat, error: matErr } = await supabase
+      .from('matriculas')
+      .select('id,tutor_id')
+      .eq('id', matricula_id)
+      .maybeSingle();
+    if (matErr) throw matErr;
+    if (!mat?.tutor_id) {
+      return res.status(400).json({ error: 'No se pudo determinar el tutor de la matrícula' });
+    }
+
+    const dia = getDiaFromISODate(String(fecha));
+    if (!dia) {
+      return res.status(400).json({ error: 'fecha inválida (esperado YYYY-MM-DD)' });
+    }
+
+    const hi = timeToMinutesSafe(hora_inicio);
+    const hf = timeToMinutesSafe(hora_fin);
+    if (hi == null || hf == null || hf <= hi) {
+      return res.status(400).json({ error: 'hora_inicio/hora_fin inválidas (HH:mm) o rango incorrecto' });
+    }
+
+    const { data: horarios, error: hErr } = await supabase
+      .from('horarios_tutores')
+      .select('id,dia_semana,hora_inicio,hora_fin,estado')
+      .eq('tutor_id', mat.tutor_id)
+      .eq('estado', true);
+    if (hErr) throw hErr;
+
+    const horariosDia = (horarios ?? []).filter((h) => {
+      const v = normalizeDia(h.dia_semana);
+      // soportar valores: 'lunes'/'Lunes'/'Miércoles' o números 0..6/1..7
+      if (!v) return false;
+      if (v === dia) return true;
+      const num = Number(v);
+      if (Number.isFinite(num)) {
+        const mapNum0 = { domingo: 0, lunes: 1, martes: 2, miercoles: 3, jueves: 4, viernes: 5, sabado: 6 };
+        const want0 = mapNum0[dia];
+        if (want0 == null) return false;
+        if (num === want0) return true;
+        // 1..7 con domingo=7
+        if (num === 7 && want0 === 0) return true;
+        if (num === want0 + 1) return true;
+      }
+      return false;
+    });
+
+    const allowedRanges = horariosDia
+      .map((h) => ({ hora_inicio: h.hora_inicio, hora_fin: h.hora_fin }))
+      .filter((r) => r.hora_inicio && r.hora_fin);
+
+    const isInsideAny = allowedRanges.some((r) => {
+      const a = timeToMinutesSafe(r.hora_inicio);
+      const b = timeToMinutesSafe(r.hora_fin);
+      if (a == null || b == null) return false;
+      return hi >= a && hf <= b;
+    });
+
+    if (allowedRanges.length > 0 && !isInsideAny) {
+      return res.status(409).json({
+        error: `Horario fuera del rango permitido para el tutor (${dia}).`,
+        dia_semana: dia,
+        hora_inicio,
+        hora_fin,
+        allowed_ranges: allowedRanges,
+      });
     }
 
     const { data: clase, error } = await supabase

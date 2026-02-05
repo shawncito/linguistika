@@ -15,6 +15,19 @@ cd backend
 node migrate.js
 ```
 
+## ✅ Migraciones recomendadas (limpieza/pro)
+
+Estos archivos viven en `backend/migrations/` y están pensados para ejecutarse en el SQL Editor de Supabase (en orden):
+
+- `006_fix_cursos_tutor_id_bigint.sql`: corrige `cursos.tutor_id` de `integer` → `bigint` si aplica.
+- `007_time_format_constraints.sql`: normaliza `H:M` → `HH:MM` y agrega constraints `NOT VALID` para formato/orden de horas.
+- `008_updated_at_triggers.sql`: crea trigger estándar para actualizar `updated_at` en UPDATE.
+- `009_indexes_profesionales.sql`: agrega índices obvios para performance (clases, horarios, movimientos, emails).
+
+Notas:
+- Los constraints en `007_...` se crean como `NOT VALID` para no fallar por datos históricos. Se pueden validar después cuando confirmes que no hay datos inválidos.
+- Si vas a imponer `UNIQUE` en emails, primero hay que revisar duplicados (por eso aquí solo agregamos índice no-único).
+
 ## 📊 Funciones Disponibles
 
 ### 1. Ver Estructura de Todas las Tablas

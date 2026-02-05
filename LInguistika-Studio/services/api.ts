@@ -15,7 +15,7 @@ import {
 
 const TOKEN_KEY = 'linguistika_token';
 
-const API_BASE_URL =
+export const API_BASE_URL =
   (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('api') : null) ||
   import.meta.env.VITE_API_URL ||
   'http://localhost:5000/api';
@@ -117,8 +117,14 @@ export const api = {
   },
 
   bulk: {
-    downloadTemplate: async (tipo: 'estudiantes_bulk' | 'grupo_matricula'): Promise<Blob> => {
+    downloadTemplate: async (tipo: 'estudiantes_bulk' | 'grupo_matricula' | 'cursos_bulk'): Promise<Blob> => {
       const res = await http.get(`/bulk/template/${tipo}`, { responseType: 'blob' as any });
+      return res.data as any;
+    },
+    previewExcel: async (file: File): Promise<any> => {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await http.post('/bulk/preview', form);
       return res.data as any;
     },
     uploadExcel: async (file: File): Promise<any> => {
@@ -309,6 +315,125 @@ export const api = {
       const res = await http.post<Pago>('/pagos', data);
       return res.data;
     },
+    getConfig: async (): Promise<{ cierre_mensual_dia: number }> => {
+      const res = await http.get('/pagos/config');
+      return res.data as any;
+    },
+    updateConfig: async (data: { cierre_mensual_dia: number }): Promise<{ cierre_mensual_dia: number }> => {
+      const res = await http.put('/pagos/config', data);
+      return res.data as any;
+    },
+    cierreMensual: async (data: {
+      anio?: number;
+      mes?: number;
+      periodo_inicio?: string;
+      periodo_fin?: string;
+      force?: boolean;
+    }): Promise<any> => {
+      const res = await http.post('/pagos/cierre-mensual', data);
+      return res.data as any;
+    },
+    getPendientesResumen: async (params: {
+      tutor_id: number;
+      fecha_inicio?: string;
+      fecha_fin?: string;
+    }): Promise<any> => {
+      const res = await http.get('/pagos/pendientes/resumen', { params });
+      return res.data as any;
+    },
+    getPendientesResumenTutores: async (): Promise<any> => {
+      const res = await http.get('/pagos/pendientes/resumen-tutores');
+      return res.data as any;
+    },
+    getPendientesDetalleTutor: async (params: {
+      tutor_id: number;
+      fecha_inicio?: string;
+      fecha_fin?: string;
+    }): Promise<any> => {
+      const res = await http.get('/pagos/pendientes/detalle-tutor', { params });
+      return res.data as any;
+    },
+    getPendientesResumenEstudiantes: async (): Promise<any> => {
+      const res = await http.get('/pagos/pendientes/resumen-estudiantes');
+      return res.data as any;
+    },
+    getPendientesDetalleEstudiante: async (params: {
+      estudiante_id: number;
+      fecha_inicio?: string;
+      fecha_fin?: string;
+    }): Promise<any> => {
+      const res = await http.get('/pagos/pendientes/detalle-estudiante', { params });
+      return res.data as any;
+    },
+    liquidarIngresoEstudiante: async (data: {
+      estudiante_id: number;
+      fecha_inicio?: string;
+      fecha_fin?: string;
+      metodo: 'sinpe' | 'transferencia' | 'efectivo';
+      referencia?: string;
+      fecha_comprobante?: string;
+    }): Promise<any> => {
+      const res = await http.post('/pagos/ingresos/liquidar-estudiante', data);
+      return res.data as any;
+    },
+    liquidarPendientes: async (data: {
+      tutor_id: number;
+      fecha_inicio?: string;
+      fecha_fin?: string;
+      descripcion?: string;
+      estado?: string;
+    }): Promise<any> => {
+      const res = await http.post('/pagos/liquidar', data);
+      return res.data as any;
+    },
+
+    getLibroDiario: async (params: { fecha?: string; fecha_inicio?: string; fecha_fin?: string; only_totals?: any; tutor_id?: number }): Promise<any> => {
+      const res = await http.get('/pagos/libro-diario', { params });
+      return res.data as any;
+    },
+
+    createMovimientoManual: async (data: {
+      direccion: 'entrada' | 'salida';
+      monto: number;
+      fecha: string;
+      metodo?: 'sinpe' | 'transferencia' | 'efectivo' | string;
+      referencia?: string;
+      detalle?: string;
+      categoria?: string;
+      a_nombre_de?: string;
+      tutor_id?: number | null;
+      estudiante_id?: number | null;
+      curso_id?: number | null;
+    }): Promise<any> => {
+      const res = await http.post('/pagos/movimientos/manual', data);
+      return res.data as any;
+    },
+
+    uploadComprobanteMovimiento: async (movimientoId: number | string, file: File): Promise<any> => {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await http.post(`/pagos/movimientos/${movimientoId}/comprobante`, form);
+      return res.data as any;
+    },
+
+    createComprobanteIngreso: async (data: {
+      numero_comprobante: string;
+      monto: number;
+      fecha_comprobante: string;
+      pagador_nombre: string;
+      pagador_contacto?: string;
+      detalle?: string;
+      movimiento_dinero_id?: number;
+      foto_url?: string;
+    }): Promise<any> => {
+      const res = await http.post('/pagos/comprobantes-ingreso', data);
+      return res.data as any;
+    },
+
+    aplicarComprobanteUrlBulk: async (data: { ids: Array<number | string>; comprobante_url: string }): Promise<any> => {
+      const res = await http.post('/pagos/movimientos/comprobante/bulk', data);
+      return res.data as any;
+    },
   },
 
   dashboard: {
@@ -382,6 +507,11 @@ export const api = {
     obtenerEstadosClases: async (fecha: string): Promise<any[]> => {
       const res = await http.get<any[]>(`/dashboard/estados-clases/${fecha}`);
       return res.data as any[];
+    },
+
+    getMetricas: async (params?: { mes?: string; tutor_id?: number }): Promise<any> => {
+      const res = await http.get('/dashboard/metricas', { params });
+      return res.data as any;
     },
   },
 
