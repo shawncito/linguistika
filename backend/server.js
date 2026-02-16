@@ -14,8 +14,11 @@ import authRouter from './routes/auth.js';
 import horasTrabajoRouter from './routes/horas-trabajo.js';
 import adminRouter from './routes/admin.js';
 import finanzasRouter from './routes/finanzas.js';
+import tesoreriaRouter from './routes/tesoreria.js';
 import bulkRouter from './routes/bulk.js';
+import activityRouter from './routes/activity.js';
 import { requireAuth } from './middleware/auth.js';
+import { activityLogMiddleware } from './middleware/activityLog.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -223,7 +226,12 @@ export function createApp() {
   app.use('/api/horas-trabajo', (req, res, next) => requireAuth(req, res, next));
   app.use('/api/admin', (req, res, next) => requireAuth(req, res, next));
   app.use('/api/finanzas', (req, res, next) => requireAuth(req, res, next));
+  app.use('/api/tesoreria', (req, res, next) => requireAuth(req, res, next));
   app.use('/api/bulk', (req, res, next) => requireAuth(req, res, next));
+  app.use('/api/activity', (req, res, next) => requireAuth(req, res, next));
+
+  // Audit log para mutaciones (crear/editar/borrar)
+  app.use('/api', activityLogMiddleware);
 
   app.use('/api/tutores', tutoresRouter);
   app.use('/api/cursos', cursosRouter);
@@ -235,7 +243,9 @@ export function createApp() {
   app.use('/api/horas-trabajo', horasTrabajoRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/finanzas', finanzasRouter);
+  app.use('/api/tesoreria', tesoreriaRouter);
   app.use('/api/bulk', bulkRouter);
+  app.use('/api/activity', activityRouter);
 
   // Ruta de prueba
   app.get('/api/health', (req, res) => {

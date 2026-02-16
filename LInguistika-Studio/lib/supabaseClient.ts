@@ -9,6 +9,10 @@ if (!url || !key) {
   console.warn('Supabase realtime deshabilitado: faltan VITE_SUPABASE_URL o VITE_SUPABASE_ANON_KEY');
 } else {
   client = createClient(url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
     realtime: {
       params: {
         eventsPerSecond: 5,

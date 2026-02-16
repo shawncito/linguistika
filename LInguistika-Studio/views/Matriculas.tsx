@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
 import { supabaseClient } from '../lib/supabaseClient';
+import { usePersistentState } from '../lib/usePersistentState';
 import { Matricula, Tutor, Curso, Estudiante } from '../types';
 import { Button, Card, CardHeader, CardTitle, CardDescription, CardContent, Select, Label, Badge, Input, Dialog } from '../components/UI';
 import { Plus, Edit, XCircle, AlertCircle, Calendar, User, BookOpen, GraduationCap, CheckCircle, AlertTriangle, X } from 'lucide-react';
@@ -59,11 +60,29 @@ const Matriculas: React.FC = () => {
   const [bulkConfirmPayload, setBulkConfirmPayload] = useState<{ bulkId: string; grupoNombre: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-    const [viewMode, setViewMode] = useState<'tabla' | 'tarjetas'>('tarjetas');
+  const [viewMode, setViewMode] = usePersistentState<'tabla' | 'tarjetas'>('ui:matriculas:viewMode', 'tarjetas', {
+    version: 1,
+    validate: (v: unknown): v is 'tabla' | 'tarjetas' => v === 'tabla' || v === 'tarjetas',
+  });
   const [detailOpen, setDetailOpen] = useState(false);
   const [detalle, setDetalle] = useState<Matricula | null>(null);
-  const [filterCursoId, setFilterCursoId] = useState<number>(0);
-  const [filterGrupo, setFilterGrupo] = useState<string>('');
+  const [filterCursoId, setFilterCursoId] = usePersistentState<number>('ui:matriculas:filterCursoId', 0, {
+    version: 1,
+    validate: (v): v is number => Number.isFinite(Number(v)),
+  });
+  const [filterGrupo, setFilterGrupo] = usePersistentState<string>('ui:matriculas:filterGrupo', '', {
+    version: 1,
+    validate: (v): v is string => typeof v === 'string',
+  });
+  const [sortMode, setSortMode] = usePersistentState<'fecha_desc' | 'fecha_asc' | 'estudiante_asc' | 'estudiante_desc' | 'curso_asc' | 'curso_desc'>(
+    'ui:matriculas:sortMode',
+    'fecha_desc',
+    {
+      version: 1,
+      validate: (v: unknown): v is 'fecha_desc' | 'fecha_asc' | 'estudiante_asc' | 'estudiante_desc' | 'curso_asc' | 'curso_desc' =>
+        v === 'fecha_desc' || v === 'fecha_asc' || v === 'estudiante_asc' || v === 'estudiante_desc' || v === 'curso_asc' || v === 'curso_desc',
+    }
+  );
   const [editingId, setEditingId] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formData, setFormData] = useState({
@@ -300,13 +319,6 @@ const Matriculas: React.FC = () => {
     setShowModal(false);
   };
 
-  if (loading) return (
-    <div className="flex flex-col items-center justify-center h-[50vh]">
-      <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-4" />
-      <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Cargando matrículas...</p>
-    </div>
-  );
-
   const filteredMatriculas = matriculas.filter((m) => {
     const byCurso = filterCursoId ? m.curso_id === filterCursoId : true;
     const byGrupo = filterGrupo ? (m.grupo_nombre || '').toLowerCase().includes(filterGrupo.toLowerCase()) : true;
@@ -363,6 +375,62 @@ const Matriculas: React.FC = () => {
   }, {} as Record<string, any>);
 
   const displayMatriculas = Object.values(groupedMatriculas) as MatriculaConGrupo[];
+
+  const compareText = (a: string | null | undefined, b: string | null | undefined) =>
+    (a || '').localeCompare((b || ''), 'es', { sensitivity: 'base' });
+
+  const sortedTableMatriculas = useMemo(() => {
+    const list = [...matriculas];
+    list.sort((a, b) => {
+      switch (sortMode) {
+        case 'fecha_desc':
+          return (new Date(b.fecha_inscripcion).getTime() || 0) - (new Date(a.fecha_inscripcion).getTime() || 0);
+        case 'fecha_asc':
+          return (new Date(a.fecha_inscripcion).getTime() || 0) - (new Date(b.fecha_inscripcion).getTime() || 0);
+        case 'estudiante_asc':
+          return compareText(a.estudiante_nombre, b.estudiante_nombre);
+        case 'estudiante_desc':
+          return compareText(b.estudiante_nombre, a.estudiante_nombre);
+        case 'curso_asc':
+          return compareText(a.curso_nombre, b.curso_nombre);
+        case 'curso_desc':
+          return compareText(b.curso_nombre, a.curso_nombre);
+        default:
+          return 0;
+      }
+    });
+    return list;
+  }, [matriculas, sortMode]);
+
+  const sortedDisplayMatriculas = useMemo(() => {
+    const list = [...displayMatriculas];
+    list.sort((a, b) => {
+      switch (sortMode) {
+        case 'fecha_desc':
+          return (new Date(b.fecha_inscripcion).getTime() || 0) - (new Date(a.fecha_inscripcion).getTime() || 0);
+        case 'fecha_asc':
+          return (new Date(a.fecha_inscripcion).getTime() || 0) - (new Date(b.fecha_inscripcion).getTime() || 0);
+        case 'estudiante_asc':
+          return compareText(a.estudiante_nombre, b.estudiante_nombre);
+        case 'estudiante_desc':
+          return compareText(b.estudiante_nombre, a.estudiante_nombre);
+        case 'curso_asc':
+          return compareText(a.curso_nombre, b.curso_nombre);
+        case 'curso_desc':
+          return compareText(b.curso_nombre, a.curso_nombre);
+        default:
+          return 0;
+      }
+    });
+    return list;
+  }, [displayMatriculas, sortMode]);
+
+  if (loading) return (
+    <div className="flex flex-col items-center justify-center h-[50vh]">
+      <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-4" />
+      <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Cargando matrículas...</p>
+    </div>
+  );
 
   // Utilidades para renderizar horarios
   const parseMaybeJSON = (value: any) => {
@@ -565,6 +633,18 @@ const Matriculas: React.FC = () => {
               <Button variant={viewMode==='tabla'?'primary':'secondary'} onClick={() => setViewMode('tabla')} className="h-9">Tabla</Button>
               <Button variant={viewMode==='tarjetas'?'primary':'secondary'} onClick={() => setViewMode('tarjetas')} className="h-9">Tarjetas</Button>
             </div>
+
+            <div className="min-w-[220px]">
+              <Label>Ordenar</Label>
+              <Select value={sortMode} onChange={(e) => setSortMode(e.target.value as any)} className="mt-1 h-9">
+                <option value="fecha_desc">Inscripción: recientes</option>
+                <option value="fecha_asc">Inscripción: antiguas</option>
+                <option value="estudiante_asc">Estudiante A→Z</option>
+                <option value="estudiante_desc">Estudiante Z→A</option>
+                <option value="curso_asc">Curso A→Z</option>
+                <option value="curso_desc">Curso Z→A</option>
+              </Select>
+            </div>
             <Button
             onClick={() => {
               resetForm();
@@ -672,7 +752,7 @@ const Matriculas: React.FC = () => {
                 </td>
               </tr>
             ) : (
-              matriculas.map((m) => (
+              sortedTableMatriculas.map((m) => (
                 <tr key={m.id} className="transition-colors hover:bg-white/5">
                   <td className="px-8 py-4">
                     <div className="flex items-center gap-3">
@@ -743,7 +823,7 @@ const Matriculas: React.FC = () => {
               <Label>Filtrar por curso</Label>
               <Select value={filterCursoId} onChange={(e) => setFilterCursoId(parseInt(e.target.value) || 0)} className="mt-2">
                 <option value={0}>Todos los cursos</option>
-                  {Array.from(new Set(displayMatriculas.map(m => m.curso_id))).map(cid => {
+                  {Array.from(new Set(sortedDisplayMatriculas.map(m => m.curso_id))).map(cid => {
                   const c = cursos.find(cu => cu.id === cid);
                   return <option key={cid} value={cid}>{c?.nombre || `Curso ${cid}`}</option>;
                 })}
@@ -759,12 +839,12 @@ const Matriculas: React.FC = () => {
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
-            {displayMatriculas.length === 0 ? (
+            {sortedDisplayMatriculas.length === 0 ? (
               <div className="col-span-full flex flex-col items-center justify-center py-24 bg-white/5 rounded-2xl border-2 border-dashed border-white/10">
                 <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Sin matrículas</p>
               </div>
             ) : (
-              displayMatriculas.filter(m => {
+              sortedDisplayMatriculas.filter(m => {
                 const byCurso = filterCursoId ? m.curso_id === filterCursoId : true;
                 const byGrupo = filterGrupo ? (m.grupo_nombre || '').toLowerCase().includes(filterGrupo.toLowerCase()) : true;
                 return byCurso && byGrupo;
@@ -773,7 +853,7 @@ const Matriculas: React.FC = () => {
                   <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Sin resultados para estos filtros</p>
                 </div>
               ) : (
-                displayMatriculas.filter(m => {
+                sortedDisplayMatriculas.filter(m => {
                   const byCurso = filterCursoId ? m.curso_id === filterCursoId : true;
                   const byGrupo = filterGrupo ? (m.grupo_nombre || '').toLowerCase().includes(filterGrupo.toLowerCase()) : true;
                   return byCurso && byGrupo;
@@ -872,7 +952,9 @@ const Matriculas: React.FC = () => {
                   setShowModal(false);
                   resetForm();
                 }}
-                className="p-3 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-white transition-all"
+                className="p-3 rounded-full bg-white/10 border border-white/15 text-white transition-all hover:bg-[#FFC800]/20 hover:border-[#FFC800]/50"
+                aria-label="Cerrar"
+                title="Cerrar"
               >
                 <X className="w-6 h-6" />
               </button>

@@ -81,13 +81,38 @@ router.get('/empleados', async (req, res) => {
       return res.status(500).json({ error: 'SUPABASE_SERVICE_KEY no configurado' });
     }
 
-    const { data, error } = await supabaseAdmin
+    // Obtener usuarios de la tabla
+    const { data: usuarios, error } = await supabaseAdmin
       .from('usuarios')
       .select('id, rol, nombre_completo, telefono, estado, created_at, updated_at')
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    return res.json(data);
+
+    // Obtener emails desde auth
+    const { data: authUsers, error: authError } = await supabaseAdmin.auth.admin.listUsers({
+      perPage: 1000,
+    });
+
+    if (authError) {
+      console.error('Error obteniendo auth users:', authError);
+      // Continuar sin emails si hay error
+      return res.json(usuarios);
+    }
+
+    // Mapear emails a usuarios
+    const emailMap = {};
+    (authUsers?.users || []).forEach((user) => {
+      emailMap[user.id] = user.email;
+    });
+
+    // Combinar datos
+    const usuariosConEmail = usuarios.map((u) => ({
+      ...u,
+      email: emailMap[u.id] || null,
+    }));
+
+    return res.json(usuariosConEmail);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }

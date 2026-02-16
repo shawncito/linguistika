@@ -5,6 +5,7 @@ import ExcelJS from 'exceljs';
 import { supabaseAdmin, supabaseForToken } from '../supabase.js';
 import { requireRoles } from '../middleware/roles.js';
 import { validateTutorCourseSchedule } from '../utils/scheduleValidator.js';
+import { schemaErrorPayload } from '../utils/schemaErrors.js';
 
 const router = express.Router();
 
@@ -21,6 +22,13 @@ const upload = multer({
 function normalizeEmail(value) {
   const s = String(value ?? '').trim().toLowerCase();
   return s || null;
+}
+
+function normalizeName(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
 function uniq(arr) {
@@ -193,6 +201,7 @@ async function buildTemplateCursosBulkExcelJS(db) {
   wsLeeme.addRow(['1) Descarga este template, complétalo y súbelo en Cursos.']);
   wsLeeme.addRow(['2) Si una fila tiene error, se omitirá y se reportará el motivo; las demás se insertan.']);
   wsLeeme.addRow(['3) Si asignas Tutor, debes definir horario (dias_schedule) con hora inicio/fin por día.']);
+  wsLeeme.addRow(['4) Formato de hora: HH:mm (24 horas). Ej: 08:00, 17:30.']);
   wsLeeme.getColumn(1).width = 95;
 
   const { tutores } = await fetchCatalogosForTemplate(db);
@@ -347,8 +356,8 @@ function buildTemplateEstudiantesBulkV1() {
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(leeme), 'LEEME');
 
-  const header = [['Nombre Completo', 'Correo Electrónico', 'Teléfono', '¿Perfil Completo? (SI/NO)', 'Grupo (Opcional)']];
-  const example = [['Juan Pérez', 'juan@email.com', '+506 8888-8888', 'SI', '']];
+  const header = [['Nombre Completo', 'Nombre Encargado', 'Correo Encargado', 'Teléfono Encargado', '¿Perfil Completo? (SI/NO)', 'Grupo (Opcional)']];
+  const example = [['Juan Pérez', 'María Pérez', 'maria@email.com', '+506 8888-8888', 'SI', '']];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([...header, ...example]), 'ESTUDIANTES');
 
   return wb;
@@ -372,8 +381,8 @@ function buildTemplateGrupoMatriculaV1() {
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(leeme), 'LEEME');
 
-  const estHeader = [['Nombre Completo', 'Correo Electrónico', 'Teléfono', '¿Perfil Completo? (SI/NO)', 'Grupo (Opcional)']];
-  const estExample = [['Juan Pérez', 'juan@email.com', '+506 8888-8888', 'NO', 'Grupo Matemáticas A']];
+  const estHeader = [['Nombre Completo', 'Nombre Encargado', 'Correo Encargado', 'Teléfono Encargado', '¿Perfil Completo? (SI/NO)', 'Grupo (Opcional)']];
+  const estExample = [['Juan Pérez', 'María Pérez', 'maria@email.com', '+506 8888-8888', 'NO', 'Grupo Matemáticas A']];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([...estHeader, ...estExample]), 'ESTUDIANTES');
 
   const gruposHeader = [['Nombre del Grupo', 'Curso (ID o Nombre)', 'Tutor (Nombre)', 'Estudiantes Esperados', 'Fecha Inicio (AAAA-MM-DD)', 'Turno']];
@@ -489,10 +498,11 @@ async function buildTemplateEstudiantesBulkExcelJS() {
   wsLeeme.addRow(['- Completa las columnas.']);
   wsLeeme.addRow(['- "Grado*" es obligatorio (igual que el formulario manual).']);
   wsLeeme.addRow(['- Días: escribe Tarde/Noche en la columna del día. Deja vacío si no asiste ese día.']);
+  wsLeeme.addRow(['- Formato de hora (si aplica en otros templates): HH:mm (24 horas). Ej: 08:00, 17:30.']);
   wsLeeme.getColumn(1).width = 90;
 
   const wsEst = workbook.addWorksheet('ESTUDIANTES');
-  setHeaderRow(wsEst, ['Nombre Completo*', 'Correo Electrónico', 'Correo Encargado', 'Teléfono Encargado', 'Grado*', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']);
+  setHeaderRow(wsEst, ['Nombre Completo*', 'Nombre Encargado', 'Correo Encargado', 'Teléfono Encargado', 'Grado*', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']);
   // Sin filas de ejemplo: evita que el usuario suba el template y se inserte un registro de muestra.
   wsEst.addRow(['', '', '', '', '', '', '', '', '', '', '', '']);
   wsEst.getColumn(1).width = 28;
@@ -534,6 +544,7 @@ async function buildTemplateGrupoMatriculaExcelJS(db) {
   wsLeeme.addRow(['- Curso se selecciona de la lista (o puedes escribir un ID).']);
   wsLeeme.addRow(['- Tutor se selecciona de la lista.']);
   wsLeeme.addRow(['- Turno se selecciona de la lista (Tarde / Noche).']);
+  wsLeeme.addRow(['- Formato de hora (si aplica en otros templates): HH:mm (24 horas). Ej: 08:00, 17:30.']);
   wsLeeme.getColumn(1).width = 90;
 
   // Hoja oculta con catálogos
@@ -551,7 +562,7 @@ async function buildTemplateGrupoMatriculaExcelJS(db) {
   wsListas.getColumn(4).width = 14;
 
   const wsEst = workbook.addWorksheet('ESTUDIANTES');
-  setHeaderRow(wsEst, ['Nombre Completo*', 'Correo Electrónico', 'Correo Encargado', 'Teléfono Encargado', 'Grado*', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo', 'Grupo (Opcional)']);
+  setHeaderRow(wsEst, ['Nombre Completo*', 'Nombre Encargado', 'Correo Encargado', 'Teléfono Encargado', 'Grado*', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo', 'Grupo (Opcional)']);
   wsEst.addRow(['', '', '', '', '', '', '', '', '', '', '', '', '']);
   wsEst.getColumn(1).width = 28;
   wsEst.getColumn(2).width = 28;
@@ -716,7 +727,7 @@ router.get('/grupos', async (req, res) => {
     const tutorIds = Array.from(new Set((grupos ?? []).map((g) => g.tutor_id).filter(Boolean)));
 
     const [{ data: cursos, error: cErr }, { data: tutores, error: tErr }, { data: linksBulk, error: lErr }] = await Promise.all([
-      cursoIds.length ? db.from('cursos').select('id, nombre').in('id', cursoIds) : Promise.resolve({ data: [], error: null }),
+      cursoIds.length ? db.from('cursos').select('id, nombre, costo_curso, pago_tutor').in('id', cursoIds) : Promise.resolve({ data: [], error: null }),
       tutorIds.length ? db.from('tutores').select('id, nombre').in('id', tutorIds) : Promise.resolve({ data: [], error: null }),
       grupoIdsNum.length
         ? db.from('estudiantes_en_grupo').select('matricula_grupo_id').in('matricula_grupo_id', grupoIdsNum)
@@ -735,7 +746,7 @@ router.get('/grupos', async (req, res) => {
       linksNormal = data ?? [];
     }
 
-    const cursoMap = new Map((cursos ?? []).map((c) => [c.id, c.nombre]));
+    const cursoMap = new Map((cursos ?? []).map((c) => [c.id, { nombre: c.nombre, costo_curso: c.costo_curso, pago_tutor: c.pago_tutor }]));
     const tutorMap = new Map((tutores ?? []).map((t) => [t.id, t.nombre]));
     const linkCount = new Map();
     for (const row of linksBulk ?? []) {
@@ -748,12 +759,17 @@ router.get('/grupos', async (req, res) => {
     }
 
     const result = (grupos ?? [])
-      .map((g) => ({
-        ...g,
-        curso_nombre: cursoMap.get(g.curso_id) ?? null,
-        tutor_nombre: tutorMap.get(g.tutor_id) ?? null,
-        linked_count: linkCount.get(g.id) || 0,
-      }))
+      .map((g) => {
+        const cursoData = cursoMap.get(g.curso_id) ?? {};
+        return {
+          ...g,
+          curso_nombre: cursoData.nombre ?? null,
+          tutor_nombre: tutorMap.get(g.tutor_id) ?? null,
+          costo_curso: Number(cursoData.costo_curso) || 0,
+          pago_tutor: Number(cursoData.pago_tutor) || 0,
+          linked_count: linkCount.get(g.id) || 0,
+        };
+      })
       .sort((a, b) => {
         const da = a.created_at ? new Date(a.created_at).getTime() : 0;
         const dbt = b.created_at ? new Date(b.created_at).getTime() : 0;
@@ -785,7 +801,7 @@ router.get('/grupos/:id', async (req, res) => {
     if (!grupo) return res.status(404).json({ error: 'Grupo no encontrado' });
 
     const [{ data: curso }, { data: tutor }, { data: links, error: lErr }] = await Promise.all([
-      grupo.curso_id ? db.from('cursos').select('id, nombre').eq('id', grupo.curso_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+      grupo.curso_id ? db.from('cursos').select('id, nombre, costo_curso, pago_tutor').eq('id', grupo.curso_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
       grupo.tutor_id ? db.from('tutores').select('id, nombre').eq('id', grupo.tutor_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
       db
         .from('estudiantes_en_grupo')
@@ -822,6 +838,8 @@ router.get('/grupos/:id', async (req, res) => {
         ...grupo,
         curso_nombre: curso?.nombre ?? null,
         tutor_nombre: tutor?.nombre ?? null,
+        costo_curso: Number(curso?.costo_curso) || 0,
+        pago_tutor: Number(curso?.pago_tutor) || 0,
         linked_count: bulkIds.length + (estudiantesNormales?.length ?? 0),
       },
       estudiantes: {
@@ -843,7 +861,7 @@ router.get('/estudiantes', async (req, res) => {
     {
       const { data, error } = await db
         .from('estudiantes_bulk')
-        .select('id, nombre, correo, telefono, email_encargado, telefono_encargado, grado, dias, dias_turno, requiere_perfil_completo, estado, created_at, updated_at')
+        .select('id, nombre, nombre_encargado, correo, telefono, email_encargado, telefono_encargado, grado, dias, dias_turno, requiere_perfil_completo, estado, created_at, updated_at')
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -856,6 +874,7 @@ router.get('/estudiantes', async (req, res) => {
           if (fallback.error) return res.status(400).json({ error: fallback.error.message });
           estudiantes = (fallback.data ?? []).map((s) => ({
             ...s,
+            nombre_encargado: null,
             email_encargado: null,
             telefono_encargado: null,
             grado: null,
@@ -1014,8 +1033,9 @@ router.post('/estudiantes', async (req, res) => {
 
     const {
       nombre,
-      correo = null,
-      telefono = null,
+      nombre_encargado = null,
+      email_encargado = null,
+      telefono_encargado = null,
       requiere_perfil_completo = false,
       estado = true,
     } = req.body ?? {};
@@ -1027,15 +1047,16 @@ router.post('/estudiantes', async (req, res) => {
       .from('estudiantes_bulk')
       .insert({
         nombre: n,
-        correo: correo ? String(correo).trim() : null,
-        telefono: telefono ? String(telefono).trim() : null,
+        nombre_encargado: nombre_encargado ? String(nombre_encargado).trim() : null,
+        email_encargado: email_encargado ? String(email_encargado).trim() : null,
+        telefono_encargado: telefono_encargado ? String(telefono_encargado).trim() : null,
         requiere_perfil_completo: !!requiere_perfil_completo,
         estado: estado === true || estado === 1 || estado === '1',
         created_by: userId,
         updated_by: userId,
         updated_at: new Date().toISOString(),
       })
-      .select('id, nombre, correo, telefono, requiere_perfil_completo, estado, created_at, updated_at')
+      .select('id, nombre, nombre_encargado, email_encargado, telefono_encargado, requiere_perfil_completo, estado, created_at, updated_at')
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
@@ -1059,8 +1080,9 @@ router.put('/estudiantes/:id', async (req, res) => {
       updated_at: new Date().toISOString(),
     };
     if (body.nombre !== undefined) updateData.nombre = body.nombre ? String(body.nombre).trim() : null;
-    if (body.correo !== undefined) updateData.correo = body.correo ? String(body.correo).trim() : null;
-    if (body.telefono !== undefined) updateData.telefono = body.telefono ? String(body.telefono).trim() : null;
+    if (body.nombre_encargado !== undefined) updateData.nombre_encargado = body.nombre_encargado ? String(body.nombre_encargado).trim() : null;
+    if (body.email_encargado !== undefined) updateData.email_encargado = body.email_encargado ? String(body.email_encargado).trim() : null;
+    if (body.telefono_encargado !== undefined) updateData.telefono_encargado = body.telefono_encargado ? String(body.telefono_encargado).trim() : null;
     if (body.requiere_perfil_completo !== undefined) updateData.requiere_perfil_completo = !!body.requiere_perfil_completo;
     if (body.estado !== undefined) updateData.estado = body.estado === true || body.estado === 1 || body.estado === '1';
 
@@ -1068,7 +1090,7 @@ router.put('/estudiantes/:id', async (req, res) => {
       .from('estudiantes_bulk')
       .update(updateData)
       .eq('id', id)
-      .select('id, nombre, correo, telefono, requiere_perfil_completo, estado, created_at, updated_at')
+      .select('id, nombre, nombre_encargado, email_encargado, telefono_encargado, requiere_perfil_completo, estado, created_at, updated_at')
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
@@ -1329,15 +1351,51 @@ router.post('/preview', upload.single('file'), async (req, res) => {
       const sheet = wb.Sheets['Estudiantes_Individuales'] || wb.Sheets['Estudiantes'] || wb.Sheets['ESTUDIANTES'];
       if (!sheet) return res.status(400).json({ error: 'Falta hoja "Estudiantes_Individuales"' });
 
+      const { error: schemaErr } = await db
+        .from('estudiantes_bulk')
+        .select('id, dias')
+        .limit(1);
+      if (schemaErr && isMissingColumnError(schemaErr)) {
+        return res.status(400).json({
+          error: 'Tu base de datos no tiene la columna dias en estudiantes_bulk. Aplica la migración 002_add_estudiantes_bulk_extra_fields.sql y vuelve a intentar.',
+          details: schemaErr.message,
+        });
+      }
+      if (schemaErr) return res.status(400).json({ error: schemaErr.message });
+
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
       const payload = rows
         .map((r, idx) => {
           const nombre = String(r['Nombre Completo*'] ?? r['nombre*'] ?? r['Nombre Completo'] ?? r['nombre'] ?? '').trim();
-          const correo = normalizeEmail(r['Correo Electrónico'] ?? r['Correo'] ?? r['correo'] ?? '');
+          const nombre_encargado = String(r['Nombre Encargado'] ?? r['nombre_encargado'] ?? '').trim() || null;
+
+          const email_encargado = normalizeEmail(
+            r['Correo Encargado'] ??
+            r['Email Encargado'] ??
+            r['email_encargado'] ??
+            // Compat: si alguien sube template viejo, lo tratamos como contacto del encargado
+            r['Correo Electrónico'] ??
+            r['Correo'] ??
+            r['correo'] ??
+            ''
+          );
+          const telefono_encargado =
+            String(
+              r['Teléfono Encargado'] ??
+              r['Telefono Encargado'] ??
+              r['telefono_encargado'] ??
+              // Compat template viejo
+              r['Teléfono'] ??
+              r['telefono'] ??
+              ''
+            ).trim() || null;
+
           return {
             rowNumber: idx + 2,
             nombre,
-            correo,
+            nombre_encargado,
+            email_encargado,
+            telefono_encargado,
             grado: String(r['Grado*'] ?? r['Grado'] ?? r['grado'] ?? '').trim() || null,
           };
         })
@@ -1347,22 +1405,15 @@ router.post('/preview', upload.single('file'), async (req, res) => {
         return res.status(400).json({ error: 'No hay filas válidas (se requiere nombre).' });
       }
 
-      const emails = uniq(payload.map((p) => p.correo));
-      const dupInFile = uniq(
+      const dupNombreGradoInFile = uniq(
         payload
-          .filter((p) => p.correo)
-          .map((p) => p.correo)
-          .filter((e, i, arr) => arr.indexOf(e) !== i)
+          .map((p) => `${String(p.nombre).trim().toLowerCase()}|${String(p.grado ?? '').trim().toLowerCase()}`)
+          .filter((k, i, arr) => k && arr.indexOf(k) !== i)
       );
-
-      let dupInDb = [];
-      if (emails.length > 0) {
-        const { data, error } = await db.from('estudiantes').select('id,email').in('email', emails);
-        // Si la tabla/columna no existe por compat, no bloquear previsualización
-        if (!error) {
-          dupInDb = uniq((data ?? []).map((x) => normalizeEmail(x.email)).filter(Boolean));
-        }
-      }
+      const missingContacto = payload
+        .filter((p) => !p.email_encargado && !p.telefono_encargado)
+        .slice(0, 50)
+        .map((p) => ({ rowNumber: p.rowNumber, nombre: p.nombre }));
 
       return res.json({
         ok: true,
@@ -1372,8 +1423,8 @@ router.post('/preview', upload.single('file'), async (req, res) => {
         truncated: payload.length > MAX_ROWS,
         preview: payload.slice(0, MAX_ROWS),
         warnings: {
-          duplicate_emails_in_file: dupInFile,
-          duplicate_emails_in_estudiantes: dupInDb,
+          duplicate_nombre_grado_in_file: dupNombreGradoInFile,
+          missing_contacto_encargado: missingContacto,
         },
       });
     }
@@ -1383,6 +1434,22 @@ router.post('/preview', upload.single('file'), async (req, res) => {
       const sheetEst = wb.Sheets['ESTUDIANTES'] || wb.Sheets['Estudiantes'] || wb.Sheets['Estudiantes_Individuales'];
       if (!sheetGrupos) return res.status(400).json({ error: 'Falta hoja "GRUPOS"' });
       if (!sheetEst) return res.status(400).json({ error: 'Falta hoja "ESTUDIANTES"' });
+
+      const [bulkSchemaRes, gruposSchemaRes] = await Promise.all([
+        db.from('estudiantes_bulk').select('id, dias, dias_turno').limit(1),
+        db.from('matriculas_grupo').select('id, fecha_inicio').limit(1),
+      ]);
+
+      if (bulkSchemaRes.error) {
+        const payload = schemaErrorPayload(bulkSchemaRes.error);
+        if (payload) return res.status(400).json(payload);
+        return res.status(400).json({ error: bulkSchemaRes.error.message });
+      }
+      if (gruposSchemaRes.error) {
+        const payload = schemaErrorPayload(gruposSchemaRes.error);
+        if (payload) return res.status(400).json(payload);
+        return res.status(400).json({ error: gruposSchemaRes.error.message });
+      }
 
       const gruposRows = XLSX.utils.sheet_to_json(sheetGrupos, { defval: '', raw: false });
       const grupos = gruposRows
@@ -1431,11 +1498,31 @@ router.post('/preview', upload.single('file'), async (req, res) => {
       const estudiantesPayload = estRows
         .map((r, idx) => {
           const nombre = String(r['Nombre Completo'] ?? r['Nombre Completo*'] ?? r['nombre*'] ?? r['nombre'] ?? '').trim();
-          const correo = normalizeEmail(r['Correo Electrónico'] ?? r['Correo'] ?? r['correo'] ?? '');
+          const nombre_encargado = String(r['Nombre Encargado'] ?? r['nombre_encargado'] ?? '').trim() || null;
+          const email_encargado = normalizeEmail(
+            r['Correo Encargado'] ??
+            r['Email Encargado'] ??
+            r['email_encargado'] ??
+            r['Correo Electrónico'] ??
+            r['Correo'] ??
+            r['correo'] ??
+            ''
+          );
+          const telefono_encargado =
+            String(
+              r['Teléfono Encargado'] ??
+              r['Telefono Encargado'] ??
+              r['telefono_encargado'] ??
+              r['Teléfono'] ??
+              r['telefono'] ??
+              ''
+            ).trim() || null;
           return {
             rowNumber: idx + 2,
             nombre,
-            correo,
+            nombre_encargado,
+            email_encargado,
+            telefono_encargado,
             grado: String(r['Grado*'] ?? r['Grado'] ?? r['grado'] ?? '').trim() || null,
             grupo_nombre: String(r['Grupo (Opcional)'] ?? r['Grupo'] ?? '').trim() || null,
           };
@@ -1446,21 +1533,15 @@ router.post('/preview', upload.single('file'), async (req, res) => {
         return res.status(400).json({ error: 'No hay estudiantes válidos (se requiere Nombre Completo).' });
       }
 
-      const emails = uniq(estudiantesPayload.map((p) => p.correo));
-      const dupInFile = uniq(
+      const dupNombreGradoInFile = uniq(
         estudiantesPayload
-          .filter((p) => p.correo)
-          .map((p) => p.correo)
-          .filter((e, i, arr) => arr.indexOf(e) !== i)
+          .map((p) => `${String(p.nombre).trim().toLowerCase()}|${String(p.grado ?? '').trim().toLowerCase()}`)
+          .filter((k, i, arr) => k && arr.indexOf(k) !== i)
       );
-
-      let dupInDb = [];
-      if (emails.length > 0) {
-        const { data, error } = await db.from('estudiantes').select('id,email').in('email', emails);
-        if (!error) {
-          dupInDb = uniq((data ?? []).map((x) => normalizeEmail(x.email)).filter(Boolean));
-        }
-      }
+      const missingContacto = estudiantesPayload
+        .filter((p) => !p.email_encargado && !p.telefono_encargado)
+        .slice(0, 50)
+        .map((p) => ({ rowNumber: p.rowNumber, nombre: p.nombre }));
 
       return res.json({
         ok: true,
@@ -1479,8 +1560,8 @@ router.post('/preview', upload.single('file'), async (req, res) => {
           preview: estudiantesPayload.slice(0, MAX_ROWS),
         },
         warnings: {
-          duplicate_emails_in_file: dupInFile,
-          duplicate_emails_in_estudiantes: dupInDb,
+          duplicate_nombre_grado_in_file: dupNombreGradoInFile,
+          missing_contacto_encargado: missingContacto,
         },
       });
     }
@@ -1488,6 +1569,8 @@ router.post('/preview', upload.single('file'), async (req, res) => {
     // Para otros tipos devolvemos una vista mínima
     return res.json({ ok: true, bulkType, message: 'Previsualización no implementada a detalle para este tipo. Usa Importar para procesar.' });
   } catch (error) {
+    const payload = schemaErrorPayload(error);
+    if (payload) return res.status(400).json(payload);
     return res.status(500).json({ error: error.message });
   }
 });
@@ -1518,6 +1601,14 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         return res.status(400).json({ error: 'No hay filas con datos en la hoja CURSOS.' });
       }
 
+      const { data: existingCursos, error: existingCursosErr } = await db
+        .from('cursos')
+        .select('nombre');
+      if (existingCursosErr) throw existingCursosErr;
+
+      const existingNames = new Set((existingCursos ?? []).map((c) => normalizeName(c?.nombre)));
+      const seenNames = new Set();
+
       const successes = [];
       const failures = [];
 
@@ -1539,6 +1630,15 @@ router.post('/upload', upload.single('file'), async (req, res) => {
           if (!nombre) {
             throw new Error('Nombre requerido (columna Nombre*)');
           }
+
+          const nombreKey = normalizeName(nombre);
+          if (existingNames.has(nombreKey)) {
+            throw new Error('Nombre duplicado: ya existe un curso con ese nombre');
+          }
+          if (seenNames.has(nombreKey)) {
+            throw new Error('Nombre duplicado en el archivo');
+          }
+          seenNames.add(nombreKey);
 
           const { dias, dias_schedule, error: scheduleErr } = extractDiasScheduleFromCursoRow(row);
           if (scheduleErr) throw new Error(scheduleErr);
@@ -1626,15 +1726,32 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
       const payload = rows
-        .map((r) => {
+        .map((r, idx) => {
           const { dias, dias_turno } = extractDiasTurnoFromRow(r);
           return {
+            rowNumber: idx + 2,
             nombre: String(r['Nombre Completo*'] ?? r['nombre*'] ?? r['Nombre Completo'] ?? r['nombre'] ?? '').trim(),
-            // Compat: aceptamos el teléfono si viene de templates viejos, pero el template nuevo no lo pide.
-            telefono: String(r['Teléfono'] ?? r['telefono'] ?? '').trim() || null,
-            correo: String(r['Correo Electrónico'] ?? r['Correo'] ?? r['correo'] ?? '').trim() || null,
-            email_encargado: String(r['Correo Encargado'] ?? r['Email Encargado'] ?? r['email_encargado'] ?? '').trim() || null,
-            telefono_encargado: String(r['Teléfono Encargado'] ?? r['Telefono Encargado'] ?? r['telefono_encargado'] ?? '').trim() || null,
+            nombre_encargado: String(r['Nombre Encargado'] ?? r['nombre_encargado'] ?? '').trim() || null,
+            email_encargado: normalizeEmail(
+              r['Correo Encargado'] ??
+              r['Email Encargado'] ??
+              r['email_encargado'] ??
+              // Compat template viejo
+              r['Correo Electrónico'] ??
+              r['Correo'] ??
+              r['correo'] ??
+              ''
+            ),
+            telefono_encargado:
+              String(
+                r['Teléfono Encargado'] ??
+                r['Telefono Encargado'] ??
+                r['telefono_encargado'] ??
+                // Compat template viejo
+                r['Teléfono'] ??
+                r['telefono'] ??
+                ''
+              ).trim() || null,
             grado: String(r['Grado*'] ?? r['Grado'] ?? r['grado'] ?? '').trim() || null,
             dias,
             dias_turno,
@@ -1648,41 +1765,79 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         return res.status(400).json({ error: 'No hay filas válidas (se requiere nombre).' });
       }
 
-      const insertRows = payload.map((r) => ({
-        nombre: r.nombre,
-        correo: r.correo,
-        telefono: r.telefono,
-        email_encargado: r.email_encargado,
-        telefono_encargado: r.telefono_encargado,
-        grado: r.grado,
-        dias: r.dias ? JSON.stringify(r.dias) : null,
-        dias_turno: r.dias_turno ? JSON.stringify(r.dias_turno) : null,
-        requiere_perfil_completo: !!r.requiere_perfil_completo,
-        estado: true,
-        created_by: userId,
-        updated_by: userId,
-        updated_at: new Date().toISOString(),
-      }));
+      const [existingEst, existingBulk] = await Promise.all([
+        db.from('estudiantes').select('nombre'),
+        db.from('estudiantes_bulk').select('nombre'),
+      ]);
 
-      const { data, error } = await db
-        .from('estudiantes_bulk')
-        .insert(insertRows)
-        .select('id, nombre');
+      if (existingEst.error) throw existingEst.error;
+      if (existingBulk.error) throw existingBulk.error;
 
-      if (error) {
-        if (isMissingColumnError(error)) {
-          return res.status(400).json({
-            error: 'Tu base de datos no tiene las columnas nuevas para importar el formato actualizado. Aplica la migración 002_add_estudiantes_bulk_extra_fields.sql y vuelve a intentar.',
-            details: error.message,
-          });
+      const existingNames = new Set([
+        ...(existingEst.data ?? []).map((e) => normalizeName(e?.nombre)),
+        ...(existingBulk.data ?? []).map((e) => normalizeName(e?.nombre)),
+      ]);
+      const seenNames = new Set();
+      const failures = [];
+
+      const insertRows = [];
+      for (const r of payload) {
+        const nombreKey = normalizeName(r.nombre);
+        if (existingNames.has(nombreKey)) {
+          failures.push({ rowNumber: r.rowNumber, nombre: r.nombre || null, error: 'Nombre duplicado: ya existe un estudiante con ese nombre' });
+          continue;
         }
-        return res.status(400).json({ error: error.message });
+        if (seenNames.has(nombreKey)) {
+          failures.push({ rowNumber: r.rowNumber, nombre: r.nombre || null, error: 'Nombre duplicado en el archivo' });
+          continue;
+        }
+        seenNames.add(nombreKey);
+        insertRows.push({
+          nombre: r.nombre,
+          // Contacto del estudiante ya no se usa (UI guardian-only)
+          correo: null,
+          telefono: null,
+          nombre_encargado: r.nombre_encargado,
+          email_encargado: r.email_encargado,
+          telefono_encargado: r.telefono_encargado,
+          grado: r.grado,
+          dias: r.dias ? JSON.stringify(r.dias) : null,
+          dias_turno: r.dias_turno ? JSON.stringify(r.dias_turno) : null,
+          requiere_perfil_completo: !!r.requiere_perfil_completo,
+          estado: true,
+          created_by: userId,
+          updated_by: userId,
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      let data = [];
+      if (insertRows.length > 0) {
+        const insertRes = await db
+          .from('estudiantes_bulk')
+          .insert(insertRows)
+          .select('id, nombre');
+
+        if (insertRes.error) {
+          if (isMissingColumnError(insertRes.error)) {
+            return res.status(400).json({
+              error: 'Tu base de datos no tiene las columnas nuevas para importar el formato actualizado. Aplica la migración 002_add_estudiantes_bulk_extra_fields.sql y vuelve a intentar.',
+              details: insertRes.error.message,
+            });
+          }
+          return res.status(400).json({ error: insertRes.error.message });
+        }
+        data = insertRes.data ?? [];
       }
 
       return res.json({
         ok: true,
         bulkType,
+        attempted: payload.length,
+        created: data?.length ?? 0,
+        failed: failures.length,
         inserted: data?.length ?? 0,
+        failures,
       });
     }
 
@@ -1717,19 +1872,51 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         g.tutor_id = tutorId;
       }
 
+      const [existingEst, existingBulk] = await Promise.all([
+        db.from('estudiantes').select('nombre'),
+        db.from('estudiantes_bulk').select('nombre'),
+      ]);
+
+      if (existingEst.error) throw existingEst.error;
+      if (existingBulk.error) throw existingBulk.error;
+
+      const existingNames = new Set([
+        ...(existingEst.data ?? []).map((e) => normalizeName(e?.nombre)),
+        ...(existingBulk.data ?? []).map((e) => normalizeName(e?.nombre)),
+      ]);
+
       // Intentar importación transaccional vía RPC (si existe en la BD)
       // Si no existe, caemos al flujo actual (inserts secuenciales).
       try {
         const estRowsPreview = XLSX.utils.sheet_to_json(sheetEst, { defval: '', raw: false });
-        const estudiantesForRpc = estRowsPreview
-          .map((r) => {
+        const estudiantesRaw = estRowsPreview
+          .map((r, idx) => {
             const { dias, dias_turno } = extractDiasTurnoFromRow(r);
             return {
+              rowNumber: idx + 2,
               nombre: String(r['Nombre Completo'] ?? r['Nombre Completo*'] ?? r['nombre*'] ?? r['nombre'] ?? '').trim(),
-              telefono: String(r['Teléfono'] ?? r['telefono'] ?? '').trim() || null,
-              correo: String(r['Correo Electrónico'] ?? r['Correo'] ?? r['correo'] ?? '').trim() || null,
-              email_encargado: String(r['Correo Encargado'] ?? r['Email Encargado'] ?? r['email_encargado'] ?? '').trim() || null,
-              telefono_encargado: String(r['Teléfono Encargado'] ?? r['Telefono Encargado'] ?? r['telefono_encargado'] ?? '').trim() || null,
+              nombre_encargado: String(r['Nombre Encargado'] ?? r['nombre_encargado'] ?? '').trim() || null,
+              // Contacto del estudiante ya no se usa (UI guardian-only)
+              telefono: null,
+              correo: null,
+              email_encargado: normalizeEmail(
+                r['Correo Encargado'] ??
+                r['Email Encargado'] ??
+                r['email_encargado'] ??
+                r['Correo Electrónico'] ??
+                r['Correo'] ??
+                r['correo'] ??
+                ''
+              ),
+              telefono_encargado:
+                String(
+                  r['Teléfono Encargado'] ??
+                  r['Telefono Encargado'] ??
+                  r['telefono_encargado'] ??
+                  r['Teléfono'] ??
+                  r['telefono'] ??
+                  ''
+                ).trim() || null,
               grado: String(r['Grado*'] ?? r['Grado'] ?? r['grado'] ?? '').trim() || null,
               dias: dias ?? null,
               dias_turno: dias_turno ?? null,
@@ -1739,7 +1926,24 @@ router.post('/upload', upload.single('file'), async (req, res) => {
           })
           .filter((r) => r.nombre);
 
-        if (estudiantesForRpc.length > 0) {
+        const failures = [];
+        const seenNames = new Set();
+        const estudiantesForRpc = [];
+        for (const r of estudiantesRaw) {
+          const nombreKey = normalizeName(r.nombre);
+          if (existingNames.has(nombreKey)) {
+            failures.push({ rowNumber: r.rowNumber, nombre: r.nombre || null, error: 'Nombre duplicado: ya existe un estudiante con ese nombre' });
+            continue;
+          }
+          if (seenNames.has(nombreKey)) {
+            failures.push({ rowNumber: r.rowNumber, nombre: r.nombre || null, error: 'Nombre duplicado en el archivo' });
+            continue;
+          }
+          seenNames.add(nombreKey);
+          estudiantesForRpc.push(r);
+        }
+
+        if (estudiantesForRpc.length > 0 && failures.length === 0) {
           const gruposForRpc = grupos.map((g) => ({
             curso_id: Number(g.curso_id),
             tutor_id: Number(g.tutor_id),
@@ -1752,7 +1956,19 @@ router.post('/upload', upload.single('file'), async (req, res) => {
           const { data: rpcData, error: rpcErr } = await db.rpc('bulk_import_estudiantes_y_grupos_v1', {
             p_user_id: userId,
             p_grupos: gruposForRpc,
-            p_estudiantes: estudiantesForRpc,
+            p_estudiantes: estudiantesForRpc.map((r) => ({
+              nombre: r.nombre,
+              nombre_encargado: r.nombre_encargado,
+              telefono: r.telefono,
+              correo: r.correo,
+              email_encargado: r.email_encargado,
+              telefono_encargado: r.telefono_encargado,
+              grado: r.grado,
+              dias: r.dias ?? null,
+              dias_turno: r.dias_turno ?? null,
+              requiere_perfil_completo: r.requiere_perfil_completo,
+              grupo_nombre: r.grupo_nombre,
+            })),
           });
 
           if (!rpcErr && rpcData) {
@@ -1802,14 +2018,32 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
       const estRows = XLSX.utils.sheet_to_json(sheetEst, { defval: '', raw: false });
       const estudiantesPayload = estRows
-        .map((r) => {
+        .map((r, idx) => {
           const { dias, dias_turno } = extractDiasTurnoFromRow(r);
           return {
+            rowNumber: idx + 2,
             nombre: String(r['Nombre Completo'] ?? r['Nombre Completo*'] ?? r['nombre*'] ?? r['nombre'] ?? '').trim(),
-            telefono: String(r['Teléfono'] ?? r['telefono'] ?? '').trim() || null,
-            correo: String(r['Correo Electrónico'] ?? r['Correo'] ?? r['correo'] ?? '').trim() || null,
-            email_encargado: String(r['Correo Encargado'] ?? r['Email Encargado'] ?? r['email_encargado'] ?? '').trim() || null,
-            telefono_encargado: String(r['Teléfono Encargado'] ?? r['Telefono Encargado'] ?? r['telefono_encargado'] ?? '').trim() || null,
+            nombre_encargado: String(r['Nombre Encargado'] ?? r['nombre_encargado'] ?? '').trim() || null,
+            telefono: null,
+            correo: null,
+            email_encargado: normalizeEmail(
+              r['Correo Encargado'] ??
+              r['Email Encargado'] ??
+              r['email_encargado'] ??
+              r['Correo Electrónico'] ??
+              r['Correo'] ??
+              r['correo'] ??
+              ''
+            ),
+            telefono_encargado:
+              String(
+                r['Teléfono Encargado'] ??
+                r['Telefono Encargado'] ??
+                r['telefono_encargado'] ??
+                r['Teléfono'] ??
+                r['telefono'] ??
+                ''
+              ).trim() || null,
             grado: String(r['Grado*'] ?? r['Grado'] ?? r['grado'] ?? '').trim() || null,
             dias,
             dias_turno,
@@ -1823,32 +2057,54 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         return res.status(400).json({ error: 'No hay estudiantes válidos (se requiere Nombre Completo).' });
       }
 
-      const { data: bulkRows, error: bulkErr } = await db
-        .from('estudiantes_bulk')
-        .insert(
-          estudiantesPayload.map((r) => ({
-            nombre: r.nombre,
-            telefono: r.telefono,
-            correo: r.correo,
-            email_encargado: r.email_encargado,
-            telefono_encargado: r.telefono_encargado,
-            grado: r.grado,
-            dias: r.dias ? JSON.stringify(r.dias) : null,
-            dias_turno: r.dias_turno ? JSON.stringify(r.dias_turno) : null,
-            requiere_perfil_completo: r.requiere_perfil_completo,
-            estado: true,
-            created_by: userId,
-            updated_by: userId,
-            updated_at: new Date().toISOString(),
-          }))
-        )
-        .select('id');
+      const failures = [];
+      const seenNames = new Set();
+      const estudiantesToInsert = [];
+      for (const r of estudiantesPayload) {
+        const nombreKey = normalizeName(r.nombre);
+        if (existingNames.has(nombreKey)) {
+          failures.push({ rowNumber: r.rowNumber, nombre: r.nombre || null, error: 'Nombre duplicado: ya existe un estudiante con ese nombre' });
+          continue;
+        }
+        if (seenNames.has(nombreKey)) {
+          failures.push({ rowNumber: r.rowNumber, nombre: r.nombre || null, error: 'Nombre duplicado en el archivo' });
+          continue;
+        }
+        seenNames.add(nombreKey);
+        estudiantesToInsert.push(r);
+      }
 
-      if (bulkErr) return res.status(400).json({ error: bulkErr.message });
+      let bulkRows = [];
+      if (estudiantesToInsert.length > 0) {
+        const insertRes = await db
+          .from('estudiantes_bulk')
+          .insert(
+            estudiantesToInsert.map((r) => ({
+              nombre: r.nombre,
+              telefono: null,
+              correo: null,
+              nombre_encargado: r.nombre_encargado,
+              email_encargado: r.email_encargado,
+              telefono_encargado: r.telefono_encargado,
+              grado: r.grado,
+              dias: r.dias ? JSON.stringify(r.dias) : null,
+              dias_turno: r.dias_turno ? JSON.stringify(r.dias_turno) : null,
+              requiere_perfil_completo: r.requiere_perfil_completo,
+              estado: true,
+              created_by: userId,
+              updated_by: userId,
+              updated_at: new Date().toISOString(),
+            }))
+          )
+          .select('id');
+
+        if (insertRes.error) return res.status(400).json({ error: insertRes.error.message });
+        bulkRows = insertRes.data ?? [];
+      }
 
       const links = [];
-      for (let i = 0; i < estudiantesPayload.length; i++) {
-        const grupoNombre = estudiantesPayload[i].grupo_nombre;
+      for (let i = 0; i < estudiantesToInsert.length; i++) {
+        const grupoNombre = estudiantesToInsert[i].grupo_nombre;
         if (!grupoNombre) continue;
         const gid = groupNameToId.get(grupoNombre);
         if (!gid) return res.status(400).json({ error: `Grupo no encontrado en hoja GRUPOS: ${grupoNombre}` });
@@ -1864,8 +2120,12 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         ok: true,
         bulkType,
         created_grupos: groupNameToId.size,
+        attempted: estudiantesPayload.length,
+        created: bulkRows?.length ?? 0,
+        failed: failures.length,
         inserted_estudiantes_bulk: bulkRows?.length ?? 0,
         linked: links.length,
+        failures,
       });
     }
 

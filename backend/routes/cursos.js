@@ -1,8 +1,26 @@
 import express from 'express';
 import { supabaseAdmin, supabaseForToken } from '../supabase.js';
 import { validateTutorCourseSchedule } from '../utils/scheduleValidator.js';
+import { schemaErrorPayload } from '../utils/schemaErrors.js';
 
 const router = express.Router();
+
+function sendSchemaError(res, error) {
+  const payload = schemaErrorPayload(error);
+  if (payload) return res.status(400).json(payload);
+  return res.status(500).json({ error: error.message });
+}
+
+function normalizeName(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function escapeLike(value) {
+  return String(value ?? '').replace(/[%_]/g, '\\$&');
+}
 
 function getDb(req) {
   return supabaseAdmin ?? supabaseForToken(req.accessToken);
@@ -290,7 +308,7 @@ router.get('/', async (req, res) => {
 
     res.json(cursosResponse);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -323,7 +341,7 @@ router.get('/:id', async (req, res) => {
 
     res.json(cursoResponse);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -336,13 +354,27 @@ router.post('/', async (req, res) => {
       tipo_clase = 'grupal', dias = null, dias_turno = null, dias_schedule = null,
       costo_curso = 0, pago_tutor = 0,
       tipo_pago = 'sesion',
+      metodo = null,
       grado_activo = false, grado_nombre = null, grado_color = null,
       tutor_id = null
     } = req.body;
     const userId = req.user?.id;
-    
-    if (!nombre) {
+
+    const nombreTrimmed = String(nombre ?? '').trim();
+    if (!nombreTrimmed) {
       return res.status(400).json({ error: 'Campo requerido: nombre' });
+    }
+
+    const nombreKey = normalizeName(nombreTrimmed);
+    const likeValue = escapeLike(nombreKey);
+    const dupCurso = await db
+      .from('cursos')
+      .select('id')
+      .ilike('nombre', likeValue)
+      .limit(1);
+    if (dupCurso.error) throw dupCurso.error;
+    if ((dupCurso.data ?? []).length > 0) {
+      return res.status(409).json({ error: 'Ya existe un curso con ese nombre' });
     }
 
     // Si se proporciona tutor_id, validar SIEMPRE: aptitud + compatibilidad + no-conflicto
@@ -408,12 +440,13 @@ router.post('/', async (req, res) => {
     const { data: curso, error } = await db
       .from('cursos')
       .insert({
-        nombre,
+        nombre: nombreTrimmed,
         descripcion,
         nivel: nivel || 'None',
         max_estudiantes: maxEstudiantes,
         tipo_clase,
         tipo_pago,
+        metodo: metodo ? String(metodo).trim() : null,
         dias: dias ? JSON.stringify(dias) : null,
         dias_schedule: dias_schedule ? JSON.stringify(dias_schedule) : null,
         costo_curso: parseFloat(costo_curso) || 0,
@@ -440,6 +473,7 @@ router.post('/', async (req, res) => {
       dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null,
       dias_schedule: curso.dias_schedule ? JSON.parse(curso.dias_schedule) : null,
       tipo_pago: curso.tipo_pago,
+      metodo: curso.metodo ?? null,
       grado_activo: curso.grado_activo,
       grado_nombre: curso.grado_nombre,
       grado_color: curso.grado_color,
@@ -449,7 +483,7 @@ router.post('/', async (req, res) => {
     res.status(201).json(cursoResponse);
   } catch (error) {
     console.error('Error al crear curso:', error);
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -480,6 +514,7 @@ router.put('/:id', async (req, res) => {
     if (req.body.descripcion !== undefined) updateData.descripcion = req.body.descripcion;
     if (req.body.nivel !== undefined) updateData.nivel = req.body.nivel;
     if (req.body.tipo_clase !== undefined) updateData.tipo_clase = req.body.tipo_clase;
+    if (req.body.metodo !== undefined) updateData.metodo = req.body.metodo ? String(req.body.metodo).trim() : null;
     
     // Si es tutoría, max_estudiantes debe ser null
     if (req.body.max_estudiantes !== undefined) {
@@ -566,6 +601,7 @@ router.put('/:id', async (req, res) => {
       dias_turno: curso.dias_turno ? JSON.parse(curso.dias_turno) : null,
       dias_schedule: curso.dias_schedule ? JSON.parse(curso.dias_schedule) : null,
       tipo_pago: curso.tipo_pago,
+      metodo: curso.metodo ?? null,
       grado_activo: curso.grado_activo,
       grado_nombre: curso.grado_nombre,
       grado_color: curso.grado_color,
@@ -575,7 +611,7 @@ router.put('/:id', async (req, res) => {
 
     res.json(cursoResponse);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -698,7 +734,7 @@ router.delete('/:id', async (req, res) => {
     if (!deleted) return res.status(404).json({ error: 'Curso no encontrado' });
     res.json({ message: 'Curso eliminado correctamente' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 

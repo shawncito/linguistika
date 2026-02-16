@@ -1,7 +1,26 @@
 import express from 'express';
 import { supabase } from '../supabase.js';
+import { getOrCreateEncargadoId } from '../utils/encargados.js';
+import { schemaErrorPayload } from '../utils/schemaErrors.js';
 
 const router = express.Router();
+
+function sendSchemaError(res, error) {
+  const payload = schemaErrorPayload(error);
+  if (payload) return res.status(400).json(payload);
+  return res.status(500).json({ error: error.message });
+}
+
+function normalizeName(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function escapeLike(value) {
+  return String(value ?? '').replace(/[%_]/g, '\\$&');
+}
 
 // GET - Listar todos los estudiantes
 router.get('/', async (req, res) => {
@@ -25,7 +44,7 @@ router.get('/', async (req, res) => {
 
     res.json(estudiantesResponse);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -52,7 +71,7 @@ router.get('/:id', async (req, res) => {
 
     res.json(estudianteResponse);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -60,16 +79,31 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { 
-      nombre, email, email_encargado, telefono, telefono_encargado, 
+      nombre, email, email_encargado, telefono, telefono_encargado,
+      nombre_encargado,
       grado = null,
       dias = null,
       turno = null,
       dias_turno = null
     } = req.body;
     const userId = req.user?.id;
-    
-    if (!nombre) {
+
+    const nombreTrimmed = String(nombre ?? '').trim();
+    if (!nombreTrimmed) {
       return res.status(400).json({ error: 'Campo requerido: nombre' });
+    }
+
+    const nombreKey = normalizeName(nombreTrimmed);
+    const likeValue = escapeLike(nombreKey);
+    const [dupNormal, dupBulk] = await Promise.all([
+      supabase.from('estudiantes').select('id').ilike('nombre', likeValue).limit(1),
+      supabase.from('estudiantes_bulk').select('id').ilike('nombre', likeValue).limit(1),
+    ]);
+
+    if (dupNormal.error) throw dupNormal.error;
+    if (dupBulk.error) throw dupBulk.error;
+    if ((dupNormal.data ?? []).length > 0 || (dupBulk.data ?? []).length > 0) {
+      return res.status(409).json({ error: 'Ya existe un estudiante con ese nombre' });
     }
 
     // Validar formato de teléfono si se proporciona
@@ -78,14 +112,22 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +506 8888-8888' });
     }
 
+    const encargado_id = await getOrCreateEncargadoId({
+      nombre: nombre_encargado || null,
+      email: email_encargado || null,
+      telefono: telefono_encargado || null,
+    });
+
     const { data: estudiante, error } = await supabase
       .from('estudiantes')
       .insert({
-        nombre,
+        nombre: nombreTrimmed,
+        nombre_encargado: nombre_encargado || null,
         email: email || null,
         email_encargado: email_encargado || null,
         telefono: telefono || null,
         telefono_encargado: telefono_encargado || null,
+        encargado_id: encargado_id || null,
         grado,
         dias: dias ? JSON.stringify(dias) : null,
         turno,
@@ -111,7 +153,7 @@ router.post('/', async (req, res) => {
     res.status(201).json(estudianteResponse);
   } catch (error) {
     console.error('Error al crear estudiante:', error);
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -133,6 +175,7 @@ router.put('/:id', async (req, res) => {
     };
 
     if (req.body.nombre !== undefined) updateData.nombre = req.body.nombre;
+    if (req.body.nombre_encargado !== undefined) updateData.nombre_encargado = req.body.nombre_encargado || null;
     if (req.body.email !== undefined) updateData.email = req.body.email || null;
     if (req.body.email_encargado !== undefined) updateData.email_encargado = req.body.email_encargado || null;
     if (req.body.telefono !== undefined) updateData.telefono = req.body.telefono || null;
@@ -142,6 +185,29 @@ router.put('/:id', async (req, res) => {
     if (req.body.turno !== undefined) updateData.turno = req.body.turno;
     if (req.body.dias_turno !== undefined) updateData.dias_turno = req.body.dias_turno ? JSON.stringify(req.body.dias_turno) : null;
     if (req.body.estado !== undefined) updateData.estado = req.body.estado === 1 || req.body.estado === true;
+
+    // Si se actualiza la info del encargado, mantener encargado_id consistente.
+    const touchedEnc =
+      req.body.nombre_encargado !== undefined ||
+      req.body.email_encargado !== undefined ||
+      req.body.telefono_encargado !== undefined;
+
+    if (touchedEnc) {
+      const emailEnc = req.body.email_encargado !== undefined ? req.body.email_encargado : null;
+      const telEnc = req.body.telefono_encargado !== undefined ? req.body.telefono_encargado : null;
+      const nomEnc = req.body.nombre_encargado !== undefined ? req.body.nombre_encargado : null;
+
+      if (!emailEnc && !telEnc) {
+        updateData.encargado_id = null;
+      } else {
+        const encargado_id = await getOrCreateEncargadoId({
+          nombre: nomEnc,
+          email: emailEnc,
+          telefono: telEnc,
+        });
+        if (encargado_id) updateData.encargado_id = encargado_id;
+      }
+    }
 
     const { data: estudiante, error } = await supabase
       .from('estudiantes')
@@ -162,7 +228,7 @@ router.put('/:id', async (req, res) => {
 
     res.json(estudianteResponse);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -177,7 +243,7 @@ router.delete('/:id', async (req, res) => {
     if (error) throw error;
     res.json({ message: 'Estudiante eliminado correctamente' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 

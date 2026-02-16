@@ -1,6 +1,6 @@
 {
   "name": "linguistika",
-  "version": "1.0.0",
+  "version": "0.2.0-alpha",
   "description": "Gestor de horarios y tutorías para centro de idiomas",
   "private": true,
   "main": "desktop/main.cjs",
@@ -13,7 +13,7 @@
     "build:backend": "cd backend && npm run build",
     "build:frontend": "cd LInguistika-Studio && npm run build",
     "start": "cd backend && npm start",
-    "desktop:dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"cd LInguistika-Studio && npm run dev -- --port 5173 --strictPort\" \"wait-on http://localhost:5173 && npx electron .\"",
+    "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:prod": "npm run build:frontend && powershell -NoProfile -Command \"$env:FORCE_PROD='1'; npx electron .\"",
     "desktop:prod:debug": "npm run build:frontend && powershell -NoProfile -Command \"$env:FORCE_PROD='1'; $env:ELECTRON_DEBUG='1'; npx electron .\"",
     "desktop:build": "npm run build:frontend && electron-builder --win --x64",

@@ -42,6 +42,7 @@ export interface Curso {
   id: number;
   nombre: string;
   descripcion: string;
+  metodo?: 'Virtual' | 'Presencial' | null;
   nivel: string | 'None' | 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
   max_estudiantes?: number | null;
   tipo_clase?: 'grupal' | 'tutoria';
@@ -49,7 +50,7 @@ export interface Curso {
   dias?: string[] | null;
   dias_turno?: Record<string, 'Tarde' | 'Noche'> | null;
   dias_schedule?: Record<string, {
-    turno: 'Tarde' | 'Noche';
+    turno?: 'Tarde' | 'Noche';
     hora_inicio: string;
     hora_fin: string;
     duracion_horas?: number;
@@ -68,6 +69,7 @@ export interface Curso {
 export interface Estudiante {
   id: number;
   nombre: string;
+  nombre_encargado?: string | null;
   email?: string | null;
   email_encargado?: string | null;
   telefono?: string | null;
@@ -78,6 +80,7 @@ export interface Estudiante {
   fecha_inscripcion: string;
   estado: number;
   created_at: string;
+  matricula_grupo_id?: number | null;
 }
 
 export interface Usuario {
@@ -121,13 +124,15 @@ export interface Matricula {
   // Curso horario y metadatos
   curso_dias_turno?: Record<string, 'Tarde' | 'Noche'> | null;
   curso_dias_schedule?: Record<string, {
-    turno: 'Tarde' | 'Noche';
+    turno?: 'Tarde' | 'Noche';
     hora_inicio: string;
     hora_fin: string;
     duracion_horas?: number;
   }> | null;
   curso_tipo_clase?: string | null;
+  curso_tipo_pago?: 'sesion' | 'mensual' | string | null;
   curso_max_estudiantes?: number | null;
+  curso_metodo?: 'Virtual' | 'Presencial' | string | null;
   curso_grado_activo?: boolean | null;
   curso_grado_nombre?: string | null;
   curso_grado_color?: string | null;
@@ -144,6 +149,13 @@ export interface Clase {
   estado: EstadoClase;
   notas: string;
   created_at: string;
+  // Estado de programación/confirmación (usado en Dashboard)
+  avisado?: boolean;
+  confirmado?: boolean;
+  motivo_cancelacion?: string | null;
+  // Datos extra (cuando viene de schedule)
+  turno?: string | null;
+  duracion_horas?: number | null;
   // Joined fields
   tutor_id?: number;
   estudiante_id?: number;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { api } from "../services/api";
 import { supabaseClient } from "../lib/supabaseClient";
+import { usePersistentState } from "../lib/usePersistentState";
 import { Tutor } from "../types";
 import {
   Button, Card, CardHeader, CardTitle, CardDescription, CardContent,
@@ -13,6 +14,15 @@ const ESPECIALIDADES = ["Ingles", "Frances", "Aleman", "Portugues", "Chino", "Ja
 
 const NIVELES = ["A1","A2","B1","B2","C1","C2"];
 
+const hexToRgba = (hex: string, alpha: number) => {
+  const normalized = hex.replace('#', '');
+  const bigint = parseInt(normalized, 16);
+  const r = (bigint >> 16) & 255;
+  const g = (bigint >> 8) & 255;
+  const b = bigint & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
 const sortDias = (dias: string[]) => dias.slice().sort((a, b) => DIAS_SEMANA.indexOf(a) - DIAS_SEMANA.indexOf(b));
 const sortDiaEntries = <T,>(dias_horarios: Record<string, T> = {}) =>
   Object.entries(dias_horarios).sort((a, b) => DIAS_SEMANA.indexOf(a[0]) - DIAS_SEMANA.indexOf(b[0]));
@@ -22,6 +32,18 @@ const toWhatsAppUrl = (telefono?: string | null) => {
   if (!telefono) return "";
   const digits = telefono.replace(/[^\d+]/g, "");
   return `https://wa.me/${digits.replace(/^\+/, "")}`;
+};
+
+const getTutorColor = (color?: string | null) => (color && color.trim() ? color : "#94a3b8");
+
+const tutorChipStyle = (color?: string | null) => {
+  const resolved = getTutorColor(color);
+  return {
+    backgroundColor: hexToRgba(resolved, 0.12),
+    borderColor: hexToRgba(resolved, 0.4),
+    color: resolved,
+    boxShadow: `0 6px 16px ${hexToRgba(resolved, 0.12)}`,
+  } as React.CSSProperties;
 };
 
 const Tutores: React.FC = () => {
@@ -48,10 +70,55 @@ const Tutores: React.FC = () => {
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedTutor, setSelectedTutor] = useState<Tutor | null>(null);
   const [menuOpen, setMenuOpen] = useState<number | null>(null);
-  const [estadoFiltro, setEstadoFiltro] = useState<"todos" | "activos" | "inactivos">("todos");
-  const [search, setSearch] = useState("");
-  const [viewMode, setViewMode] = useState<"tabla" | "tarjetas">("tarjetas");
-  const [especialidadFiltro, setEspecialidadFiltro] = useState("");
+  const [estadoFiltro, setEstadoFiltro] = usePersistentState<"todos" | "activos" | "inactivos">(
+    'ui:tutores:estadoFiltro',
+    "todos",
+    {
+      version: 1,
+      validate: (v: unknown): v is "todos" | "activos" | "inactivos" => v === "todos" || v === "activos" || v === "inactivos",
+    }
+  );
+  const [search, setSearch] = usePersistentState<string>('ui:tutores:search', "", { version: 1, validate: (v): v is string => typeof v === 'string' });
+  const [viewMode, setViewMode] = usePersistentState<"tabla" | "tarjetas">(
+    'ui:tutores:viewMode',
+    "tarjetas",
+    {
+      version: 1,
+      validate: (v: unknown): v is "tabla" | "tarjetas" => v === "tabla" || v === "tarjetas",
+    }
+  );
+  const [especialidadFiltro, setEspecialidadFiltro] = usePersistentState<string>(
+    'ui:tutores:especialidadFiltro',
+    "",
+    {
+      version: 1,
+      validate: (v): v is string => typeof v === 'string',
+    }
+  );
+  const [sortMode, setSortMode] = usePersistentState<
+    'nombre_asc' | 'nombre_desc'
+    | 'estado_activos'
+    | 'especialidad_asc' | 'especialidad_desc'
+    | 'email_asc' | 'email_desc'
+    | 'dias_disponibles_desc' | 'dias_disponibles_asc'
+  >(
+    'ui:tutores:sortMode',
+    'nombre_asc',
+    {
+      version: 1,
+      validate: (v: unknown): v is
+        | 'nombre_asc' | 'nombre_desc'
+        | 'estado_activos'
+        | 'especialidad_asc' | 'especialidad_desc'
+        | 'email_asc' | 'email_desc'
+        | 'dias_disponibles_desc' | 'dias_disponibles_asc' =>
+        v === 'nombre_asc' || v === 'nombre_desc'
+        || v === 'estado_activos'
+        || v === 'especialidad_asc' || v === 'especialidad_desc'
+        || v === 'email_asc' || v === 'email_desc'
+        || v === 'dias_disponibles_desc' || v === 'dias_disponibles_asc',
+    }
+  );
 
   const loadData = async () => {
     setLoading(true);
@@ -75,7 +142,7 @@ const Tutores: React.FC = () => {
   }, [tutores]);
 
   const tutoresFiltrados = useMemo(() => {
-    return tutores.filter((t) => {
+    const filtered = tutores.filter((t) => {
       const matchesEstado = estadoFiltro === "todos" ? true : estadoFiltro === "activos" ? t.estado === 1 : t.estado !== 1;
       const especialidadesTutor = t.especialidad ? t.especialidad.split(",").map((s) => s.trim()) : [];
       const matchesEspecialidad = especialidadFiltro ? especialidadesTutor.includes(especialidadFiltro) : true;
@@ -85,7 +152,47 @@ const Tutores: React.FC = () => {
         : true;
       return matchesEstado && matchesEspecialidad && matchesSearch;
     });
-  }, [tutores, estadoFiltro, especialidadFiltro, search]);
+
+    const compareText = (a: string | null | undefined, b: string | null | undefined) =>
+      (a || '').localeCompare((b || ''), 'es', { sensitivity: 'base' });
+
+    const diasCount = (t: Tutor) => {
+      const dh = (t as any)?.dias_horarios;
+      if (dh && typeof dh === 'object' && !Array.isArray(dh)) return Object.keys(dh).length;
+      const dt = (t as any)?.dias_turno;
+      if (dt && typeof dt === 'object' && !Array.isArray(dt)) return Object.keys(dt).length;
+      const dias = (t as any)?.dias;
+      if (Array.isArray(dias)) return dias.length;
+      return 0;
+    };
+
+    const sorted = [...filtered].sort((a, b) => {
+      switch (sortMode) {
+        case 'nombre_asc':
+          return compareText(a.nombre, b.nombre);
+        case 'nombre_desc':
+          return compareText(b.nombre, a.nombre);
+        case 'estado_activos':
+          return (b.estado === 1 ? 1 : 0) - (a.estado === 1 ? 1 : 0) || compareText(a.nombre, b.nombre);
+        case 'especialidad_asc':
+          return compareText(a.especialidad, b.especialidad) || compareText(a.nombre, b.nombre);
+        case 'especialidad_desc':
+          return compareText(b.especialidad, a.especialidad) || compareText(a.nombre, b.nombre);
+        case 'email_asc':
+          return compareText(a.email, b.email) || compareText(a.nombre, b.nombre);
+        case 'email_desc':
+          return compareText(b.email, a.email) || compareText(a.nombre, b.nombre);
+        case 'dias_disponibles_desc':
+          return diasCount(b) - diasCount(a) || compareText(a.nombre, b.nombre);
+        case 'dias_disponibles_asc':
+          return diasCount(a) - diasCount(b) || compareText(a.nombre, b.nombre);
+        default:
+          return 0;
+      }
+    });
+
+    return sorted;
+  }, [tutores, estadoFiltro, especialidadFiltro, search, sortMode]);
 
   const resumenCards = useMemo(() => {
     const activos = tutoresFiltrados.filter((t) => t.estado === 1);
@@ -268,6 +375,21 @@ const Tutores: React.FC = () => {
               </div>
             </div>
 
+            <div>
+              <Label>Ordenar</Label>
+              <Select value={sortMode} onChange={(e) => setSortMode(e.target.value as any)}>
+                <option value="nombre_asc">Nombre A→Z</option>
+                <option value="nombre_desc">Nombre Z→A</option>
+                <option value="estado_activos">Activos primero</option>
+                <option value="especialidad_asc">Especialidad A→Z</option>
+                <option value="especialidad_desc">Especialidad Z→A</option>
+                <option value="email_asc">Email A→Z</option>
+                <option value="email_desc">Email Z→A</option>
+                <option value="dias_disponibles_desc">Más días disponibles</option>
+                <option value="dias_disponibles_asc">Menos días disponibles</option>
+              </Select>
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <Button
                 size="sm"
@@ -377,7 +499,13 @@ const Tutores: React.FC = () => {
                       </div>
                       <div>
                         <div className="font-bold text-xl text-slate-900">{selectedTutor.nombre}</div>
-                        <Badge variant="info" className="mt-1">{selectedTutor.especialidad}</Badge>
+                        <Badge
+                          variant="info"
+                          className="mt-1"
+                          style={tutorChipStyle((selectedTutor as any)?.color)}
+                        >
+                          {selectedTutor.especialidad}
+                        </Badge>
                       </div>
                     </div>
 
@@ -451,7 +579,13 @@ const Tutores: React.FC = () => {
                           </div>
                           <div className="min-w-0 flex-1">
                             <CardTitle className="text-lg text-white whitespace-normal break-words">{tutor.nombre}</CardTitle>
-                            <Badge variant="secondary" className="mt-1 font-bold">{tutor.especialidad}</Badge>
+                            <Badge
+                              variant="secondary"
+                              className="mt-1 font-bold"
+                              style={tutorChipStyle((tutor as any).color)}
+                            >
+                              {tutor.especialidad}
+                            </Badge>
                           </div>
                         </div>
                         <div className="relative flex-shrink-0">
@@ -587,7 +721,9 @@ const Tutores: React.FC = () => {
                       <TableRow key={tutor.id}>
                         <TableCell className="font-semibold text-slate-900">{tutor.nombre}</TableCell>
                         <TableCell>
-                          <Badge variant="secondary">{tutor.especialidad}</Badge>
+                          <Badge variant="secondary" style={tutorChipStyle((tutor as any).color)}>
+                            {tutor.especialidad}
+                          </Badge>
                         </TableCell>
                         <TableCell>
                           <Button
@@ -629,7 +765,12 @@ const Tutores: React.FC = () => {
                 <CardTitle>{editingId ? "Editar Docente" : "Nuevo Docente"}</CardTitle>
                 <CardDescription>Completa los datos del especialista</CardDescription>
               </div>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-white">
+              <button
+                onClick={() => setShowModal(false)}
+                className="text-slate-200 hover:text-white transition-colors p-2 rounded-full bg-white/10 border border-white/10 hover:bg-[#FFC800]/20 hover:border-[#FFC800]/50"
+                aria-label="Cerrar"
+                title="Cerrar"
+              >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>

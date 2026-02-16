@@ -22,7 +22,7 @@ router.get('/', async (req, res) => {
       .select(`
         *,
         estudiantes:estudiante_id (nombre),
-        cursos:curso_id (nombre, dias_turno, dias_schedule, tipo_clase, max_estudiantes, grado_activo, grado_nombre, grado_color, costo_curso, pago_tutor),
+        cursos:curso_id (nombre, metodo, dias_turno, dias_schedule, tipo_clase, tipo_pago, max_estudiantes, grado_activo, grado_nombre, grado_color, costo_curso, pago_tutor),
         tutores:tutor_id (nombre, tarifa_por_hora)
       `)
       .eq('estado', true)
@@ -43,6 +43,8 @@ router.get('/', async (req, res) => {
       curso_dias_turno: m.cursos?.dias_turno || null,
       curso_dias_schedule: m.cursos?.dias_schedule || null,
       curso_tipo_clase: m.cursos?.tipo_clase || null,
+      curso_tipo_pago: m.cursos?.tipo_pago || null,
+      curso_metodo: m.cursos?.metodo || null,
       curso_max_estudiantes: m.cursos?.max_estudiantes || null,
       curso_grado_activo: m.cursos?.grado_activo || null,
       curso_grado_nombre: m.cursos?.grado_nombre || null,
@@ -66,7 +68,7 @@ router.get('/:id', async (req, res) => {
       .select(`
         *,
         estudiantes:estudiante_id (nombre),
-        cursos:curso_id (nombre, dias_turno, dias_schedule, tipo_clase, max_estudiantes, grado_activo, grado_nombre, grado_color, costo_curso, pago_tutor),
+        cursos:curso_id (nombre, metodo, dias_turno, dias_schedule, tipo_clase, tipo_pago, max_estudiantes, grado_activo, grado_nombre, grado_color, costo_curso, pago_tutor),
         tutores:tutor_id (nombre, tarifa_por_hora)
       `)
       .eq('id', req.params.id)
@@ -93,6 +95,8 @@ router.get('/:id', async (req, res) => {
       curso_dias_turno: matricula.cursos?.dias_turno || null,
       curso_dias_schedule: matricula.cursos?.dias_schedule || null,
       curso_tipo_clase: matricula.cursos?.tipo_clase || null,
+      curso_tipo_pago: matricula.cursos?.tipo_pago || null,
+      curso_metodo: matricula.cursos?.metodo || null,
       curso_max_estudiantes: matricula.cursos?.max_estudiantes || null,
       curso_grado_activo: matricula.cursos?.grado_activo || null,
       curso_grado_nombre: matricula.cursos?.grado_nombre || null,

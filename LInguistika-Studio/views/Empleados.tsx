@@ -26,6 +26,7 @@ type EmpleadoRow = {
   rol: RolEmpleado;
   nombre_completo: string | null;
   telefono: string | null;
+  email: string | null;
   estado: boolean;
   created_at?: string;
   updated_at?: string;
@@ -269,7 +270,7 @@ const Empleados: React.FC = () => {
           <Table>
             <TableHeader>
               <tr>
-                <TableHead>ID</TableHead>
+                <TableHead>Correo</TableHead>
                 <TableHead>Rol</TableHead>
                 <TableHead>Nombre</TableHead>
                 <TableHead>Teléfono</TableHead>
@@ -280,7 +281,7 @@ const Empleados: React.FC = () => {
             <TableBody>
               {empleados.map((u) => (
                 <TableRow key={u.id}>
-                  <TableCell className="font-mono text-xs">{u.id}</TableCell>
+                  <TableCell className="text-sm">{u.email || 'sin email'}</TableCell>
                   <TableCell>
                     {editingId === u.id ? (
                       <Select value={editRol} onChange={(e) => setEditRol(e.target.value as RolEmpleado)}>

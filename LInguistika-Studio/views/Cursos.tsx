@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { api } from '../services/api';
 import { supabaseClient } from '../lib/supabaseClient';
+import { usePersistentState } from '../lib/usePersistentState';
 import { Curso, Tutor } from '../types';
 import { 
   Button, Card, CardHeader, CardTitle, CardDescription, CardContent,
@@ -10,6 +11,16 @@ import { Plus, Edit, Trash2, BookOpen, Users as UsersIcon, Clock, MoreVertical, 
 
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const NIVELES = ['None', 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+
+const timeToMinutes = (value?: string | null) => {
+  if (!value) return null;
+  const [h, m] = value.split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h * 60 + m;
+};
+
+const formatRange = (inicio?: string | null, fin?: string | null) =>
+  inicio && fin ? `${inicio}-${fin}` : 'Sin horario';
 
 const getErrorMessage = (error: any) =>
   error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Error al guardar curso';
@@ -71,9 +82,13 @@ const Cursos: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [tutorCompatibilidad, setTutorCompatibilidad] = useState<Record<number, { compatible: boolean; detalles: string }>>({});
+  const [tutorSearch, setTutorSearch] = useState('');
+  const [onlyCompatible, setOnlyCompatible] = useState(false);
+  const [tutorPreviewId, setTutorPreviewId] = useState<number | null>(null);
   const [formData, setFormData] = useState({
     nombre: '',
     descripcion: '',
+    metodo: '',
     nivel: 'None',
     tipo_clase: 'grupal',
     tipo_pago: 'sesion',
@@ -95,17 +110,62 @@ const Cursos: React.FC = () => {
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedCurso, setSelectedCurso] = useState<Curso | null>(null);
   const [menuOpen, setMenuOpen] = useState<number | null>(null);
-  const [estadoFiltro, setEstadoFiltro] = useState<'todos' | 'activos' | 'inactivos'>('todos');
-  const [search, setSearch] = useState('');
-  const [viewMode, setViewMode] = useState<'tabla' | 'tarjetas'>('tarjetas');
-  const [nivelFiltro, setNivelFiltro] = useState('');
+  const [estadoFiltro, setEstadoFiltro] = usePersistentState<'todos' | 'activos' | 'inactivos'>(
+    'ui:cursos:estadoFiltro',
+    'todos',
+    {
+      version: 1,
+      validate: (v: unknown): v is 'todos' | 'activos' | 'inactivos' => v === 'todos' || v === 'activos' || v === 'inactivos',
+    }
+  );
+  const [search, setSearch] = usePersistentState<string>('ui:cursos:search', '', {
+    version: 1,
+    validate: (v): v is string => typeof v === 'string',
+  });
+  const [viewMode, setViewMode] = usePersistentState<'tabla' | 'tarjetas'>('ui:cursos:viewMode', 'tarjetas', {
+    version: 1,
+    validate: (v: unknown): v is 'tabla' | 'tarjetas' => v === 'tabla' || v === 'tarjetas',
+  });
+  const [nivelFiltro, setNivelFiltro] = usePersistentState<string>('ui:cursos:nivelFiltro', '', {
+    version: 1,
+    validate: (v): v is string => typeof v === 'string',
+  });
+  const [sortMode, setSortMode] = usePersistentState<
+    'nombre_asc' | 'nombre_desc'
+    | 'nivel_asc' | 'nivel_desc'
+    | 'estado_activos'
+    | 'tipo_clase_asc' | 'tipo_clase_desc'
+    | 'tipo_pago_asc' | 'tipo_pago_desc'
+    | 'costo_desc' | 'costo_asc'
+    | 'pago_tutor_desc' | 'pago_tutor_asc'
+  >(
+    'ui:cursos:sortMode',
+    'nombre_asc',
+    {
+      version: 1,
+      validate: (v: unknown): v is
+        | 'nombre_asc' | 'nombre_desc'
+        | 'nivel_asc' | 'nivel_desc'
+        | 'estado_activos'
+        | 'tipo_clase_asc' | 'tipo_clase_desc'
+        | 'tipo_pago_asc' | 'tipo_pago_desc'
+        | 'costo_desc' | 'costo_asc'
+        | 'pago_tutor_desc' | 'pago_tutor_asc' =>
+        v === 'nombre_asc' || v === 'nombre_desc'
+        || v === 'nivel_asc' || v === 'nivel_desc'
+        || v === 'estado_activos'
+        || v === 'tipo_clase_asc' || v === 'tipo_clase_desc'
+        || v === 'tipo_pago_asc' || v === 'tipo_pago_desc'
+        || v === 'costo_desc' || v === 'costo_asc'
+        || v === 'pago_tutor_desc' || v === 'pago_tutor_asc',
+    }
+  );
 
   const [bulkFile, setBulkFile] = useState<File | null>(null);
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkResult, setBulkResult] = useState<BulkCursosResult | null>(null);
   const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Función para calcular duración en horas
   const calcularDuracionHoras = (horaInicio: string, horaFin: string): number => {
     try {
       const [hi, mi] = horaInicio.split(':').map(Number);
@@ -119,12 +179,12 @@ const Cursos: React.FC = () => {
 
   const loadData = async () => {
     setLoading(true);
-    const [cursos, tutores] = await Promise.all([
+    const [cursosData, tutoresData] = await Promise.all([
       api.cursos.getAll(),
       api.tutores.getAll()
     ]);
-    setCursos(cursos);
-    setTutores(tutores);
+    setCursos(cursosData);
+    setTutores(tutoresData);
     setLoading(false);
   };
 
@@ -133,15 +193,53 @@ const Cursos: React.FC = () => {
   }, []);
 
   const cursosFiltrados = useMemo(() => {
-    return cursos.filter(c => {
-      const matchesSearch = `${c.nombre} ${c.descripcion ?? ''} ${c.nivel} ${c.tipo_clase}`
+    const filtered = cursos.filter(c => {
+      const matchesSearch = `${c.nombre} ${c.descripcion ?? ''} ${c.nivel} ${c.tipo_clase} ${c.metodo ?? ''}`
         .toLowerCase()
         .includes(search.toLowerCase());
       const matchesEstado = estadoFiltro === 'todos' ? true : estadoFiltro === 'activos' ? c.estado === 1 : c.estado !== 1;
       const matchesNivel = nivelFiltro ? c.nivel === nivelFiltro : true;
       return matchesSearch && matchesEstado && matchesNivel;
     });
-  }, [cursos, estadoFiltro, search, nivelFiltro]);
+
+    const compareText = (a: string | null | undefined, b: string | null | undefined) =>
+      (a || '').localeCompare((b || ''), 'es', { sensitivity: 'base' });
+
+    const sorted = [...filtered].sort((a, b) => {
+      switch (sortMode) {
+        case 'nombre_asc':
+          return compareText(a.nombre, b.nombre);
+        case 'nombre_desc':
+          return compareText(b.nombre, a.nombre);
+        case 'nivel_asc':
+          return compareText(a.nivel, b.nivel) || compareText(a.nombre, b.nombre);
+        case 'nivel_desc':
+          return compareText(b.nivel, a.nivel) || compareText(a.nombre, b.nombre);
+        case 'estado_activos':
+          return (b.estado === 1 ? 1 : 0) - (a.estado === 1 ? 1 : 0) || compareText(a.nombre, b.nombre);
+        case 'tipo_clase_asc':
+          return compareText(a.tipo_clase, b.tipo_clase) || compareText(a.nombre, b.nombre);
+        case 'tipo_clase_desc':
+          return compareText(b.tipo_clase, a.tipo_clase) || compareText(a.nombre, b.nombre);
+        case 'tipo_pago_asc':
+          return compareText(a.tipo_pago, b.tipo_pago) || compareText(a.nombre, b.nombre);
+        case 'tipo_pago_desc':
+          return compareText(b.tipo_pago, a.tipo_pago) || compareText(a.nombre, b.nombre);
+        case 'costo_desc':
+          return (Number(b.costo_curso || 0) - Number(a.costo_curso || 0)) || compareText(a.nombre, b.nombre);
+        case 'costo_asc':
+          return (Number(a.costo_curso || 0) - Number(b.costo_curso || 0)) || compareText(a.nombre, b.nombre);
+        case 'pago_tutor_desc':
+          return (Number(b.pago_tutor || 0) - Number(a.pago_tutor || 0)) || compareText(a.nombre, b.nombre);
+        case 'pago_tutor_asc':
+          return (Number(a.pago_tutor || 0) - Number(b.pago_tutor || 0)) || compareText(a.nombre, b.nombre);
+        default:
+          return 0;
+      }
+    });
+
+    return sorted;
+  }, [cursos, estadoFiltro, search, nivelFiltro, sortMode]);
 
   const resumenCursos = useMemo(() => {
     const total = cursosFiltrados.length;
@@ -165,6 +263,73 @@ const Cursos: React.FC = () => {
   }, [cursos]);
 
   const tutoresActivos = useMemo(() => tutores.filter(t => t.estado === 1), [tutores]);
+
+  const tutorCompatMap = useMemo(() => {
+    const map: Record<number, { compatible: boolean; detalles: string }> = {};
+    const diasCurso = formData.dias || [];
+    const scheduleCurso = formData.dias_schedule || {};
+
+    tutoresActivos.forEach((tutor) => {
+      const diasHorarios = (tutor as any).dias_horarios || {};
+      const issues: string[] = [];
+
+      diasCurso.forEach((dia) => {
+        const cursoDia = scheduleCurso[dia];
+        if (!cursoDia?.hora_inicio || !cursoDia?.hora_fin) return;
+
+        const tutorDia = diasHorarios?.[dia];
+        if (!tutorDia?.hora_inicio || !tutorDia?.hora_fin) {
+          issues.push(`${dia}: sin horario`);
+          return;
+        }
+
+        const cursoInicio = timeToMinutes(cursoDia.hora_inicio);
+        const cursoFin = timeToMinutes(cursoDia.hora_fin);
+        const tutorInicio = timeToMinutes(tutorDia.hora_inicio);
+        const tutorFin = timeToMinutes(tutorDia.hora_fin);
+
+        if (
+          cursoInicio == null || cursoFin == null ||
+          tutorInicio == null || tutorFin == null ||
+          cursoInicio < tutorInicio ||
+          cursoFin > tutorFin
+        ) {
+          issues.push(`${dia}: ${formatRange(cursoDia.hora_inicio, cursoDia.hora_fin)} (tutor ${formatRange(tutorDia.hora_inicio, tutorDia.hora_fin)})`);
+        }
+      });
+
+      map[tutor.id] = {
+        compatible: issues.length === 0,
+        detalles: issues.length
+          ? `No cubre: ${issues.join(' · ')}`
+          : 'Disponible para todos los días y horarios del curso',
+      };
+    });
+
+    return map;
+  }, [tutoresActivos, formData.dias, formData.dias_schedule]);
+
+  const tutoresFiltrados = useMemo(() => {
+    const term = tutorSearch.trim().toLowerCase();
+    const base = tutoresActivos.filter((t) => {
+      if (onlyCompatible && !tutorCompatMap[t.id]?.compatible) return false;
+      if (!term) return true;
+      const nombre = String(t.nombre || '').toLowerCase();
+      const especialidad = String(t.especialidad || '').toLowerCase();
+      const email = String(t.email || '').toLowerCase();
+      return nombre.includes(term) || especialidad.includes(term) || email.includes(term);
+    });
+    return base;
+  }, [tutoresActivos, tutorSearch, onlyCompatible, tutorCompatMap]);
+
+  const recommendedTutorId = useMemo(() => {
+    const compatibles = tutoresActivos.filter((t) => tutorCompatMap[t.id]?.compatible);
+    if (compatibles.length === 0) return null;
+    return compatibles
+      .slice()
+      .sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es', { sensitivity: 'base' }))[0]
+      .id;
+  }, [tutoresActivos, tutorCompatMap]);
 
   // Suscripción en tiempo real a cursos y tutores (para combos)
   useEffect(() => {
@@ -206,19 +371,35 @@ const Cursos: React.FC = () => {
       newErrors.pago_tutor = 'El pago a tutores debe ser mayor a 0';
     }
 
+    if (formData.tutor_id && formData.tutor_id !== 0) {
+      const compat = tutorCompatMap[formData.tutor_id];
+      if (compat && !compat.compatible) {
+        newErrors.tutor = compat.detalles;
+      }
+    }
+
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
     }
 
     try {
+      let metodoValue: 'Virtual' | 'Presencial' | null = null;
+      if (formData.metodo === 'Virtual' || formData.metodo === 'Presencial') {
+        metodoValue = formData.metodo;
+      }
+
+      const tipoClaseValue: 'grupal' | 'tutoria' = formData.tipo_clase === 'tutoria' ? 'tutoria' : 'grupal';
+      const tipoPagoValue: 'sesion' | 'mensual' = formData.tipo_pago === 'mensual' ? 'mensual' : 'sesion';
+
       const dataToSubmit = {
         nombre: formData.nombre.trim(),
         descripcion: formData.descripcion.trim(),
+        metodo: metodoValue,
         nivel: formData.nivel,
-        tipo_clase: formData.tipo_clase,
-        tipo_pago: formData.tipo_pago,
-        max_estudiantes: formData.tipo_clase === 'tutoria' ? null : formData.max_estudiantes,
+        tipo_clase: tipoClaseValue,
+        tipo_pago: tipoPagoValue,
+        max_estudiantes: tipoClaseValue === 'tutoria' ? null : formData.max_estudiantes,
         dias: formData.dias,
         dias_schedule: formData.dias_schedule,
         costo_curso: formData.costo_curso,
@@ -288,6 +469,7 @@ const Cursos: React.FC = () => {
     setFormData({
       nombre: '',
       descripcion: '',
+      metodo: '',
       nivel: 'None',
       tipo_clase: 'grupal',
       tipo_pago: 'sesion',
@@ -301,6 +483,9 @@ const Cursos: React.FC = () => {
       grado_nombre: '',
       grado_color: '#2563eb'
     });
+    setTutorSearch('');
+    setOnlyCompatible(false);
+    setTutorPreviewId(null);
     setErrors({});
   };
 
@@ -309,12 +494,12 @@ const Cursos: React.FC = () => {
     setFormData({
       nombre: curso.nombre,
       descripcion: curso.descripcion || '',
+      metodo: curso.metodo || '',
       nivel: curso.nivel || 'None',
       tipo_clase: curso.tipo_clase || 'grupal',
       tipo_pago: curso.tipo_pago || 'sesion',
       max_estudiantes: curso.max_estudiantes || 10,
       dias: Array.isArray(curso.dias) ? curso.dias : [],
-      dias_turno: curso.dias_turno || {},
       dias_schedule: curso.dias_schedule || {},
       costo_curso: curso.costo_curso || 0,
       pago_tutor: curso.pago_tutor || 0,
@@ -323,6 +508,9 @@ const Cursos: React.FC = () => {
       grado_nombre: curso.grado_nombre || '',
       grado_color: curso.grado_color || '#2563eb'
     });
+    setTutorSearch('');
+    setOnlyCompatible(false);
+    setTutorPreviewId(curso.tutor_id || null);
     setShowModal(true);
   };
 
@@ -419,6 +607,25 @@ const Cursos: React.FC = () => {
                   <option value="inactivos">Inactivos</option>
                 </Select>
               </div>
+            </div>
+
+            <div>
+              <Label>Ordenar</Label>
+              <Select value={sortMode} onChange={(e) => setSortMode(e.target.value as any)}>
+                <option value="nombre_asc">Nombre A→Z</option>
+                <option value="nombre_desc">Nombre Z→A</option>
+                <option value="nivel_asc">Nivel A→Z</option>
+                <option value="nivel_desc">Nivel Z→A</option>
+                <option value="estado_activos">Activos primero</option>
+                <option value="tipo_clase_asc">Tipo de clase A→Z</option>
+                <option value="tipo_clase_desc">Tipo de clase Z→A</option>
+                <option value="tipo_pago_asc">Tipo de pago A→Z</option>
+                <option value="tipo_pago_desc">Tipo de pago Z→A</option>
+                <option value="costo_desc">Costo: mayor primero</option>
+                <option value="costo_asc">Costo: menor primero</option>
+                <option value="pago_tutor_desc">Pago tutor: mayor primero</option>
+                <option value="pago_tutor_asc">Pago tutor: menor primero</option>
+              </Select>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -618,6 +825,16 @@ const Cursos: React.FC = () => {
                 <div className="text-[11px] font-bold text-cyan-200 uppercase">Tipo</div>
                 <div className="text-sm font-semibold text-white">{selectedCurso.tipo_clase === 'tutoria' ? 'Tutoría' : 'Grupal'}</div>
               </div>
+              <div className="p-3 rounded-lg border border-white/10 bg-white/5">
+                <div className="text-[11px] font-bold text-slate-300 uppercase">Método</div>
+                <div className="text-sm font-semibold text-white">{selectedCurso.metodo || '—'}</div>
+              </div>
+              <div className="p-3 rounded-lg border border-amber-400/30 bg-amber-500/10">
+                <div className="text-[11px] font-bold text-amber-200 uppercase">Pago</div>
+                <div className="text-sm font-semibold text-white">
+                  {selectedCurso.tipo_pago === 'mensual' ? 'Mensual' : 'Por sesión'}
+                </div>
+              </div>
               {selectedCurso.max_estudiantes && (
                 <div className="p-3 rounded-lg border border-emerald-400/30 bg-emerald-500/10">
                   <div className="text-[11px] font-bold text-emerald-200 uppercase">Límite alumnos</div>
@@ -659,13 +876,18 @@ const Cursos: React.FC = () => {
       {/* Modal de Formulario */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <Card className="w-full max-w-7xl min-h-[86vh] max-h-[96vh] overflow-y-auto">
             <CardHeader className="border-b border-slate-200 flex justify-between items-start">
               <div>
                 <CardTitle>{editingId ? 'Editar Curso' : 'Nuevo Curso'}</CardTitle>
                 <CardDescription>Configura los detalles del programa académico</CardDescription>
               </div>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600">
+              <button
+                onClick={() => setShowModal(false)}
+                className="text-slate-200 hover:text-white transition-colors p-2 rounded-full bg-white/10 border border-white/10 hover:bg-[#FFC800]/20 hover:border-[#FFC800]/50"
+                aria-label="Cerrar"
+                title="Cerrar"
+              >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -697,6 +919,17 @@ const Cursos: React.FC = () => {
                 />
               </div>
 
+              {/* Método (Virtual/Presencial) */}
+              <div>
+                <Label>Método (Virtual/Presencial)</Label>
+                <Select value={formData.metodo} onChange={(e) => setFormData(prev => ({ ...prev, metodo: e.target.value }))}>
+                  <option value="">(Sin especificar)</option>
+                  <option value="Virtual">Virtual</option>
+                  <option value="Presencial">Presencial</option>
+                </Select>
+                <p className="text-xs text-slate-500 mt-1">Nota: esto solo indica la modalidad (virtual o presencial) del curso.</p>
+              </div>
+
               {/* Nivel y Tipo */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -723,63 +956,6 @@ const Cursos: React.FC = () => {
                     <option value="tutoria">Tutoría (Infinito)</option>
                   </Select>
                 </div>
-              </div>
-
-              {/* Tutor Asignado */}
-              <div>
-                <Label>Asignar Tutor (opcional)</Label>
-                <div className="space-y-3">
-                  {tutoresActivos.map(tutor => {
-                    const diasHorarios = tutor.dias_horarios || {};
-                    const tieneDias = Object.keys(diasHorarios).length > 0;
-                    return (
-                      <label key={tutor.id} className="flex items-start gap-3 p-3 border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="tutor_id"
-                          value={tutor.id}
-                          checked={formData.tutor_id === tutor.id}
-                          onChange={(e) => setFormData(prev => ({ ...prev, tutor_id: parseInt(e.target.value) }))}
-                          className="mt-1"
-                        />
-                        <div className="flex-1">
-                          <div className="font-semibold text-slate-900">{tutor.nombre}</div>
-                          <div className="text-sm text-slate-600">{tutor.especialidad}</div>
-                          {tieneDias ? (
-                            <div className="mt-2 space-y-1">
-                              {Object.entries(diasHorarios).map(([dia, horario]: [string, any]) => (
-                                <div key={dia} className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded inline-block mr-1">
-                                  {dia.slice(0,3)}: {horario.hora_inicio}-{horario.hora_fin}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="text-xs text-amber-600 mt-1">⚠️ Sin horarios definidos</div>
-                          )}
-                        </div>
-                      </label>
-                    );
-                  })}
-                  <label className="flex items-start gap-3 p-3 border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="tutor_id"
-                      value={0}
-                      checked={formData.tutor_id === 0}
-                      onChange={() => setFormData(prev => ({ ...prev, tutor_id: 0 }))}
-                      className="mt-1"
-                    />
-                    <div>
-                      <div className="font-semibold text-slate-900">Sin tutor asignado</div>
-                      <div className="text-sm text-slate-600">Se asignará manualmente después</div>
-                    </div>
-                  </label>
-                </div>
-                {errors.tutor && (
-                  <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-                    <p className="text-sm text-red-700 font-semibold">❌ {errors.tutor}</p>
-                  </div>
-                )}
               </div>
 
               {/* Límite de Estudiantes */}
@@ -866,7 +1042,7 @@ const Cursos: React.FC = () => {
                         {/* Selección de horas */}
                         <div className="grid grid-cols-2 gap-2">
                           <div>
-                            <label className="block text-xs font-semibold text-slate-600 mb-1">Hora Inicio</label>
+                            <label className="block text-xs font-semibold text-slate-300 mb-1">Hora Inicio</label>
                             <Input
                               type="time"
                               value={formData.dias_schedule[dia]?.hora_inicio || '14:00'}
@@ -890,7 +1066,7 @@ const Cursos: React.FC = () => {
                             />
                           </div>
                           <div>
-                            <label className="block text-xs font-semibold text-slate-600 mb-1">Hora Fin</label>
+                            <label className="block text-xs font-semibold text-slate-300 mb-1">Hora Fin</label>
                             <Input
                               type="time"
                               value={formData.dias_schedule[dia]?.hora_fin || '17:00'}
@@ -920,6 +1096,182 @@ const Cursos: React.FC = () => {
                 </div>
               )}
 
+              {/* Tutor Asignado */}
+              <div>
+                <Label>Asignar Tutor (opcional)</Label>
+                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-4 mt-3">
+                  <Card className="border-white/10 bg-[#0B1B33] rounded-md">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm">Lista de tutores</CardTitle>
+                      <CardDescription className="text-xs">Selecciona uno para ver detalles completos</CardDescription>
+                    </CardHeader>
+                    <CardContent className="pt-0 space-y-3">
+                      <Input
+                        value={tutorSearch}
+                        onChange={(e) => setTutorSearch(e.target.value)}
+                        placeholder="Buscar por nombre, especialidad o email"
+                      />
+                      <label className="flex items-center gap-2 text-xs text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={onlyCompatible}
+                          onChange={(e) => setOnlyCompatible(e.target.checked)}
+                          className="w-4 h-4"
+                        />
+                        Solo compatibles con el horario
+                      </label>
+                      <div className="text-xs text-slate-500">
+                        {tutoresFiltrados.length} resultado(s)
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-72 overflow-auto pr-1">
+                        <label
+                          className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${formData.tutor_id === 0 ? 'border-[#00AEEF] bg-[#00AEEF]/10' : 'border-white/10 bg-[#0B1B33] hover:bg-[#102847]'}`}
+                          onClick={() => setTutorPreviewId(null)}
+                        >
+                          <input
+                            type="radio"
+                            name="tutor_id"
+                            value={0}
+                            checked={formData.tutor_id === 0}
+                            onChange={() => setFormData(prev => ({ ...prev, tutor_id: 0 }))}
+                            className="mt-1"
+                          />
+                          <div>
+                            <div className="font-semibold text-slate-100">Sin tutor asignado</div>
+                            <div className="text-xs text-slate-300">Se asignará manualmente después</div>
+                          </div>
+                        </label>
+
+                        {tutoresFiltrados.map(tutor => {
+                          const diasHorarios = tutor.dias_horarios || {};
+                          const diasEntries = Object.entries(diasHorarios);
+                          const tieneDias = diasEntries.length > 0;
+                          const visibleDias = diasEntries.slice(0, 3);
+                          const compat = tutorCompatMap[tutor.id];
+                          return (
+                            <label
+                              key={tutor.id}
+                              className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition ${formData.tutor_id === tutor.id ? 'border-[#00AEEF] bg-[#00AEEF]/10' : 'border-white/10 bg-[#0B1B33] hover:bg-[#102847]'}`}
+                              onClick={() => setTutorPreviewId(tutor.id)}
+                            >
+                              <input
+                                type="radio"
+                                name="tutor_id"
+                                value={tutor.id}
+                                checked={formData.tutor_id === tutor.id}
+                                onChange={(e) => setFormData(prev => ({ ...prev, tutor_id: parseInt(e.target.value) }))}
+                                className="mt-1"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <div
+                                    className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center font-bold text-sm"
+                                    style={{ color: (tutor as any).color || '#0f172a' }}
+                                  >
+                                    {tutor.nombre?.charAt(0) || 'T'}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-slate-100 truncate">{tutor.nombre}</div>
+                                    <div className="text-xs text-slate-300 truncate">{tutor.especialidad || 'Sin especialidad'}</div>
+                                  </div>
+                                </div>
+
+                                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                                  <span className={`text-[11px] font-bold px-2 py-1 rounded border ${compat?.compatible ? 'bg-emerald-500/15 text-emerald-200 border-emerald-400/30' : 'bg-amber-500/15 text-amber-200 border-amber-400/30'}`}>
+                                    {compat?.compatible ? 'Disponible' : 'No compatible'}
+                                  </span>
+                                  {tieneDias ? (
+                                    <div className="flex flex-wrap gap-1">
+                                      {visibleDias.map(([dia, horario]: [string, any]) => (
+                                        <span key={dia} className="text-[11px] bg-[#122B52] text-blue-100 border border-blue-400/30 px-2 py-1 rounded">
+                                          {dia.slice(0, 3)} {horario.hora_inicio}-{horario.hora_fin}
+                                        </span>
+                                      ))}
+                                      {diasEntries.length > visibleDias.length && (
+                                        <span className="text-[11px] bg-white/10 text-slate-200 border border-white/10 px-2 py-1 rounded">
+                                          +{diasEntries.length - visibleDias.length} más
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-[11px] text-amber-200">⚠️ Sin horarios definidos</span>
+                                  )}
+                                </div>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="border-white/10 bg-[#0B1B33]">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm">Detalle del tutor</CardTitle>
+                      <CardDescription className="text-xs">Horario completo y compatibilidad</CardDescription>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      {(() => {
+                        const previewTutorId = tutorPreviewId ?? (formData.tutor_id || null);
+                        const previewTutor = previewTutorId ? tutoresActivos.find(t => t.id === previewTutorId) : null;
+                        if (!previewTutor) {
+                          return (
+                            <div className="text-xs text-slate-600">
+                              Selecciona un tutor para ver su horario completo.
+                            </div>
+                          );
+                        }
+
+                        const diasHorarios = previewTutor.dias_horarios || {};
+                        const diasEntries = Object.entries(diasHorarios);
+                        const compat = tutorCompatMap[previewTutor.id];
+
+                        return (
+                          <div className="space-y-3">
+                            <div>
+                              <div className="text-sm font-bold text-slate-100 truncate">{previewTutor.nombre}</div>
+                              <div className="text-xs text-slate-300 truncate">{previewTutor.especialidad || 'Sin especialidad'}</div>
+                            </div>
+
+                            <div className={`text-xs font-bold px-2 py-1 rounded border ${compat?.compatible ? 'bg-emerald-500/15 text-emerald-200 border-emerald-400/30' : 'bg-amber-500/15 text-amber-200 border-amber-400/30'}`}>
+                              {compat?.compatible ? 'Disponible para este curso' : 'No compatible con el horario'}
+                            </div>
+
+                            {compat && !compat.compatible && (
+                              <div className="text-[11px] text-amber-200">
+                                {compat.detalles}
+                              </div>
+                            )}
+
+                            <div>
+                              <div className="text-[11px] font-bold text-slate-500 uppercase">Horario completo</div>
+                              {diasEntries.length > 0 ? (
+                                <div className="mt-2 space-y-1">
+                                  {diasEntries.map(([dia, horario]: [string, any]) => (
+                                    <div key={dia} className="flex items-center justify-between text-xs border border-white/10 rounded px-2 py-1 bg-[#0F2445]">
+                                      <span className="font-semibold text-slate-100">{dia}</span>
+                                      <span className="text-slate-300">{horario.hora_inicio}-{horario.hora_fin}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-[11px] text-amber-200 mt-1">⚠️ Sin horarios definidos</div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </CardContent>
+                  </Card>
+                </div>
+                {errors.tutor && (
+                  <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-sm text-red-700 font-semibold">❌ {errors.tutor}</p>
+                  </div>
+                )}
+              </div>
+
               {/* Costos del Curso */}
               <div>
                 <Label className="text-lg font-semibold">💰 Costos</Label>
@@ -931,11 +1283,11 @@ const Cursos: React.FC = () => {
                     className="bg-slate-50 border-slate-200"
                   >
                     <option value="sesion">Por sesión (se registra al marcar “dada”)</option>
-                    <option value="mensual">Mensual (se genera en cierre mensual)</option>
+                    <option value="mensual">Mensual (cobro mensual por estudiante)</option>
                   </Select>
                   <p className="text-xs text-slate-500 mt-1">
                     {formData.tipo_pago === 'mensual'
-                      ? 'En “mensual” los movimientos se generan cuando se ejecuta el cierre mensual.'
+                      ? 'En “mensual” se cobra por mes a cada estudiante.'
                       : 'En “por sesión” se generan movimientos al marcar cada sesión como dada.'}
                   </p>
                 </div>
@@ -1063,6 +1415,16 @@ const Cursos: React.FC = () => {
                       <Badge className={`${curso.tipo_clase === 'tutoria' ? 'bg-purple-500/15 text-purple-200 border border-purple-400/40' : 'bg-emerald-500/15 text-emerald-200 border border-emerald-400/40'} font-bold`}>
                         {curso.tipo_clase === 'tutoria' ? '1:1' : 'Grupal'}
                       </Badge>
+                      {curso.metodo && (
+                        <Badge className="bg-cyan-500/15 text-cyan-100 border border-cyan-400/40 font-bold">
+                          {curso.metodo}
+                        </Badge>
+                      )}
+                      {curso.tipo_pago && (
+                        <Badge className={`${curso.tipo_pago === 'mensual' ? 'bg-amber-500/15 text-amber-200 border border-amber-400/40' : 'bg-emerald-500/15 text-emerald-200 border border-emerald-400/40'} font-bold`}>
+                          {curso.tipo_pago === 'mensual' ? 'Mensual' : 'Por sesión'}
+                        </Badge>
+                      )}
                       {curso.grado_activo && curso.grado_nombre && (
                         <span
                           className="text-[11px] font-bold px-3 py-1 rounded-full border truncate max-w-[100px]"
@@ -1153,7 +1515,7 @@ const Cursos: React.FC = () => {
               )}
 
               {/* Costos */}
-              <div className="grid grid-cols-2 gap-3 pt-3 border-t border-white/5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-white/5">
                 <div className="bg-emerald-500/10 p-3 rounded-lg border border-emerald-400/30">
                   <p className="text-xs text-emerald-100 font-semibold mb-1">Costo del curso</p>
                   <p className="text-lg font-black text-white">₡{curso.costo_curso?.toLocaleString() || '0'}</p>
@@ -1161,6 +1523,12 @@ const Cursos: React.FC = () => {
                 <div className="bg-cyan-500/10 p-3 rounded-lg border border-cyan-400/30">
                   <p className="text-xs text-cyan-100 font-semibold mb-1">Pago a tutores</p>
                   <p className="text-lg font-black text-white">₡{curso.pago_tutor?.toLocaleString() || '0'}</p>
+                </div>
+                <div className="bg-amber-500/10 p-3 rounded-lg border border-amber-400/30">
+                  <p className="text-xs text-amber-100 font-semibold mb-1">Método de pago</p>
+                  <p className="text-lg font-black text-white">
+                    {curso.tipo_pago === 'mensual' ? 'Mensual' : 'Por sesión'}
+                  </p>
                 </div>
               </div>
 
@@ -1203,6 +1571,8 @@ const Cursos: React.FC = () => {
                     <TableHead>Nombre</TableHead>
                     <TableHead>Nivel</TableHead>
                     <TableHead>Tipo</TableHead>
+                    <TableHead>Pago</TableHead>
+                    <TableHead>Método</TableHead>
                     <TableHead>Estado</TableHead>
                     <TableHead>Tutor</TableHead>
                     <TableHead className="text-right">Acciones</TableHead>
@@ -1219,6 +1589,14 @@ const Cursos: React.FC = () => {
                         <Badge variant={curso.tipo_clase === 'grupal' ? 'info' : 'warning'}>
                           {curso.tipo_clase === 'grupal' ? 'Grupal' : 'Tutoría'}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={curso.tipo_pago === 'mensual' ? 'warning' : 'info'}>
+                          {curso.tipo_pago === 'mensual' ? 'Mensual' : 'Por sesión'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {curso.metodo ? <Badge variant="secondary">{curso.metodo}</Badge> : <span className="text-slate-400">—</span>}
                       </TableCell>
                       <TableCell>
                         <Button

@@ -1,7 +1,8 @@
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
 import { supabaseClient } from '../lib/supabaseClient';
+import { usePersistentState } from '../lib/usePersistentState';
 import { Pago, Tutor, Estudiante, EstadoPago } from '../types';
 import { Button, Card, Badge, Input, Label, Select, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Dialog } from '../components/UI';
 import { CreditCard, Filter, History, Download, DollarSign, Search, CheckCircle2 } from 'lucide-react';
@@ -12,12 +13,18 @@ const Pagos: React.FC = () => {
   const [tutores, setTutores] = useState<Tutor[]>([]);
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterTutor, setFilterTutor] = useState<string>('all');
+  const [filterTutor, setFilterTutor] = usePersistentState<string>('ui:pagos:filterTutor', 'all', {
+    version: 1,
+    validate: (v): v is string => typeof v === 'string',
+  });
 
   const [pendientesPorTutor, setPendientesPorTutor] = useState<Array<{ tutor_id: string; tutor_nombre: string; total_pendiente: number }>>([]);
   const [loadingPendientesPorTutor, setLoadingPendientesPorTutor] = useState(false);
 
-  const [activePanel, setActivePanel] = useState<'tutores' | 'estudiantes'>('tutores');
+  const [activePanel, setActivePanel] = usePersistentState<'tutores' | 'estudiantes'>('ui:pagos:activePanel', 'tutores', {
+    version: 1,
+    validate: (v: unknown): v is 'tutores' | 'estudiantes' => v === 'tutores' || v === 'estudiantes',
+  });
   const [selectedTutorDetalle, setSelectedTutorDetalle] = useState<{ tutor_id: number; tutor_nombre: string } | null>(null);
   const [detalleTutor, setDetalleTutor] = useState<any | null>(null);
   const [loadingDetalleTutor, setLoadingDetalleTutor] = useState(false);
@@ -43,12 +50,34 @@ const Pagos: React.FC = () => {
 
   const [estudianteQuery, setEstudianteQuery] = useState('');
   const [estudiantePickerOpen, setEstudiantePickerOpen] = useState(false);
+  const [grupos, setGrupos] = useState<any[]>([]);
+  const [loadingGrupos, setLoadingGrupos] = useState(false);
+  const [grupoFiltroId, setGrupoFiltroId] = usePersistentState<string>('ui:pagos:grupoFiltroId', 'all', {
+    version: 1,
+    validate: (v): v is string => typeof v === 'string',
+  });
+  const [grupoPagoId, setGrupoPagoId] = usePersistentState<string>('ui:pagos:grupoPagoId', 'all', {
+    version: 1,
+    validate: (v): v is string => typeof v === 'string',
+  });
 
-  const [ingresoTab, setIngresoTab] = useState<'pendientes' | 'manual'>('pendientes');
+  const [ingresoTab, setIngresoTab] = usePersistentState<'pendientes' | 'manual'>('ui:pagos:ingresoTab', 'pendientes', {
+    version: 1,
+    validate: (v: unknown): v is 'pendientes' | 'manual' => v === 'pendientes' || v === 'manual',
+  });
+  const [ingresoPendientes, setIngresoPendientes] = useState<any[]>([]);
+  const [ingresoPendientesLoading, setIngresoPendientesLoading] = useState(false);
+  const [ingresoPendientesError, setIngresoPendientesError] = useState('');
+  const [ingresoSeleccion, setIngresoSeleccion] = useState<number[]>([]);
   const [manualQuery, setManualQuery] = useState('');
   const [manualPickerOpen, setManualPickerOpen] = useState(false);
   const [manualFile, setManualFile] = useState<File | null>(null);
   const [savingManual, setSavingManual] = useState(false);
+  const [manualAdvancedOpen, setManualAdvancedOpen] = useState(false);
+  const manualMontoRef = useRef<HTMLInputElement | null>(null);
+  const [manualFocusMonto, setManualFocusMonto] = useState(false);
+  const autoSelectIngresoRef = useRef(false);
+  const [manualSesionSelected, setManualSesionSelected] = useState<any | null>(null);
   const [manualForm, setManualForm] = useState({
     direccion: 'entrada' as 'entrada' | 'salida',
     monto: 0,
@@ -60,32 +89,71 @@ const Pagos: React.FC = () => {
     a_nombre_de: '',
     estudiante_id: 0,
     tutor_id: 0,
+    sesion_id: 0,
   });
 
-  const [libroFecha, setLibroFecha] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [sesionPickerOpen, setSesionPickerOpen] = useState(false);
+  const [sesionPickerQuery, setSesionPickerQuery] = useState('');
+  const [sesionPickerItems, setSesionPickerItems] = useState<any[]>([]);
+  const [sesionPickerLoading, setSesionPickerLoading] = useState(false);
+  const [sesionPickerError, setSesionPickerError] = useState<string>('');
+
+  const [libroFecha, setLibroFecha] = usePersistentState<string>('ui:pagos:libroFecha', new Date().toISOString().slice(0, 10), {
+    version: 1,
+    validate: (v): v is string => typeof v === 'string',
+  });
   const [loadingLibro, setLoadingLibro] = useState(false);
   const [libro, setLibro] = useState<any | null>(null);
+  const [libroEsperado, setLibroEsperado] = useState<any | null>(null);
 
-  const [libroMesAnio, setLibroMesAnio] = useState<number>(new Date().getFullYear());
-  const [libroMesMes, setLibroMesMes] = useState<number>(new Date().getMonth() + 1);
-  const [libroMesTutorId, setLibroMesTutorId] = useState<number>(0);
+  const [libroMesAnio, setLibroMesAnio] = usePersistentState<number>('ui:pagos:libroMesAnio', new Date().getFullYear(), {
+    version: 1,
+    validate: (v): v is number => Number.isFinite(Number(v)),
+  });
+  const [libroMesMes, setLibroMesMes] = usePersistentState<number>('ui:pagos:libroMesMes', new Date().getMonth() + 1, {
+    version: 1,
+    validate: (v): v is number => Number.isFinite(Number(v)),
+  });
+  const [libroMesTutorId, setLibroMesTutorId] = usePersistentState<number>('ui:pagos:libroMesTutorId', 0, {
+    version: 1,
+    validate: (v): v is number => Number.isFinite(Number(v)),
+  });
   const [loadingLibroMes, setLoadingLibroMes] = useState(false);
   const [libroMes, setLibroMes] = useState<any | null>(null);
+  const [libroMesEsperado, setLibroMesEsperado] = useState<any | null>(null);
 
   const [loadingBolsaTotal, setLoadingBolsaTotal] = useState(false);
   const [bolsaTotal, setBolsaTotal] = useState<any | null>(null);
 
+  type BolsaMesItem = {
+    anio: number;
+    mes: number;
+    start: string;
+    end: string;
+    total_debe: number;
+    total_haber: number;
+    neto: number;
+  };
+
+  const [bolsaMesesBack, setBolsaMesesBack] = usePersistentState<number>('ui:pagos:bolsaMesesBack', 6, {
+    version: 1,
+    validate: (v): v is number => Number.isFinite(Number(v)),
+  });
+  const [loadingBolsaMes, setLoadingBolsaMes] = useState(false);
+  const [bolsaMes, setBolsaMes] = useState<BolsaMesItem[]>([]);
+  const [bolsaMesError, setBolsaMesError] = useState<string>('');
+
   const [auditOpen, setAuditOpen] = useState(false);
+  const movimientosCardRef = useRef<HTMLDivElement | null>(null);
 
-  const [cierreMensualDia, setCierreMensualDia] = useState<number>(1);
-  const [loadingConfig, setLoadingConfig] = useState(false);
-  const [cierreAnio, setCierreAnio] = useState<number>(new Date().getFullYear());
-  const [cierreMes, setCierreMes] = useState<number>(new Date().getMonth() + 1);
-  const [cierreForce, setCierreForce] = useState<boolean>(false);
-  const [cierreResult, setCierreResult] = useState<any | null>(null);
-
-  const [periodoInicio, setPeriodoInicio] = useState<string>('');
-  const [periodoFin, setPeriodoFin] = useState<string>('');
+  const [periodoInicio, setPeriodoInicio] = usePersistentState<string>('ui:pagos:periodoInicio', '', {
+    version: 1,
+    validate: (v): v is string => typeof v === 'string',
+  });
+  const [periodoFin, setPeriodoFin] = usePersistentState<string>('ui:pagos:periodoFin', '', {
+    version: 1,
+    validate: (v): v is string => typeof v === 'string',
+  });
   const [pendientesResumen, setPendientesResumen] = useState<any | null>(null);
   const [loadingPendientes, setLoadingPendientes] = useState(false);
   
@@ -95,6 +163,20 @@ const Pagos: React.FC = () => {
     descripcion: '',
     estado: EstadoPago.PAGADO
   });
+
+  useEffect(() => {
+    if (!manualFocusMonto) return;
+    const t = setTimeout(() => {
+      manualMontoRef.current?.focus();
+      try {
+        manualMontoRef.current?.select?.();
+      } catch {
+        // ignore
+      }
+      setManualFocusMonto(false);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [manualFocusMonto]);
 
   const loadData = async () => {
     setLoading(true);
@@ -113,6 +195,52 @@ const Pagos: React.FC = () => {
       setEstudiantes(e);
     } catch {
       setEstudiantes([]);
+    }
+  };
+
+  const loadGrupos = async () => {
+    setLoadingGrupos(true);
+    try {
+      const res = await api.bulk.listGrupos();
+      setGrupos(Array.isArray(res) ? res : []);
+    } catch {
+      setGrupos([]);
+    } finally {
+      setLoadingGrupos(false);
+    }
+  };
+
+  const loadIngresoPendientes = async (estudianteId?: number, opts?: { selectAll?: boolean }) => {
+    const id = Number(estudianteId || ingresoForm.estudiante_id);
+    if (!Number.isFinite(id) || id <= 0) {
+      setIngresoPendientes([]);
+      setIngresoSeleccion([]);
+      setIngresoPendientesError('');
+      return;
+    }
+
+    setIngresoPendientesLoading(true);
+    setIngresoPendientesError('');
+    try {
+      const res = await api.pagos.getPendientesSesiones({
+        estudiante_id: id,
+        limit: 200,
+      });
+      const items = Array.isArray(res?.items) ? res.items : [];
+      setIngresoPendientes(items);
+      const selectAll = Boolean(opts?.selectAll);
+      if (selectAll) {
+        const ids = items.map((it: any) => Number(it?.movimiento_id || it?.id)).filter((n: any) => Number.isFinite(n) && n > 0);
+        setIngresoSeleccion(ids);
+      } else {
+        setIngresoSeleccion([]);
+      }
+    } catch (err: any) {
+      setIngresoPendientes([]);
+      setIngresoSeleccion([]);
+      setIngresoPendientesError(err?.response?.data?.error || err?.message || 'Error cargando pendientes del estudiante');
+    } finally {
+      setIngresoPendientesLoading(false);
     }
   };
 
@@ -173,82 +301,40 @@ const Pagos: React.FC = () => {
     }
   };
 
-  const loadPagoConfig = async () => {
-    setLoadingConfig(true);
-    try {
-      const cfg = await api.pagos.getConfig();
-      setCierreMensualDia(cfg?.cierre_mensual_dia ?? 1);
-    } catch (err: any) {
-      // No bloquear la pantalla por configuración
-      console.error(err);
-    } finally {
-      setLoadingConfig(false);
-    }
+  const focusCobroEstudiante = (estudiante: Estudiante) => {
+    if (!estudiante?.id) return;
+    setIngresoTab('pendientes');
+    setIngresoForm((prev) => ({
+      ...prev,
+      estudiante_id: estudiante.id,
+      referencia: '',
+      fecha_comprobante: new Date().toISOString().slice(0, 10),
+    }));
+    setEstudianteQuery(`${estudiante.nombre} (#${estudiante.id})`);
+    setEstudiantePickerOpen(false);
+    setIngresoSeleccion([]);
+    autoSelectIngresoRef.current = true;
+    openEstudianteDetalle(estudiante.id, estudiante.nombre || `Estudiante #${estudiante.id}`);
+    window.setTimeout(() => {
+      movimientosCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
   };
 
   useEffect(() => {
     loadData();
-    loadPagoConfig();
     loadPendientesPorTutor();
     loadPendientesPorEstudiante();
     loadEstudiantes();
+    loadGrupos();
   }, []);
 
-  const savePagoConfig = async () => {
-    setLoadingConfig(true);
-    try {
-      const updated = await api.pagos.updateConfig({ cierre_mensual_dia: cierreMensualDia });
-      setCierreMensualDia(updated?.cierre_mensual_dia ?? cierreMensualDia);
-      alert('Configuración guardada.');
-    } catch (err: any) {
-      alert(err?.response?.data?.error || err?.message || 'Error guardando configuración');
-    } finally {
-      setLoadingConfig(false);
-    }
-  };
-
-  const ejecutarCierreMensual = async () => {
-    setLoadingConfig(true);
-    setCierreResult(null);
-    try {
-      const result = await api.pagos.cierreMensual({
-        anio: cierreAnio,
-        mes: cierreMes,
-        force: cierreForce,
-      });
-      setCierreResult(result);
-      alert('Cierre mensual ejecutado. Revisa el resultado abajo.');
-      loadPendientesPorTutor();
-      loadPendientesPorEstudiante();
-    } catch (err: any) {
-      const data = err?.response?.data;
-      // Si está fuera del día permitido, ofrecer reintento con force
-      if (err?.response?.status === 409 && data?.cierre_mensual_dia && data?.hoy_dia) {
-        const msg = data?.error || 'No se puede ejecutar hoy.';
-        const retry = window.confirm(`${msg}\n\n¿Deseas forzar el cierre igualmente?`);
-        if (retry) {
-          try {
-            setCierreForce(true);
-            const forced = await api.pagos.cierreMensual({ anio: cierreAnio, mes: cierreMes, force: true });
-            setCierreResult(forced);
-            alert('Cierre mensual forzado ejecutado.');
-            loadPendientesPorTutor();
-            loadPendientesPorEstudiante();
-            return;
-          } catch (err2: any) {
-            alert(err2?.response?.data?.error || err2?.message || 'Error ejecutando cierre mensual (forzado)');
-            return;
-          }
-        }
-        alert(msg);
-        return;
-      }
-
-      alert(data?.error || err?.message || 'Error ejecutando cierre mensual');
-    } finally {
-      setLoadingConfig(false);
-    }
-  };
+  useEffect(() => {
+    if (ingresoTab !== 'pendientes') return;
+    const selectAll = autoSelectIngresoRef.current;
+    autoSelectIngresoRef.current = false;
+    loadIngresoPendientes(ingresoForm.estudiante_id, { selectAll });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingresoForm.estudiante_id, ingresoTab]);
 
   // Suscripción en tiempo real a pagos y tutores
   useEffect(() => {
@@ -282,6 +368,15 @@ const Pagos: React.FC = () => {
       return alert('Seleccione un estudiante.');
     }
 
+    if (ingresoSeleccion.length === 0) {
+      return alert('Selecciona al menos una sesión pendiente para cubrir.');
+    }
+
+    const metodoNorm = String(ingresoForm.metodo || '').trim().toLowerCase();
+    if (metodoNorm !== 'efectivo' && !String(ingresoForm.referencia || '').trim()) {
+      return alert('El número de comprobante es requerido para pagos no-efectivo.');
+    }
+
     if (ingresoFile && !String(ingresoForm.referencia || '').trim()) {
       return alert('Para adjuntar comprobante, ingresa la Referencia (número/comprobante).');
     }
@@ -290,6 +385,7 @@ const Pagos: React.FC = () => {
     try {
       const result = await api.pagos.liquidarIngresoEstudiante({
         estudiante_id: ingresoForm.estudiante_id,
+        movimiento_ids: ingresoSeleccion,
         metodo: ingresoForm.metodo,
         referencia: ingresoForm.referencia?.trim() || undefined,
         fecha_comprobante: ingresoForm.fecha_comprobante || undefined,
@@ -303,13 +399,17 @@ const Pagos: React.FC = () => {
           ? (result as any).movimiento_ids.map((n: any) => Number(n)).filter((n: any) => Number.isFinite(n) && n > 0)
           : [];
 
-        if (ids.length > 0) {
-          const firstId = ids[0];
-          const uploadRes = await api.pagos.uploadComprobanteMovimiento(firstId, ingresoFile);
+        const manualId = Number((result as any)?.movimiento_manual_id);
+        const realMovementId = Number.isFinite(manualId) && manualId > 0 ? manualId : (ids.length > 0 ? ids[0] : null);
+
+        if (realMovementId) {
+          const uploadRes = await api.pagos.uploadComprobanteMovimiento(realMovementId, ingresoFile);
           const url = String(uploadRes?.comprobante_url || '').trim();
 
           if (url) {
-            await api.pagos.aplicarComprobanteUrlBulk({ ids, comprobante_url: url });
+            if (ids.length > 0) {
+              await api.pagos.aplicarComprobanteUrlBulk({ ids, comprobante_url: url });
+            }
 
             const pagadorNombre = selectedEstudiante?.nombre || `Estudiante #${ingresoForm.estudiante_id}`;
             await api.pagos.createComprobanteIngreso({
@@ -318,7 +418,7 @@ const Pagos: React.FC = () => {
               fecha_comprobante: ingresoForm.fecha_comprobante,
               pagador_nombre: pagadorNombre,
               detalle: `Pago estudiante (${ingresoForm.metodo})`,
-              movimiento_dinero_id: firstId,
+              movimiento_dinero_id: realMovementId,
               foto_url: url,
             });
           }
@@ -328,6 +428,8 @@ const Pagos: React.FC = () => {
       }
 
       alert('Pago del estudiante registrado y pendientes marcados como completados.');
+      setIngresoSeleccion([]);
+      await loadIngresoPendientes(ingresoForm.estudiante_id);
       await loadPendientesPorEstudiante();
       // Si el estudiante estaba abierto en detalle, refrescar
       if (selectedEstudianteDetalle?.estudiante_id === ingresoForm.estudiante_id) {
@@ -436,12 +538,15 @@ const Pagos: React.FC = () => {
 
   const prefillIngresoDesdeDialog = () => {
     if (!selectedEstudianteDetalle?.estudiante_id) return;
+    const movs = Array.isArray(detalleEstudiante?.movimientos) ? detalleEstudiante.movimientos : [];
+    const ids = movs.map((m: any) => Number(m?.id)).filter((n: any) => Number.isFinite(n) && n > 0);
     setIngresoForm(prev => ({
       ...prev,
       estudiante_id: selectedEstudianteDetalle.estudiante_id,
       referencia: '',
       fecha_comprobante: new Date().toISOString().slice(0, 10),
     }));
+    setIngresoSeleccion(ids);
     setSelectedEstudianteDetalle(null);
     setDetalleEstudiante(null);
   };
@@ -450,7 +555,6 @@ const Pagos: React.FC = () => {
     ? pagos 
     : pagos.filter(p => p.tutor_id === parseInt(filterTutor));
 
-  const totalFiltered = filteredPagos.reduce((acc, curr) => acc + curr.monto, 0);
   const totalPendienteGeneral = (pendientesPorTutor || []).reduce((acc, t) => acc + (Number(t.total_pendiente) || 0), 0);
   const totalPendienteEstudiantes = (pendientesPorEstudiante || []).reduce((acc, e) => acc + (Number(e.total_pendiente) || 0), 0);
 
@@ -459,9 +563,46 @@ const Pagos: React.FC = () => {
     return rows.slice().sort((a, b) => String(a.tutor_nombre || '').localeCompare(String(b.tutor_nombre || '')));
   }, [pendientesPorTutor]);
 
+  const estudiantesById = useMemo(() => {
+    return new Map((estudiantes || []).map((e) => [e.id, e]));
+  }, [estudiantes]);
+
   const estudiantesRows = useMemo(() => {
     const rows = Array.isArray(pendientesPorEstudiante) ? pendientesPorEstudiante : [];
-    return rows.slice().sort((a, b) => String(a.estudiante_nombre || '').localeCompare(String(b.estudiante_nombre || '')));
+    const filtered = grupoFiltroId === 'all'
+      ? rows
+      : rows.filter((r) => {
+        const est = estudiantesById.get(Number(r.estudiante_id)) as any;
+        return est && String(est.matricula_grupo_id ?? '') === String(grupoFiltroId);
+      });
+    return filtered.slice().sort((a, b) => String(a.estudiante_nombre || '').localeCompare(String(b.estudiante_nombre || '')));
+  }, [pendientesPorEstudiante, estudiantesById, grupoFiltroId]);
+
+  const pendientesPorEstudianteMap = useMemo(() => {
+    return new Map((pendientesPorEstudiante || []).map((e) => [Number(e.estudiante_id), e]));
+  }, [pendientesPorEstudiante]);
+
+  const grupoPagoRows = useMemo(() => {
+    if (grupoPagoId === 'all') return [] as Array<{ estudiante: Estudiante; total_pendiente: number }>;
+    const rows = (estudiantes || [])
+      .filter((e) => String(e.matricula_grupo_id ?? '') === String(grupoPagoId))
+      .map((e) => {
+        const pendiente = pendientesPorEstudianteMap.get(Number(e.id));
+        return { estudiante: e, total_pendiente: Number(pendiente?.total_pendiente) || 0 };
+      })
+      .filter((r) => r.total_pendiente > 0)
+      .sort((a, b) => String(a.estudiante?.nombre || '').localeCompare(String(b.estudiante?.nombre || '')));
+    return rows;
+  }, [estudiantes, grupoPagoId, pendientesPorEstudianteMap]);
+
+  const grupoPagoTotal = useMemo(() => {
+    return grupoPagoRows.reduce((acc, r) => acc + (Number(r.total_pendiente) || 0), 0);
+  }, [grupoPagoRows]);
+
+  const independientesRows = useMemo(() => {
+    return (pendientesPorEstudiante || [])
+      .filter((e: any) => !e?.matricula_grupo_id && (Number(e?.total_pendiente) || 0) > 0)
+      .sort((a: any, b: any) => String(a.estudiante_nombre || '').localeCompare(String(b.estudiante_nombre || '')));
   }, [pendientesPorEstudiante]);
 
   const estudiantesFiltrados = useMemo(() => {
@@ -489,6 +630,16 @@ const Pagos: React.FC = () => {
     if (!id) return null;
     return (estudiantes || []).find((e) => e.id === id) ?? null;
   }, [estudiantes, ingresoForm.estudiante_id]);
+
+  const ingresoSeleccionSet = useMemo(() => new Set(ingresoSeleccion), [ingresoSeleccion]);
+
+  const ingresoPendientesSeleccionadas = useMemo(() => {
+    return (ingresoPendientes || []).filter((it) => ingresoSeleccionSet.has(Number(it?.movimiento_id) || 0));
+  }, [ingresoPendientes, ingresoSeleccionSet]);
+
+  const ingresoPendientesTotal = useMemo(() => {
+    return ingresoPendientesSeleccionadas.reduce((acc, it) => acc + (Number(it?.monto) || 0), 0);
+  }, [ingresoPendientesSeleccionadas]);
 
   const selectedEstudianteManual = useMemo(() => {
     const id = manualForm.estudiante_id;
@@ -538,6 +689,32 @@ const Pagos: React.FC = () => {
     setComprobantePreviewOpen(true);
   };
 
+  const cargarSesionesPendientesPicker = async (opts?: { q?: string }) => {
+    setSesionPickerLoading(true);
+    setSesionPickerError('');
+    try {
+      const q = (opts?.q ?? sesionPickerQuery)?.trim() || undefined;
+      const res = await api.pagos.getPendientesSesiones({
+        q,
+        tutor_id: manualForm.tutor_id ? manualForm.tutor_id : undefined,
+        estudiante_id: manualForm.estudiante_id ? manualForm.estudiante_id : undefined,
+        limit: 30,
+      });
+      setSesionPickerItems((res?.items || []) as any[]);
+    } catch (e: any) {
+      setSesionPickerItems([]);
+      setSesionPickerError(e?.response?.data?.error || e?.message || 'Error cargando sesiones pendientes');
+    } finally {
+      setSesionPickerLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!sesionPickerOpen) return;
+    cargarSesionesPendientesPicker();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sesionPickerOpen]);
+
   const guardarMovimientoManual = async () => {
     if (!manualForm.monto || manualForm.monto <= 0) return alert('Ingresa un monto válido.');
     if (!manualForm.fecha) return alert('Selecciona una fecha.');
@@ -555,25 +732,58 @@ const Pagos: React.FC = () => {
         a_nombre_de: manualForm.a_nombre_de?.trim() || undefined,
         estudiante_id: manualForm.estudiante_id ? manualForm.estudiante_id : undefined,
         tutor_id: manualForm.tutor_id ? manualForm.tutor_id : undefined,
+        sesion_id: manualForm.sesion_id ? manualForm.sesion_id : undefined,
       });
+
+      // Conciliación: si es un ingreso manual y viene sesion_id, marcar el esperado como pagado.
+      if (manualForm.direccion === 'entrada' && manualForm.sesion_id && manualForm.sesion_id > 0) {
+        try {
+          await api.pagos.liquidarIngresoSesion({
+            sesion_id: manualForm.sesion_id,
+            metodo: manualForm.metodo,
+            referencia: manualForm.referencia?.trim() || undefined,
+            fecha_comprobante: manualForm.fecha,
+          });
+        } catch (e: any) {
+          alert(
+            `Movimiento guardado, pero no se pudo conciliar la sesión (#${manualForm.sesion_id}).\n` +
+              `${e?.response?.data?.error || e?.message || 'Error conciliando sesión'}`
+          );
+        }
+      }
 
       if (manualFile && creado?.id) {
         await api.pagos.uploadComprobanteMovimiento(creado.id, manualFile);
       }
 
-      alert('Movimiento registrado.');
+      const continuar = window.confirm('Movimiento registrado.\n\n¿Desea continuar con la iteración?');
+
       setManualFile(null);
       setManualQuery('');
-      setManualForm((prev) => ({
-        ...prev,
-        monto: 0,
-        referencia: '',
-        categoria: '',
-        detalle: '',
-        a_nombre_de: '',
-        estudiante_id: 0,
-        tutor_id: 0,
-      }));
+      setManualSesionSelected(null);
+      if (continuar) setManualFocusMonto(true);
+      setManualForm((prev) => {
+        const base = {
+          ...prev,
+          monto: 0,
+          referencia: '',
+          categoria: '',
+          detalle: '',
+          a_nombre_de: '',
+          sesion_id: 0,
+        };
+
+        // Si desea continuar, mantenemos fecha/método/dirección y vínculos
+        // para agilizar el registro de varios movimientos seguidos.
+        if (continuar) return base;
+
+        // Si no, limpiamos también los vínculos para evitar arrastres.
+        return {
+          ...base,
+          estudiante_id: 0,
+          tutor_id: 0,
+        };
+      });
 
       // Si el libro está viendo la misma fecha, refrescar
       if (libroFecha === manualForm.fecha) {
@@ -589,10 +799,15 @@ const Pagos: React.FC = () => {
   const cargarLibro = async () => {
     setLoadingLibro(true);
     try {
-      const res = await api.pagos.getLibroDiario({ fecha: libroFecha });
-      setLibro(res);
+      const [real, esperado] = await Promise.all([
+        api.pagos.getLibroDiario({ fecha: libroFecha }),
+        api.pagos.getLibroDiario({ fecha: libroFecha, incluir_pendientes: 1 }),
+      ]);
+      setLibro(real);
+      setLibroEsperado(esperado);
     } catch (e: any) {
       setLibro({ error: e?.response?.data?.error || e?.message || 'Error cargando libro diario' });
+      setLibroEsperado(null);
     } finally {
       setLoadingLibro(false);
     }
@@ -616,14 +831,16 @@ const Pagos: React.FC = () => {
     setLoadingLibroMes(true);
     try {
       const { start, end } = getMonthRange(libroMesAnio, libroMesMes);
-      const res = await api.pagos.getLibroDiario({
-        fecha_inicio: start,
-        fecha_fin: end,
-        tutor_id: libroMesTutorId > 0 ? libroMesTutorId : undefined,
-      });
-      setLibroMes(res);
+      const tutor_id = libroMesTutorId > 0 ? libroMesTutorId : undefined;
+      const [real, esperado] = await Promise.all([
+        api.pagos.getLibroDiario({ fecha_inicio: start, fecha_fin: end, tutor_id }),
+        api.pagos.getLibroDiario({ fecha_inicio: start, fecha_fin: end, tutor_id, incluir_pendientes: 1 }),
+      ]);
+      setLibroMes(real);
+      setLibroMesEsperado(esperado);
     } catch (e: any) {
       setLibroMes({ error: e?.response?.data?.error || e?.message || 'Error cargando libro mensual' });
+      setLibroMesEsperado(null);
     } finally {
       setLoadingLibroMes(false);
     }
@@ -641,6 +858,56 @@ const Pagos: React.FC = () => {
       setLoadingBolsaTotal(false);
     }
   };
+
+  const formatMonthLabel = (anio: number, mes: number) => {
+    const names = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const idx = Math.max(1, Math.min(12, Number(mes) || 1)) - 1;
+    return `${names[idx]} ${anio}`;
+  };
+
+  const cargarBolsaPorMes = async (opts?: { months?: number }) => {
+    const months = Math.max(1, Math.min(24, Number(opts?.months ?? bolsaMesesBack) || 6));
+    setLoadingBolsaMes(true);
+    setBolsaMesError('');
+    try {
+      const now = new Date();
+      const hoy = toISODateLocal(now);
+
+      const ranges: Array<{ anio: number; mes: number; start: string; end: string }> = [];
+      for (let i = 0; i < months; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const anio = d.getFullYear();
+        const mes = d.getMonth() + 1;
+        const { start, end: rawEnd } = getMonthRange(anio, mes);
+        const end = rawEnd > hoy ? hoy : rawEnd;
+        ranges.push({ anio, mes, start, end });
+      }
+
+      const results = await Promise.all(
+        ranges.map(async (r) => {
+          const res = await api.pagos.getLibroDiario({ fecha_inicio: r.start, fecha_fin: r.end, only_totals: 1 });
+          const total_debe = Number(res?.total_debe) || 0;
+          const total_haber = Number(res?.total_haber) || 0;
+          const neto = total_debe - total_haber;
+          return { anio: r.anio, mes: r.mes, start: r.start, end: r.end, total_debe, total_haber, neto } as BolsaMesItem;
+        })
+      );
+
+      setBolsaMes(results);
+    } catch (e: any) {
+      setBolsaMes([]);
+      setBolsaMesError(e?.response?.data?.error || e?.message || 'Error cargando desglose mensual');
+    } finally {
+      setLoadingBolsaMes(false);
+    }
+  };
+
+  useEffect(() => {
+    // Mostrar “En bolsa TOTAL” y desglose mensual sin depender de clicks.
+    calcularBolsaTotal();
+    cargarBolsaPorMes({ months: bolsaMesesBack });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const resumenMesDias = useMemo(() => {
     const movs = Array.isArray(libroMes?.movimientos) ? libroMes.movimientos : [];
@@ -711,107 +978,87 @@ const Pagos: React.FC = () => {
             </ul>
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-black/10 p-4 space-y-2">
-            <div className="font-black text-white">Checklist rápido de auditoría</div>
-            <ul className="text-slate-200 space-y-1">
-              <li>Todo movimiento manual debería tener <span className="text-white font-black">categoría</span> y <span className="text-white font-black">detalle</span>.</li>
-              <li>Entradas/salidas con evidencia: adjuntar comprobante (imagen/PDF) cuando aplique.</li>
-              <li>Conciliación: comparar “En bolsa” con caja/banco real (por método: efectivo/SINPE/transferencia).</li>
-              <li>Cierres: ejecutar cierre mensual de cursos mensuales para generar movimientos consistentes.</li>
-              <li>Permisos: solo roles autorizados deben registrar salidas y liquidaciones.</li>
-            </ul>
+                className="h-11"
+                onClick={() => {
+                  setSesionPickerQuery('');
+                  cargarSesionesPendientesPicker({ q: '' });
+                }}
+                disabled={sesionPickerLoading}
+              >
+                Limpiar
+              </Button>
+            </div>
           </div>
 
-          <div className="text-slate-300">
-            Nota: “En bolsa” es un <span className="font-bold">neto operativo</span> según lo registrado; si faltan movimientos o comprobantes, la cifra puede no conciliar.
+          <div className="text-xs text-slate-400">
+            Filtros activos: {manualForm.tutor_id ? `Tutor #${manualForm.tutor_id}` : 'Tutor: cualquiera'} · {manualForm.estudiante_id ? `Estudiante #${manualForm.estudiante_id}` : 'Estudiante: cualquiera'}
+          </div>
+
+          {sesionPickerError ? (
+            <div className="rounded-xl border border-rose-400/20 bg-rose-500/10 p-3 text-rose-100 text-sm font-semibold">
+              {sesionPickerError}
+            </div>
+          ) : null}
+
+          <div className="max-h-[55vh] overflow-auto rounded-2xl border border-white/10">
+            {(sesionPickerItems || []).length === 0 ? (
+              <div className="p-5 text-sm text-slate-400">
+                {sesionPickerLoading ? 'Cargando…' : 'Sin resultados'}
+              </div>
+            ) : (
+              <div className="divide-y divide-white/5">
+                {sesionPickerItems.map((it: any) => {
+                  const fecha = it?.fecha_sesion || it?.fecha_pago || '';
+                  const hora = it?.hora_inicio && it?.hora_fin ? `${it.hora_inicio} - ${it.hora_fin}` : '';
+                  const titulo = [
+                    fecha ? formatDateCR(fecha) : null,
+                    hora || null,
+                    it?.curso_nombre || null,
+                  ].filter(Boolean).join(' • ');
+
+                  const subt = [
+                    it?.tutor_nombre ? `Tutor: ${it.tutor_nombre}` : (it?.tutor_id ? `Tutor #${it.tutor_id}` : null),
+                    it?.estudiante_nombre ? `Estudiante: ${it.estudiante_nombre}` : (it?.estudiante_id ? `Estudiante #${it.estudiante_id}` : null),
+                    it?.sesion_id ? `Sesión #${it.sesion_id}` : null,
+                  ].filter(Boolean).join(' · ');
+
+                  return (
+                    <button
+                      key={String(it?.movimiento_id || it?.sesion_id || Math.random())}
+                      type="button"
+                      className="w-full text-left p-4 hover:bg-white/5 transition flex items-start justify-between gap-4"
+                      onClick={() => {
+                        setManualForm((prev) => {
+                          const next: any = { ...prev, sesion_id: Number(it?.sesion_id) || 0 };
+                          if (!prev.estudiante_id && it?.estudiante_id) next.estudiante_id = Number(it.estudiante_id) || 0;
+                          if (!prev.tutor_id && it?.tutor_id) next.tutor_id = Number(it.tutor_id) || 0;
+                          if ((!prev.monto || prev.monto <= 0) && it?.monto) next.monto = Number(it.monto) || 0;
+                          return next;
+                        });
+                        setManualSesionSelected(it);
+                        setSesionPickerOpen(false);
+                      }}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm font-black text-white truncate">{titulo || 'Sesión pendiente'}</div>
+                        <div className="text-xs text-slate-300 mt-1 truncate">{subt}</div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="text-sm font-black text-emerald-200">{formatCRC(Number(it?.monto) || 0)}</div>
+                        <div className="text-[10px] text-slate-400 font-black tracking-widest uppercase">PENDIENTE</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </Dialog>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
         {/* Left panels */}
-        <div className="lg:col-span-4 space-y-6">
-          <Card className="overflow-hidden">
-            <div className="bg-gradient-to-r from-[#00AEEF] to-[#FFC800] h-2 w-full" />
-            <div className="p-8 space-y-6">
-              <h2 className="text-lg font-bold text-white flex items-center gap-3">
-                <History className="w-6 h-6 p-1 bg-white/10 text-[#00AEEF] rounded-lg" />
-                Cierre mensual (cursos mensuales)
-              </h2>
-
-              <div>
-                <Label>Día de cierre (1 a 28)</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  max={28}
-                  value={cierreMensualDia}
-                  onChange={(e) => setCierreMensualDia(parseInt(e.target.value || '1', 10) || 1)}
-                />
-                <div className="flex gap-3 mt-3">
-                  <Button type="button" variant="secondary" className="h-11" onClick={savePagoConfig} disabled={loadingConfig}>
-                    {loadingConfig ? 'Guardando...' : 'Guardar'}
-                  </Button>
-                  <Button type="button" variant="outline" className="h-11" onClick={loadPagoConfig} disabled={loadingConfig}>
-                    Recargar
-                  </Button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>Año</Label>
-                  <Input
-                    type="number"
-                    value={cierreAnio}
-                    onChange={(e) => setCierreAnio(parseInt(e.target.value || String(new Date().getFullYear()), 10))}
-                  />
-                </div>
-                <div>
-                  <Label>Mes (1-12)</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={12}
-                    value={cierreMes}
-                    onChange={(e) => setCierreMes(Math.max(1, Math.min(12, parseInt(e.target.value || '1', 10) || 1)))}
-                  />
-                </div>
-              </div>
-
-              <label className="flex items-center gap-2 text-sm font-bold text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={cierreForce}
-                  onChange={(e) => setCierreForce(e.target.checked)}
-                />
-                Forzar (ignorar día configurado)
-              </label>
-
-              <Button
-                type="button"
-                variant="primary"
-                className="w-full h-12 bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026] border-0 font-bold"
-                onClick={ejecutarCierreMensual}
-                disabled={loadingConfig}
-              >
-                {loadingConfig ? 'Ejecutando...' : 'Ejecutar cierre mensual'}
-              </Button>
-
-              {cierreResult && (
-                <div className="rounded-2xl border border-white/10 bg-black/10 p-4 text-sm space-y-1">
-                  <div className="font-black text-white">Resultado</div>
-                  <div className="text-slate-200 font-bold">Periodo: {cierreResult.periodo_inicio} a {cierreResult.periodo_fin}</div>
-                  <div className="text-slate-300">Sesiones mensuales: {cierreResult.sesiones_mensuales ?? 0}</div>
-                  <div className="text-slate-300">Insertados: {cierreResult.insertados ?? 0} (skipped: {cierreResult.skipped_existentes ?? 0})</div>
-                  {cierreResult.supports_origen_periodo === false && (
-                    <div className="text-amber-700 font-bold">⚠️ Sin idempotencia: falta migración de origen/periodo en movimientos_dinero</div>
-                  )}
-                </div>
-              )}
-            </div>
-          </Card>
-
+        <div className="lg:col-span-4 space-y-6 order-2 lg:order-1">
                   <Card className="overflow-hidden">
                     <div className="p-8 space-y-4">
                       <h2 className="text-lg font-bold text-white flex items-center gap-3">
@@ -889,6 +1136,35 @@ const Pagos: React.FC = () => {
                             )}
                           </div>
 
+                                          <input
+                                            type="checkbox"
+                                            className="mt-1 h-4 w-4"
+                                            checked={checked}
+                                            onChange={(e) => {
+                                              const next = e.target.checked
+                                                ? Array.from(new Set([...ingresoSeleccion, movId]))
+                                                : ingresoSeleccion.filter((x) => x !== movId);
+                                              setIngresoSeleccion(next);
+                                            }}
+                                          />
+                                          <div className="min-w-0">
+                                            <div className="text-[11px] text-slate-300 whitespace-nowrap">
+                                              {fecha ? formatDateCR(fecha) : '—'}{hora ? ` • ${hora}` : ''}
+                                            </div>
+                                            <div className="text-sm font-black text-white truncate">{curso}</div>
+                                            <div className="text-[11px] text-slate-200 truncate">Movimiento #{movId}</div>
+                                          </div>
+                                        </div>
+                                        <div className="text-right whitespace-nowrap text-sm font-black text-white">
+                                          {formatCRC(Number(it?.monto) || 0)}
+                                        </div>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                               <Label>Método</Label>
@@ -912,7 +1188,7 @@ const Pagos: React.FC = () => {
                           </div>
 
                           <div>
-                            <Label>Referencia (SINPE/transferencia)</Label>
+                            <Label>Referencia (comprobante) · requerido para no-efectivo</Label>
                             <Input
                               value={ingresoForm.referencia}
                               onChange={(e) => setIngresoForm(prev => ({ ...prev, referencia: e.target.value }))}
@@ -1010,12 +1286,27 @@ const Pagos: React.FC = () => {
                         </>
                       ) : (
                         <>
+                          <div className="rounded-2xl border border-white/10 bg-black/10 p-4 text-sm text-slate-300">
+                            <div className="font-black text-white">Movimiento manual (REAL)</div>
+                            <div className="mt-1 font-semibold">
+                              Registra una <span className="text-white font-black">entrada</span> o <span className="text-white font-black">salida</span> que afecta la “bolsa real”.
+                              {manualForm.direccion === 'entrada' ? ' Puedes conciliarlo contra una sesión pendiente.' : ''}
+                            </div>
+                          </div>
+
                           <div className="grid grid-cols-2 gap-4">
                             <div>
-                              <Label>Tipo</Label>
+                              <Label>Dirección</Label>
                               <Select
                                 value={manualForm.direccion}
-                                onChange={(e) => setManualForm((prev) => ({ ...prev, direccion: e.target.value as any }))}
+                                onChange={(e) => {
+                                  if (e.target.value === 'salida') setManualSesionSelected(null);
+                                  setManualForm((prev) => ({
+                                    ...prev,
+                                    direccion: e.target.value as any,
+                                    sesion_id: e.target.value === 'salida' ? 0 : prev.sesion_id,
+                                  }));
+                                }}
                               >
                                 <option value="entrada">Entrada (ingreso)</option>
                                 <option value="salida">Salida (egreso)</option>
@@ -1034,6 +1325,7 @@ const Pagos: React.FC = () => {
                           <div>
                             <Label>Monto (₡)</Label>
                             <Input
+                              ref={manualMontoRef as any}
                               type="number"
                               step="0.01"
                               value={manualForm.monto}
@@ -1066,16 +1358,7 @@ const Pagos: React.FC = () => {
                           </div>
 
                           <div>
-                            <Label>Categoría (opcional)</Label>
-                            <Input
-                              value={manualForm.categoria}
-                              onChange={(e) => setManualForm((prev) => ({ ...prev, categoria: e.target.value }))}
-                              placeholder="Ej: Pago de servicio, papelería, alquiler..."
-                            />
-                          </div>
-
-                          <div>
-                            <Label>Detalle</Label>
+                            <Label>Detalle (recomendado)</Label>
                             <Input
                               value={manualForm.detalle}
                               onChange={(e) => setManualForm((prev) => ({ ...prev, detalle: e.target.value }))}
@@ -1083,95 +1366,176 @@ const Pagos: React.FC = () => {
                             />
                           </div>
 
-                          <div>
-                            <Label>A nombre de (opcional)</Label>
-                            <Input
-                              value={manualForm.a_nombre_de}
-                              onChange={(e) => setManualForm((prev) => ({ ...prev, a_nombre_de: e.target.value }))}
-                              placeholder="Ej: Juan Pérez / Empresa / Estudiante..."
-                            />
-                          </div>
-
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {manualForm.direccion === 'entrada' ? (
                             <div>
-                              <Label>Vincular a estudiante (opcional)</Label>
-                              <div className="relative">
-                                <Input
-                                  value={manualQuery}
-                                  onChange={(e) => setManualQuery(e.target.value)}
-                                  onFocus={() => setManualPickerOpen(true)}
-                                  onBlur={() => setTimeout(() => setManualPickerOpen(false), 150)}
-                                  placeholder="Ej: Maria o 123"
-                                  className="pr-10"
-                                />
-                                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
-                                  <Search className="w-4 h-4" />
+                              <Label>Conciliar con sesión pendiente (opcional)</Label>
+                              <div className="flex items-end justify-between gap-3">
+                                <div className="flex-1">
+                                  <Input
+                                    value={manualForm.sesion_id ? `Sesión #${manualForm.sesion_id}` : ''}
+                                    readOnly
+                                    placeholder="No seleccionada"
+                                  />
                                 </div>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-11"
+                                  onClick={() => setSesionPickerOpen(true)}
+                                >
+                                  Buscar
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-11"
+                                  onClick={() => {
+                                    setManualSesionSelected(null);
+                                    setManualForm((prev) => ({ ...prev, sesion_id: 0 }));
+                                  }}
+                                  disabled={!manualForm.sesion_id}
+                                >
+                                  Quitar
+                                </Button>
                               </div>
+                              {manualSesionSelected ? (
+                                <div className="mt-2 text-xs text-slate-300">
+                                  {manualSesionSelected?.fecha_sesion ? `${formatDateCR(manualSesionSelected.fecha_sesion)} · ` : ''}
+                                  {manualSesionSelected?.curso_nombre ? `${manualSesionSelected.curso_nombre} · ` : ''}
+                                  {manualSesionSelected?.tutor_nombre ? `Tutor: ${manualSesionSelected.tutor_nombre} · ` : ''}
+                                  {manualSesionSelected?.estudiante_nombre ? `Estudiante: ${manualSesionSelected.estudiante_nombre}` : ''}
+                                </div>
+                              ) : (
+                                <div className="mt-1 text-xs text-slate-400">
+                                  Si seleccionas una sesión, el sistema marcará como pagado el ingreso esperado de esa sesión.
+                                </div>
+                              )}
+                            </div>
+                          ) : null}
 
-                              {manualPickerOpen && (
-                                <div className="mt-2 rounded-2xl border border-white/10 bg-black/10 overflow-hidden">
-                                  <div className="max-h-44 overflow-auto">
-                                    {(estudiantesFiltradosManual || []).slice(0, 15).map((es) => (
-                                      <button
-                                        key={es.id}
-                                        type="button"
-                                        onClick={() => {
-                                          setManualForm((prev) => ({ ...prev, estudiante_id: es.id }));
-                                          setManualQuery(`${es.nombre} (#${es.id})`);
-                                          setManualPickerOpen(false);
-                                        }}
-                                        className={`w-full text-left px-4 py-3 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${manualForm.estudiante_id === es.id ? 'bg-white/5' : ''}`}
-                                      >
-                                        <span className="font-bold text-slate-100 truncate">{es.nombre}</span>
-                                        <span className="text-xs text-slate-400 font-bold">#{es.id}</span>
-                                      </button>
-                                    ))}
-                                    {(estudiantesFiltradosManual || []).length === 0 && (
-                                      <div className="px-4 py-4 text-sm text-slate-400">Sin resultados</div>
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-xs text-slate-400 font-semibold">
+                                Opcionales: categoría, vínculos y comprobante.
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="h-10"
+                                onClick={() => setManualAdvancedOpen((v) => !v)}
+                              >
+                                {manualAdvancedOpen ? 'Ocultar opciones' : 'Más opciones'}
+                              </Button>
+                            </div>
+
+                            {manualAdvancedOpen ? (
+                              <>
+                                <div>
+                                  <Label>Categoría (opcional)</Label>
+                                  <Input
+                                    value={manualForm.categoria}
+                                    onChange={(e) => setManualForm((prev) => ({ ...prev, categoria: e.target.value }))}
+                                    placeholder="Ej: Pago de servicio, papelería, alquiler..."
+                                  />
+                                </div>
+
+                                <div>
+                                  <Label>A nombre de (opcional)</Label>
+                                  <Input
+                                    value={manualForm.a_nombre_de}
+                                    onChange={(e) => setManualForm((prev) => ({ ...prev, a_nombre_de: e.target.value }))}
+                                    placeholder="Ej: Juan Pérez / Empresa / Estudiante..."
+                                  />
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div>
+                                    <Label>Vincular a estudiante (opcional)</Label>
+                                    <div className="relative">
+                                      <Input
+                                        value={manualQuery}
+                                        onChange={(e) => setManualQuery(e.target.value)}
+                                        onFocus={() => setManualPickerOpen(true)}
+                                        onBlur={() => setTimeout(() => setManualPickerOpen(false), 150)}
+                                        placeholder="Ej: Maria o 123"
+                                        className="pr-10"
+                                      />
+                                      <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+                                        <Search className="w-4 h-4" />
+                                      </div>
+                                    </div>
+
+                                    {manualPickerOpen && (
+                                      <div className="mt-2 rounded-2xl border border-white/10 bg-black/10 overflow-hidden">
+                                        <div className="max-h-44 overflow-auto">
+                                          {(estudiantesFiltradosManual || []).slice(0, 15).map((es) => (
+                                            <button
+                                              key={es.id}
+                                              type="button"
+                                              onClick={() => {
+                                                setManualForm((prev) => ({ ...prev, estudiante_id: es.id }));
+                                                setManualQuery(`${es.nombre} (#${es.id})`);
+                                                setManualPickerOpen(false);
+                                              }}
+                                              className={`w-full text-left px-4 py-3 text-sm flex items-center justify-between hover:bg-white/5 transition-colors ${manualForm.estudiante_id === es.id ? 'bg-white/5' : ''}`}
+                                            >
+                                              <span className="font-bold text-slate-100 truncate">{es.nombre}</span>
+                                              <span className="text-xs text-slate-400 font-bold">#{es.id}</span>
+                                            </button>
+                                          ))}
+                                          {(estudiantesFiltradosManual || []).length === 0 && (
+                                            <div className="px-4 py-4 text-sm text-slate-400">Sin resultados</div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {selectedEstudianteManual && (
+                                      <div className="mt-2 text-xs text-slate-300">
+                                        Vinculado: <b className="text-slate-100">{selectedEstudianteManual.nombre}</b> <span className="text-slate-400">(#{selectedEstudianteManual.id})</span>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    <Label>Vincular a tutor (opcional)</Label>
+                                    <Select
+                                      value={manualForm.tutor_id}
+                                      onChange={(e) =>
+                                        setManualForm((prev) => ({
+                                          ...prev,
+                                          tutor_id: parseInt(e.target.value || '0', 10) || 0,
+                                        }))
+                                      }
+                                    >
+                                      <option value={0}>— Ninguno —</option>
+                                      {tutores.map((t) => (
+                                        <option key={t.id} value={t.id}>{t.nombre}</option>
+                                      ))}
+                                    </Select>
+                                    {selectedTutorManual && (
+                                      <div className="mt-2 text-xs text-slate-300">
+                                        Vinculado: <b className="text-slate-100">{selectedTutorManual.nombre}</b>
+                                      </div>
                                     )}
                                   </div>
                                 </div>
-                              )}
 
-                              {selectedEstudianteManual && (
-                                <div className="mt-2 text-xs text-slate-300">
-                                  Vinculado: <b className="text-slate-100">{selectedEstudianteManual.nombre}</b> <span className="text-slate-400">(#{selectedEstudianteManual.id})</span>
+                                <div>
+                                  <Label>Comprobante (imagen o PDF)</Label>
+                                  <Input
+                                    type="file"
+                                    accept="image/*,application/pdf"
+                                    onChange={(e: any) => setManualFile(e?.target?.files?.[0] || null)}
+                                  />
+                                  {manualFile && (
+                                    <div className="text-xs text-slate-300 mt-2">
+                                      Archivo: <b className="text-slate-100">{manualFile.name}</b>
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                            </div>
-
-                            <div>
-                              <Label>Vincular a tutor (opcional)</Label>
-                              <Select
-                                value={manualForm.tutor_id}
-                                onChange={(e) => setManualForm((prev) => ({ ...prev, tutor_id: parseInt(e.target.value || '0', 10) || 0 }))}
-                              >
-                                <option value={0}>— Ninguno —</option>
-                                {tutores.map((t) => (
-                                  <option key={t.id} value={t.id}>{t.nombre}</option>
-                                ))}
-                              </Select>
-                              {selectedTutorManual && (
-                                <div className="mt-2 text-xs text-slate-300">
-                                  Vinculado: <b className="text-slate-100">{selectedTutorManual.nombre}</b>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          <div>
-                            <Label>Comprobante (imagen o PDF)</Label>
-                            <Input
-                              type="file"
-                              accept="image/*,application/pdf"
-                              onChange={(e: any) => setManualFile(e?.target?.files?.[0] || null)}
-                            />
-                            {manualFile && (
-                              <div className="text-xs text-slate-300 mt-2">
-                                Archivo: <b className="text-slate-100">{manualFile.name}</b>
-                              </div>
-                            )}
+                              </>
+                            ) : null}
                           </div>
 
                           <Button
@@ -1287,7 +1651,367 @@ const Pagos: React.FC = () => {
         </div>
 
         {/* Panel derecho */}
-        <div className="lg:col-span-8 space-y-8">
+        <div className="lg:col-span-8 space-y-8 order-1 lg:order-2">
+          <Card className="overflow-hidden">
+            <div className="p-8 space-y-6">
+              <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-bold text-white">Control diario (libro)</h2>
+                  <p className="text-slate-300 text-sm">Caja operativa: Debe/Haber y “En bolsa”.</p>
+                </div>
+
+                <div className="flex flex-wrap gap-3 items-end">
+                  <div>
+                    <Label className="mb-0">Meses</Label>
+                    <Select
+                      className="h-11 w-28"
+                      value={String(bolsaMesesBack)}
+                      onChange={(e) => {
+                        const v = Math.max(1, Math.min(24, parseInt(e.target.value || '6', 10) || 6));
+                        setBolsaMesesBack(v);
+                        cargarBolsaPorMes({ months: v });
+                      }}
+                      disabled={loadingBolsaMes}
+                    >
+                      <option value="6">6</option>
+                      <option value="12">12</option>
+                      <option value="24">24</option>
+                    </Select>
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="h-11"
+                    onClick={() => {
+                      calcularBolsaTotal();
+                      cargarBolsaPorMes({ months: bolsaMesesBack });
+                    }}
+                    disabled={loadingBolsaTotal || loadingBolsaMes}
+                  >
+                    {(loadingBolsaTotal || loadingBolsaMes) ? 'Actualizando...' : 'Actualizar bolsa'}
+                  </Button>
+                </div>
+              </div>
+
+              {bolsaTotal?.error ? (
+                <div className="text-red-200 font-bold">{bolsaTotal.error}</div>
+              ) : bolsaTotal ? (
+                <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+                  <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">En bolsa TOTAL (acumulado)</div>
+                  <div className="text-white font-black text-3xl mt-1">
+                    {formatCRC(bolsaTotal.neto ?? ((Number(bolsaTotal.total_debe) || 0) - (Number(bolsaTotal.total_haber) || 0)))}
+                  </div>
+                  <div className="text-slate-300 font-semibold text-sm mt-1">
+                    Debe: {formatCRC(bolsaTotal.total_debe ?? 0)} · Haber: {formatCRC(bolsaTotal.total_haber ?? 0)}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-slate-400">Calculando total en bolsa…</div>
+              )}
+
+              {bolsaMesError ? (
+                <div className="text-red-200 font-bold">{bolsaMesError}</div>
+              ) : (
+                <div className="rounded-2xl border border-white/10 overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-white/5">
+                        <TableHead>Mes</TableHead>
+                        <TableHead className="text-right">Debe</TableHead>
+                        <TableHead className="text-right">Haber</TableHead>
+                        <TableHead className="text-right">Neto</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {loadingBolsaMes ? (
+                        <TableRow>
+                          <TableCell colSpan={4} className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest italic">Cargando desglose…</TableCell>
+                        </TableRow>
+                      ) : bolsaMes.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={4} className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest italic">Sin datos</TableCell>
+                        </TableRow>
+                      ) : (
+                        bolsaMes.map((m) => (
+                          <TableRow key={`${m.anio}-${m.mes}`}>
+                            <TableCell className="text-slate-200 font-bold">{formatMonthLabel(m.anio, m.mes)}</TableCell>
+                            <TableCell className="text-right font-black text-emerald-200">{m.total_debe ? formatCRC(m.total_debe) : '—'}</TableCell>
+                            <TableCell className="text-right font-black text-rose-200">{m.total_haber ? formatCRC(m.total_haber) : '—'}</TableCell>
+                            <TableCell className="text-right font-black text-white">{formatCRC(m.neto)}</TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pt-2">
+                <div className="flex flex-wrap gap-3 items-end">
+                  <div>
+                    <Label className="mb-0">Fecha</Label>
+                    <Input type="date" value={libroFecha} onChange={(e) => setLibroFecha(e.target.value)} className="h-11" />
+                  </div>
+                  <Button type="button" variant="outline" className="h-11" onClick={cargarLibro} disabled={loadingLibro}>
+                    {loadingLibro ? 'Cargando...' : 'Ver día'}
+                  </Button>
+
+                  <div className="hidden sm:block w-px h-10 bg-white/10 mx-1" />
+
+                  <div>
+                    <Label className="mb-0">Año</Label>
+                    <Input
+                      type="number"
+                      value={libroMesAnio}
+                      onChange={(e) => setLibroMesAnio(parseInt(e.target.value || String(new Date().getFullYear()), 10))}
+                      className="h-11 w-28"
+                    />
+                  </div>
+                  <div>
+                    <Label className="mb-0">Mes</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={libroMesMes}
+                      onChange={(e) => setLibroMesMes(Math.max(1, Math.min(12, parseInt(e.target.value || '1', 10) || 1)))}
+                      className="h-11 w-24"
+                    />
+                  </div>
+                  <div>
+                    <Label className="mb-0">Tutor (mes)</Label>
+                    <Select
+                      className="h-11 w-72"
+                      value={String(libroMesTutorId)}
+                      onChange={(e) => setLibroMesTutorId(parseInt(e.target.value || '0', 10) || 0)}
+                    >
+                      <option value="0">Todos</option>
+                      {tutores.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.nombre}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <Button type="button" variant="outline" className="h-11" onClick={cargarLibroMes} disabled={loadingLibroMes}>
+                    {loadingLibroMes ? 'Cargando...' : 'Ver mes'}
+                  </Button>
+                </div>
+              </div>
+
+              {libro?.error ? (
+                <div className="text-red-200 font-bold">{libro.error}</div>
+              ) : libro ? (
+                <>
+                  <div className="text-sm text-slate-200 font-bold">
+                    Total Debe: <span className="text-white">{formatCRC(libro.total_debe ?? 0)}</span> · Total Haber: <span className="text-white">{formatCRC(libro.total_haber ?? 0)}</span>
+                    {' '}· En bolsa <span className="text-white">REAL</span>: <span className="text-white">{formatCRC((Number(libro.total_debe) || 0) - (Number(libro.total_haber) || 0))}</span>
+                  </div>
+                  {libroEsperado && !libroEsperado?.error ? (
+                    <div className="text-xs text-slate-300 font-semibold">
+                      En bolsa <span className="text-white font-black">ESPERADO</span> (incluye pendientes): {formatCRC((Number(libroEsperado.total_debe) || 0) - (Number(libroEsperado.total_haber) || 0))}
+                    </div>
+                  ) : null}
+                  <div className="rounded-2xl border border-white/10 overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-white/5">
+                          <TableHead>Fecha</TableHead>
+                          <TableHead>No. Comprobante</TableHead>
+                          <TableHead>Detalle</TableHead>
+                          <TableHead className="text-right">Debe</TableHead>
+                          <TableHead className="text-right">Haber</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(libro.movimientos || []).length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={5} className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest italic">Sin movimientos</TableCell>
+                          </TableRow>
+                        ) : (
+                          (libro.movimientos || []).map((m: any) => (
+                            <TableRow key={m.id}>
+                              <TableCell>{m.fecha_comprobante ? formatDateCR(m.fecha_comprobante) : (m.fecha_pago ? formatDateCR(m.fecha_pago) : '-')}</TableCell>
+                              <TableCell className="text-slate-200 font-bold">{m.factura_numero || '—'}</TableCell>
+                              <TableCell className="text-slate-300">
+                                <div className="font-bold text-slate-100">
+                                  {m?.curso?.nombre || ''}{m?.tutor?.nombre ? ` · ${m.tutor.nombre}` : ''}{m?.matricula?.estudiante?.nombre ? ` · ${m.matricula.estudiante.nombre}` : ''}
+                                </div>
+                                <div className="text-xs text-slate-400">{m.notas || m.origen || m.tipo}</div>
+                                {(() => {
+                                  const url = getComprobanteUrl(m);
+                                  if (!url) return null;
+                                  const kind = detectComprobanteKind(url);
+                                  return (
+                                    <div className="mt-2 flex items-center gap-3">
+                                      {kind === 'image' ? (
+                                        <button
+                                          type="button"
+                                          className="h-12 w-12 rounded-xl border border-white/10 overflow-hidden bg-black/20 hover:border-[#00AEEF]/40"
+                                          onClick={() => openComprobantePreview(url)}
+                                          title="Ver comprobante"
+                                        >
+                                          <img src={url} alt="Comprobante" className="h-full w-full object-cover" loading="lazy" />
+                                        </button>
+                                      ) : null}
+
+                                      <button
+                                        type="button"
+                                        className="inline-flex items-center gap-2 text-xs font-black text-[#00AEEF] hover:text-[#00AEEF]/80"
+                                        onClick={() => openComprobantePreview(url)}
+                                      >
+                                        {kind === 'pdf' ? 'Ver PDF' : 'Ver comprobante'}
+                                      </button>
+                                    </div>
+                                  );
+                                })()}
+                              </TableCell>
+                              <TableCell className="text-right font-black">{formatCRC(m.debe || 0)}</TableCell>
+                              <TableCell className="text-right font-black">{formatCRC(m.haber || 0)}</TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
+              ) : (
+                <div className="text-sm text-slate-400">Selecciona una fecha y presiona “Ver día”.</div>
+              )}
+
+              <Dialog
+                isOpen={comprobantePreviewOpen}
+                onClose={() => setComprobantePreviewOpen(false)}
+                title="Comprobante"
+                maxWidthClass="max-w-4xl"
+              >
+                {!comprobantePreviewUrl ? (
+                  <div className="text-slate-300">Sin comprobante.</div>
+                ) : comprobantePreviewKind === 'image' ? (
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                      <img
+                        src={comprobantePreviewUrl}
+                        alt="Comprobante"
+                        className="w-full max-h-[70vh] object-contain rounded-xl"
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => window.open(comprobantePreviewUrl, '_blank', 'noopener,noreferrer')}
+                      >
+                        Abrir en pestaña
+                      </Button>
+                      <Button type="button" onClick={() => setComprobantePreviewOpen(false)}>Cerrar</Button>
+                    </div>
+                  </div>
+                ) : comprobantePreviewKind === 'pdf' ? (
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-white/10 bg-black/20 overflow-hidden">
+                      <iframe title="Comprobante PDF" src={comprobantePreviewUrl} className="w-full h-[70vh]" />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => window.open(comprobantePreviewUrl, '_blank', 'noopener,noreferrer')}
+                      >
+                        Abrir en pestaña
+                      </Button>
+                      <Button type="button" onClick={() => setComprobantePreviewOpen(false)}>Cerrar</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="text-slate-300 break-all">{comprobantePreviewUrl}</div>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => window.open(comprobantePreviewUrl, '_blank', 'noopener,noreferrer')}
+                      >
+                        Abrir en pestaña
+                      </Button>
+                      <Button type="button" onClick={() => setComprobantePreviewOpen(false)}>Cerrar</Button>
+                    </div>
+                  </div>
+                )}
+              </Dialog>
+
+              {libroMes?.error ? (
+                <div className="text-red-200 font-bold">{libroMes.error}</div>
+              ) : libroMes ? (
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+                    <div>
+                      <div className="font-black text-white">Resumen del mes</div>
+                      <div className="text-slate-300 font-semibold text-sm">{libroMes.fecha_inicio} a {libroMes.fecha_fin}</div>
+                    </div>
+                    <div className="text-slate-200 font-black space-y-1 text-right">
+                      <div>
+                        En bolsa <span className="text-white">REAL</span> (mes): {formatCRC((Number(libroMes.total_debe) || 0) - (Number(libroMes.total_haber) || 0))}
+                      </div>
+                      {libroMesEsperado && !libroMesEsperado?.error ? (
+                        <div className="text-slate-300">
+                          En bolsa <span className="text-white">ESPERADO</span> (mes): {formatCRC((Number(libroMesEsperado.total_debe) || 0) - (Number(libroMesEsperado.total_haber) || 0))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                      <div className="text-xs text-slate-400 font-bold uppercase tracking-widest">Debe</div>
+                      <div className="text-white font-black text-xl">{formatCRC(libroMes.total_debe ?? 0)}</div>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                      <div className="text-xs text-slate-400 font-bold uppercase tracking-widest">Haber</div>
+                      <div className="text-white font-black text-xl">{formatCRC(libroMes.total_haber ?? 0)}</div>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                      <div className="text-xs text-slate-400 font-bold uppercase tracking-widest">Neto</div>
+                      <div className="text-white font-black text-xl">{formatCRC((Number(libroMes.total_debe) || 0) - (Number(libroMes.total_haber) || 0))}</div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-white/5">
+                          <TableHead>Día</TableHead>
+                          <TableHead className="text-right">Debe</TableHead>
+                          <TableHead className="text-right">Haber</TableHead>
+                          <TableHead className="text-right">Neto</TableHead>
+                          <TableHead className="text-right">Saldo (acum.)</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {resumenMesDias.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={5} className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest italic">Sin movimientos en el mes</TableCell>
+                          </TableRow>
+                        ) : (
+                          resumenMesDias.map((d: any) => (
+                            <TableRow key={d.fecha}>
+                              <TableCell className="text-slate-200 font-bold">{formatDateCR(d.fecha)}</TableCell>
+                              <TableCell className="text-right font-black text-emerald-200">{Number(d.debe) ? formatCRC(d.debe) : '—'}</TableCell>
+                              <TableCell className="text-right font-black text-rose-200">{Number(d.haber) ? formatCRC(d.haber) : '—'}</TableCell>
+                              <TableCell className="text-right font-black text-slate-100">{formatCRC(d.neto)}</TableCell>
+                              <TableCell className="text-right font-black text-white">{formatCRC(d.saldo)}</TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </Card>
+
           <div className="flex items-center gap-3">
             <Button
               type="button"
@@ -1307,8 +2031,9 @@ const Pagos: React.FC = () => {
             </Button>
           </div>
 
-          <Card className="overflow-hidden">
-            <div className="p-8 space-y-4">
+          <div ref={movimientosCardRef}>
+            <Card className="overflow-hidden">
+              <div className="p-8 space-y-4">
               <div className="flex items-start justify-between gap-6">
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-3">
@@ -1329,6 +2054,30 @@ const Pagos: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {activePanel === 'estudiantes' && (
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <Label className="mb-0">Grupo</Label>
+                    <Select
+                      className="h-11 w-72"
+                      value={grupoFiltroId}
+                      onChange={(e) => setGrupoFiltroId(e.target.value)}
+                      disabled={loadingGrupos}
+                    >
+                      <option value="all">Todos</option>
+                      {(grupos || []).map((g: any) => (
+                        <option key={String(g.id)} value={String(g.id)}>
+                          {g.nombre_grupo || g.id}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="text-xs text-slate-400 font-semibold">
+                    {loadingGrupos ? 'Cargando grupos…' : 'Filtra estudiantes por grupo'}
+                  </div>
+                </div>
+              )}
 
               <div className="rounded-2xl border border-white/10 overflow-hidden">
                 <Table>
@@ -1405,8 +2154,112 @@ const Pagos: React.FC = () => {
                   {(activePanel === 'tutores' ? loadingPendientesPorTutor : loadingPendientesPorEstudiante) ? 'Actualizando...' : 'Actualizar lista'}
                 </Button>
               </div>
-            </div>
-          </Card>
+              </div>
+            </Card>
+          </div>
+
+          {activePanel === 'estudiantes' && (
+            <Card className="overflow-hidden">
+              <div className="p-8 space-y-4">
+                <div className="flex items-start justify-between gap-6">
+                  <div>
+                    <h2 className="text-lg font-bold text-white flex items-center gap-3">
+                      <DollarSign className="w-6 h-6 p-1 bg-white/10 text-emerald-300 rounded-lg" />
+                      Pagos por grupo
+                    </h2>
+                    <p className="text-slate-300 font-medium mt-1">
+                      Selecciona un grupo para ver quiénes tienen <span className="font-bold">ingresos pendientes</span>.
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total grupo</div>
+                    <div className="text-2xl font-black text-white tracking-tighter">{formatCRC(grupoPagoTotal)}</div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <Label className="mb-0">Grupo</Label>
+                    <Select
+                      className="h-11 w-72"
+                      value={grupoPagoId}
+                      onChange={(e) => setGrupoPagoId(e.target.value)}
+                      disabled={loadingGrupos}
+                    >
+                      <option value="all">Selecciona un grupo</option>
+                      {(grupos || []).map((g: any) => (
+                        <option key={String(g.id)} value={String(g.id)}>
+                          {g.nombre_grupo || g.id}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="text-xs text-slate-400 font-semibold">
+                    {loadingGrupos ? 'Cargando grupos…' : 'Sólo muestra estudiantes con saldo pendiente'}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-white/5">
+                        <TableHead>Estudiante</TableHead>
+                        <TableHead className="text-right">Pendiente</TableHead>
+                        <TableHead className="text-right">Acción</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {grupoPagoId === 'all' ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest italic">
+                            Selecciona un grupo
+                          </TableCell>
+                        </TableRow>
+                      ) : grupoPagoRows.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest italic">
+                            Sin pendientes en este grupo
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        grupoPagoRows.map((row) => (
+                          <TableRow key={row.estudiante.id}>
+                            <TableCell className="font-bold text-slate-100">{row.estudiante.nombre}</TableCell>
+                            <TableCell className="text-right font-black text-white">{formatCRC(row.total_pendiente)}</TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <Button
+                                  type="button"
+                                  variant="primary"
+                                  className="h-9"
+                                  onClick={() => focusCobroEstudiante(row.estudiante)}
+                                >
+                                  Cobrar
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-9"
+                                  onClick={() => openEstudianteDetalle(row.estudiante.id, row.estudiante.nombre)}
+                                >
+                                  Ver detalle
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                <div className="text-xs text-slate-400">
+                  Al usar “Cobrar”, se abre el panel de pago del estudiante abajo. Debes seleccionar las sesiones a cubrir y,
+                  si el método no es efectivo, el comprobante es obligatorio.
+                </div>
+
+            </Card>
+          )}
 
           <Dialog
             isOpen={!!selectedTutorDetalle}
@@ -1467,9 +2320,7 @@ const Pagos: React.FC = () => {
                           <TableRow key={m.id}>
                             <TableCell>
                               {(() => {
-                                const isMensual = m?.origen === 'cierre_mensual' || !!m?.periodo_inicio || !!m?.periodo_fin;
                                 const isPorClase = !!m?.sesion_id;
-                                if (isMensual) return <Badge variant="info">Mensual</Badge>;
                                 if (isPorClase) return <Badge variant="warning">Por clase</Badge>;
                                 return <Badge variant="secondary">Manual</Badge>;
                               })()}
@@ -1581,9 +2432,7 @@ const Pagos: React.FC = () => {
                           <TableRow key={m.id}>
                             <TableCell>
                               {(() => {
-                                const isMensual = m?.origen === 'cierre_mensual' || !!m?.periodo_inicio || !!m?.periodo_fin;
                                 const isPorClase = !!m?.sesion_id;
-                                if (isMensual) return <Badge variant="info">Mensual</Badge>;
                                 if (isPorClase) return <Badge variant="warning">Por clase</Badge>;
                                 return <Badge variant="secondary">Manual</Badge>;
                               })()}
@@ -1602,313 +2451,35 @@ const Pagos: React.FC = () => {
           </Dialog>
 
           <Card className="overflow-hidden">
-            <div className="p-8 flex flex-col sm:flex-row sm:items-end justify-between gap-6">
-              <div className="flex items-start gap-4">
-                <div className="p-3 bg-white/10 border border-white/10 rounded-2xl text-slate-300">
-                  <Filter className="w-5 h-5" />
+            <div className="p-6 border-b border-white/10 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2 bg-white/10 border border-white/10 rounded-2xl text-slate-300">
+                  <Filter className="w-4 h-4" />
                 </div>
-                <div className="space-y-1">
-                  <Label className="mb-0">Filtrar por Tutor</Label>
+                <div>
+                  <div className="text-lg font-black text-white">Liquidaciones</div>
+                  <div className="text-sm text-slate-300">Pagos a tutores registrados.</div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <Label className="mb-0">Tutor</Label>
                   <Select
-                    className="w-72"
+                    className="h-11 w-72"
                     value={filterTutor}
                     onChange={(e) => setFilterTutor(e.target.value)}
                   >
-                    <option value="all">Todos los registros</option>
+                    <option value="all">Todos</option>
                     {tutores.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
                   </Select>
                 </div>
-              </div>
-              <div className="flex flex-col items-start sm:items-end">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Monto Total Filtrado</span>
-                <span className="text-3xl sm:text-4xl font-black text-white tracking-tighter">{formatCRC(totalFiltered)}</span>
+                <div className="text-sm text-slate-300 font-bold pb-2">
+                  {filteredPagos.length} registros
+                </div>
               </div>
             </div>
-          </Card>
 
-          <Card className="overflow-hidden">
-            <div className="p-8 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-bold text-white">Control diario (libro)</h2>
-                  <p className="text-slate-300 text-sm">Movimientos del día en formato Debe/Haber.</p>
-                </div>
-                <div className="flex flex-wrap gap-3 items-end">
-                  <div>
-                    <Label className="mb-0">Fecha</Label>
-                    <Input type="date" value={libroFecha} onChange={(e) => setLibroFecha(e.target.value)} className="h-11" />
-                  </div>
-                  <Button type="button" variant="outline" className="h-11" onClick={cargarLibro} disabled={loadingLibro}>
-                    {loadingLibro ? 'Cargando...' : 'Ver día'}
-                  </Button>
-
-                  <div className="hidden sm:block w-px h-10 bg-white/10 mx-1" />
-
-                  <div>
-                    <Label className="mb-0">Año</Label>
-                    <Input
-                      type="number"
-                      value={libroMesAnio}
-                      onChange={(e) => setLibroMesAnio(parseInt(e.target.value || String(new Date().getFullYear()), 10))}
-                      className="h-11 w-28"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-0">Mes</Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={12}
-                      value={libroMesMes}
-                      onChange={(e) => setLibroMesMes(Math.max(1, Math.min(12, parseInt(e.target.value || '1', 10) || 1)))}
-                      className="h-11 w-24"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-0">Tutor (mes)</Label>
-                    <Select
-                      className="h-11 w-72"
-                      value={String(libroMesTutorId)}
-                      onChange={(e) => setLibroMesTutorId(parseInt(e.target.value || '0', 10) || 0)}
-                    >
-                      <option value="0">Todos</option>
-                      {tutores.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.nombre}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  <Button type="button" variant="outline" className="h-11" onClick={cargarLibroMes} disabled={loadingLibroMes}>
-                    {loadingLibroMes ? 'Cargando...' : 'Ver mes'}
-                  </Button>
-
-                  <Button type="button" variant="secondary" className="h-11" onClick={calcularBolsaTotal} disabled={loadingBolsaTotal}>
-                    {loadingBolsaTotal ? 'Calculando...' : 'Total en bolsa'}
-                  </Button>
-                </div>
-              </div>
-
-              {libro?.error ? (
-                <div className="text-red-200 font-bold">{libro.error}</div>
-              ) : libro ? (
-                <>
-                  <div className="text-sm text-slate-200 font-bold">
-                    Total Debe: <span className="text-white">{formatCRC(libro.total_debe ?? 0)}</span> · Total Haber: <span className="text-white">{formatCRC(libro.total_haber ?? 0)}</span>
-                    {' '}· En bolsa: <span className="text-white">{formatCRC((Number(libro.total_debe) || 0) - (Number(libro.total_haber) || 0))}</span>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-white/5">
-                          <TableHead>Fecha</TableHead>
-                          <TableHead>No. Comprobante</TableHead>
-                          <TableHead>Detalle</TableHead>
-                          <TableHead className="text-right">Debe</TableHead>
-                          <TableHead className="text-right">Haber</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {(libro.movimientos || []).length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={5} className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest italic">Sin movimientos</TableCell>
-                          </TableRow>
-                        ) : (
-                          (libro.movimientos || []).map((m: any) => (
-                            <TableRow key={m.id}>
-                              <TableCell>{m.fecha_comprobante ? formatDateCR(m.fecha_comprobante) : (m.fecha_pago ? formatDateCR(m.fecha_pago) : '-')}</TableCell>
-                              <TableCell className="text-slate-200 font-bold">{m.factura_numero || '—'}</TableCell>
-                              <TableCell className="text-slate-300">
-                                <div className="font-bold text-slate-100">
-                                  {m?.curso?.nombre || ''}{m?.tutor?.nombre ? ` · ${m.tutor.nombre}` : ''}{m?.matricula?.estudiante?.nombre ? ` · ${m.matricula.estudiante.nombre}` : ''}
-                                </div>
-                                <div className="text-xs text-slate-400">{m.notas || m.origen || m.tipo}</div>
-                                {(() => {
-                                  const url = getComprobanteUrl(m);
-                                  if (!url) return null;
-                                  const kind = detectComprobanteKind(url);
-                                  return (
-                                    <div className="mt-2 flex items-center gap-3">
-                                      {kind === 'image' ? (
-                                        <button
-                                          type="button"
-                                          className="h-12 w-12 rounded-xl border border-white/10 overflow-hidden bg-black/20 hover:border-[#00AEEF]/40"
-                                          onClick={() => openComprobantePreview(url)}
-                                          title="Ver comprobante"
-                                        >
-                                          <img src={url} alt="Comprobante" className="h-full w-full object-cover" loading="lazy" />
-                                        </button>
-                                      ) : null}
-
-                                      <button
-                                        type="button"
-                                        className="inline-flex items-center gap-2 text-xs font-black text-[#00AEEF] hover:text-[#00AEEF]/80"
-                                        onClick={() => openComprobantePreview(url)}
-                                      >
-                                        {kind === 'pdf' ? 'Ver PDF' : 'Ver comprobante'}
-                                      </button>
-
-                                      <button
-                                        type="button"
-                                        className="inline-flex items-center gap-2 text-xs font-black text-slate-300 hover:text-white"
-                                        onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
-                                      >
-                                        Abrir
-                                      </button>
-                                    </div>
-                                  );
-                                })()}
-                              </TableCell>
-                              <TableCell className="text-right font-black text-emerald-200">{Number(m.debe) ? formatCRC(m.debe) : '—'}</TableCell>
-                              <TableCell className="text-right font-black text-rose-200">{Number(m.haber) ? formatCRC(m.haber) : '—'}</TableCell>
-                            </TableRow>
-                          ))
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </>
-              ) : (
-                <div className="text-sm text-slate-400">Selecciona una fecha y presiona “Ver día”.</div>
-              )}
-
-              <Dialog
-                isOpen={comprobantePreviewOpen}
-                onClose={() => setComprobantePreviewOpen(false)}
-                title="Comprobante"
-                maxWidthClass="max-w-4xl"
-              >
-                {!comprobantePreviewUrl ? (
-                  <div className="text-slate-300">Sin comprobante.</div>
-                ) : comprobantePreviewKind === 'image' ? (
-                  <div className="space-y-3">
-                    <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                      <img
-                        src={comprobantePreviewUrl}
-                        alt="Comprobante"
-                        className="w-full max-h-[70vh] object-contain rounded-xl"
-                      />
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => window.open(comprobantePreviewUrl, '_blank', 'noopener,noreferrer')}
-                      >
-                        Abrir en pestaña
-                      </Button>
-                      <Button type="button" onClick={() => setComprobantePreviewOpen(false)}>Cerrar</Button>
-                    </div>
-                  </div>
-                ) : comprobantePreviewKind === 'pdf' ? (
-                  <div className="space-y-3">
-                    <div className="rounded-2xl border border-white/10 bg-black/20 overflow-hidden">
-                      <iframe title="Comprobante PDF" src={comprobantePreviewUrl} className="w-full h-[70vh]" />
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => window.open(comprobantePreviewUrl, '_blank', 'noopener,noreferrer')}
-                      >
-                        Abrir en pestaña
-                      </Button>
-                      <Button type="button" onClick={() => setComprobantePreviewOpen(false)}>Cerrar</Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="text-slate-300 break-all">{comprobantePreviewUrl}</div>
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => window.open(comprobantePreviewUrl, '_blank', 'noopener,noreferrer')}
-                      >
-                        Abrir en pestaña
-                      </Button>
-                      <Button type="button" onClick={() => setComprobantePreviewOpen(false)}>Cerrar</Button>
-                    </div>
-                  </div>
-                )}
-              </Dialog>
-
-              {bolsaTotal?.error ? (
-                <div className="text-red-200 font-bold">{bolsaTotal.error}</div>
-              ) : bolsaTotal ? (
-                <div className="rounded-2xl border border-white/10 bg-black/10 p-4 text-sm">
-                  <div className="font-black text-white">Total en bolsa (acumulado)</div>
-                  <div className="text-slate-300 font-semibold">{bolsaTotal.fecha_inicio} a {bolsaTotal.fecha_fin}</div>
-                  <div className="text-white font-black text-2xl mt-1">{formatCRC(bolsaTotal.neto ?? ((Number(bolsaTotal.total_debe) || 0) - (Number(bolsaTotal.total_haber) || 0)))}</div>
-                  <div className="text-slate-300 mt-1">Debe: {formatCRC(bolsaTotal.total_debe ?? 0)} · Haber: {formatCRC(bolsaTotal.total_haber ?? 0)}</div>
-                </div>
-              ) : null}
-
-              {libroMes?.error ? (
-                <div className="text-red-200 font-bold">{libroMes.error}</div>
-              ) : libroMes ? (
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-                    <div>
-                      <div className="font-black text-white">Resumen del mes</div>
-                      <div className="text-slate-300 font-semibold text-sm">{libroMes.fecha_inicio} a {libroMes.fecha_fin}</div>
-                    </div>
-                    <div className="text-slate-200 font-black">
-                      En bolsa (mes): {formatCRC((Number(libroMes.total_debe) || 0) - (Number(libroMes.total_haber) || 0))}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div className="rounded-xl border border-white/10 bg-black/10 p-3">
-                      <div className="text-xs text-slate-400 font-bold uppercase tracking-widest">Debe</div>
-                      <div className="text-white font-black text-xl">{formatCRC(libroMes.total_debe ?? 0)}</div>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-black/10 p-3">
-                      <div className="text-xs text-slate-400 font-bold uppercase tracking-widest">Haber</div>
-                      <div className="text-white font-black text-xl">{formatCRC(libroMes.total_haber ?? 0)}</div>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-black/10 p-3">
-                      <div className="text-xs text-slate-400 font-bold uppercase tracking-widest">Neto</div>
-                      <div className="text-white font-black text-xl">{formatCRC((Number(libroMes.total_debe) || 0) - (Number(libroMes.total_haber) || 0))}</div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-white/10 overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-white/5">
-                          <TableHead>Día</TableHead>
-                          <TableHead className="text-right">Debe</TableHead>
-                          <TableHead className="text-right">Haber</TableHead>
-                          <TableHead className="text-right">Neto</TableHead>
-                          <TableHead className="text-right">Saldo (acum.)</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {resumenMesDias.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={5} className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest italic">Sin movimientos en el mes</TableCell>
-                          </TableRow>
-                        ) : (
-                          resumenMesDias.map((d: any) => (
-                            <TableRow key={d.fecha}>
-                              <TableCell className="text-slate-200 font-bold">{formatDateCR(d.fecha)}</TableCell>
-                              <TableCell className="text-right font-black text-emerald-200">{Number(d.debe) ? formatCRC(d.debe) : '—'}</TableCell>
-                              <TableCell className="text-right font-black text-rose-200">{Number(d.haber) ? formatCRC(d.haber) : '—'}</TableCell>
-                              <TableCell className="text-right font-black text-slate-100">{formatCRC(d.neto)}</TableCell>
-                              <TableCell className="text-right font-black text-white">{formatCRC(d.saldo)}</TableCell>
-                            </TableRow>
-                          ))
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </Card>
-
-          <Card className="overflow-hidden">
             <div className="p-0">
               <Table>
                 <TableHeader>
@@ -1970,6 +2541,7 @@ const Pagos: React.FC = () => {
                 </TableBody>
               </Table>
             </div>
+
           </Card>
         </div>
       </div>

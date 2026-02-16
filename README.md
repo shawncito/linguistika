@@ -1,6 +1,35 @@
 # Linguistika - Gestor de Horarios y Tutorías para Centro de Idiomas
 
-Una aplicación web completa para gestionar eficientemente un centro de idiomas. Permite administrar tutores, cursos, estudiantes, horarios de tutorías y calcular automáticamente los pagos por clases dadas.
+**Versión:** 0.2.0-alpha  
+**Estado:** En desarrollo activo  
+**Última actualización:** 16 de febrero de 2026
+
+Una aplicación de escritorio completa (Electron) para gestionar eficientemente un centro de idiomas. Permite administrar tutores, cursos, estudiantes, horarios de tutorías, pagos y tesorería.
+
+---
+
+## 📦 Novedades v0.2.0-alpha
+
+- ✅ **Nuevo módulo de Tesorería** (en progreso):
+  - Cobros grupales simplificados
+  - Libro auxiliar con historial de movimientos
+  - Totales rápidos: dinero actual, deuda pendiente, saldos
+- ✅ Login mejorado con correos guardados
+- ✅ Lista de empleados muestra emails
+- ✅ Múltiples correcciones de bugs y optimizaciones
+
+Ver [CHANGELOG_v0.2.0-alpha.md](CHANGELOG_v0.2.0-alpha.md) para detalles completos.
+
+---
+
+## 📚 Documentación
+
+- **Índice completo**: [docs/INDICE_DOCUMENTACION.md](docs/INDICE_DOCUMENTACION.md)
+- **Guía de usuario**: [docs/GUIA_USUARIO_COMPLETA.md](docs/GUIA_USUARIO_COMPLETA.md)  
+- **Tesorería v2**: [docs/TESORERIA_V2.md](docs/TESORERIA_V2.md)
+- **Changelog actual**: [CHANGELOG_v0.2.0-alpha.md](CHANGELOG_v0.2.0-alpha.md)
+
+---
 
 ## 🎯 Características Principales
 
@@ -157,7 +186,7 @@ npm run build
 
 ## 📊 Base de Datos
 
-La aplicación utiliza SQLite con las siguientes tablas:
+La aplicación utiliza **Supabase (PostgreSQL)** con las siguientes tablas (entre otras):
 
 - **tutores** - Información de tutores y tarifas
 - **cursos** - Cursos disponibles

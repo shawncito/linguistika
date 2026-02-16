@@ -5,8 +5,15 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { supabase } from '../supabase.js';
 import { requireRoles } from '../middleware/roles.js';
+import { schemaErrorPayload } from '../utils/schemaErrors.js';
 
 const router = express.Router();
+
+function sendSchemaError(res, error) {
+  const payload = schemaErrorPayload(error);
+  if (payload) return res.status(400).json(payload);
+  return res.status(500).json({ error: error.message });
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,305 +90,6 @@ const clampInt = (value, min, max) => {
   return Math.max(min, Math.min(max, n));
 };
 
-const getMonthRange = (year, month1to12) => {
-  const y = Number.parseInt(String(year), 10);
-  const m = Number.parseInt(String(month1to12), 10);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return null;
-  const start = new Date(Date.UTC(y, m - 1, 1));
-  const end = new Date(Date.UTC(y, m, 0));
-  const toISO = (d) => d.toISOString().slice(0, 10);
-  return { periodo_inicio: toISO(start), periodo_fin: toISO(end), tag: `${y}-${String(m).padStart(2, '0')}` };
-};
-
-async function getConfigValue(key, defaultValue) {
-  const { data, error } = await supabase
-    .from('configuracion')
-    .select('value')
-    .eq('key', key)
-    .maybeSingle();
-
-  if (error) {
-    // si la tabla no existe / no hay permisos, degradar a default
-    return defaultValue;
-  }
-  return data?.value ?? defaultValue;
-}
-
-async function setConfigValue(key, value) {
-  const { error } = await supabase
-    .from('configuracion')
-    .upsert({ key, value: String(value), updated_at: new Date().toISOString() }, { onConflict: 'key' });
-  return error;
-}
-
-// Solo admin/contador pueden entrar a pagos
-router.use(requireRoles(['admin', 'contador']));
-
-// GET - Listar todos los pagos
-router.get('/', async (req, res) => {
-  try {
-    const { data: pagos, error } = await supabase
-      .from('pagos')
-      .select(`
-        *,
-        tutores:tutor_id (nombre, email)
-      `)
-      .order('fecha_pago', { ascending: false });
-    
-    if (error) throw error;
-    
-    const formatted = pagos.map(p => ({
-      ...p,
-      tutor_nombre: p.tutores?.nombre,
-      tutor_email: p.tutores?.email
-    }));
-    
-    res.json(formatted);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET - Pagos de un tutor
-router.get('/tutor/:tutor_id', async (req, res) => {
-  try {
-    const { data: pagos, error } = await supabase
-      .from('pagos')
-      .select('*')
-      .eq('tutor_id', req.params.tutor_id)
-      .order('fecha_pago', { ascending: false });
-    
-    if (error) throw error;
-    res.json(pagos);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET - Configuración de pagos
-router.get('/config', async (_req, res) => {
-  try {
-    const diaStr = await getConfigValue('cierre_mensual_dia', '1');
-    const cierre_mensual_dia = clampInt(diaStr, 1, 28) ?? 1;
-    res.json({ cierre_mensual_dia });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// PUT - Configuración de pagos
-router.put('/config', async (req, res) => {
-  try {
-    const cierre_mensual_dia = clampInt(req.body?.cierre_mensual_dia, 1, 28);
-    if (!cierre_mensual_dia) {
-      return res.status(400).json({ error: 'cierre_mensual_dia debe ser un entero entre 1 y 28' });
-    }
-
-    const err = await setConfigValue('cierre_mensual_dia', String(cierre_mensual_dia));
-    if (err) throw err;
-    res.json({ cierre_mensual_dia });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST - Generar cierre mensual (movimientos) para cursos mensuales
-// Body: { anio, mes } o { periodo_inicio, periodo_fin }, force?: boolean
-router.post('/cierre-mensual', async (req, res) => {
-  try {
-    const { anio, mes, periodo_inicio, periodo_fin, force } = req.body || {};
-
-    const monthRange = (anio && mes) ? getMonthRange(anio, mes) : null;
-    const start = monthRange?.periodo_inicio ?? (isValidISODate(periodo_inicio) ? String(periodo_inicio) : null);
-    const end = monthRange?.periodo_fin ?? (isValidISODate(periodo_fin) ? String(periodo_fin) : null);
-    const tag = monthRange?.tag ?? (start && end ? `${start}_a_${end}` : null);
-
-    if (!start || !end || !tag) {
-      return res.status(400).json({ error: 'Debe enviar {anio, mes} o {periodo_inicio, periodo_fin} (YYYY-MM-DD)' });
-    }
-
-    const diaStr = await getConfigValue('cierre_mensual_dia', '1');
-    const cierreDia = clampInt(diaStr, 1, 28) ?? 1;
-    const hoyDia = new Date().getDate();
-
-    if (!force && hoyDia !== cierreDia) {
-      return res.status(409).json({
-        error: `El cierre mensual está configurado para el día ${cierreDia}. Hoy es ${hoyDia}.`,
-        cierre_mensual_dia: cierreDia,
-        hoy_dia: hoyDia
-      });
-    }
-
-    // 1) Traer sesiones dadas en el periodo con info de matrícula y curso
-    const selectWith = `
-      id,
-      fecha,
-      estado,
-      curso_id,
-      tutor_id,
-      matricula_id,
-      matricula:matricula_id (id, estudiante_id, tutor_id, curso_id),
-      curso:curso_id (id, nombre, tipo_pago, costo_curso, pago_tutor)
-    `;
-
-    let sesiones;
-    {
-      const { data, error } = await supabase
-        .from('sesiones_clases')
-        .select(selectWith)
-        .eq('estado', 'dada')
-        .gte('fecha', start)
-        .lte('fecha', end);
-      if (error) {
-        if (isMissingColumnError(error, 'matricula_id')) {
-          return res.status(409).json({
-            error: 'Falta la columna sesiones_clases.matricula_id. Ejecute la migración 005_add_matricula_id_to_sesiones_clases.sql'
-          });
-        }
-        throw error;
-      }
-      sesiones = data || [];
-    }
-
-    // 2) Filtrar solo cursos mensuales con matrícula válida
-    const sesionesMensuales = (sesiones || []).filter(s => {
-      const tipo = s?.curso?.tipo_pago;
-      return tipo === 'mensual' && s?.matricula_id;
-    });
-
-    if (sesionesMensuales.length === 0) {
-      return res.json({
-        periodo_inicio: start,
-        periodo_fin: end,
-        tag,
-        sesiones_mensuales: 0,
-        ingresos_creados: 0,
-        pagos_creados: 0,
-        skipped_existentes: 0
-      });
-    }
-
-    // 3) Determinar qué ingresos/pagos se deben generar (1 por matrícula/curso y 1 por tutor/curso)
-    const ingresosByMatriculaCurso = new Map();
-    const pagosByTutorCurso = new Map();
-
-    for (const s of sesionesMensuales) {
-      const curso = s.curso;
-      const matricula = s.matricula;
-      if (!curso || !matricula) continue;
-
-      const keyIngreso = `${matricula.id}:${curso.id}`;
-      if (!ingresosByMatriculaCurso.has(keyIngreso)) {
-        ingresosByMatriculaCurso.set(keyIngreso, {
-          curso_id: curso.id,
-          matricula_id: matricula.id,
-          tutor_id: matricula.tutor_id ?? s.tutor_id ?? null,
-          sesion_id: null,
-          tipo: 'ingreso_estudiante',
-          monto: Number(curso.costo_curso) || 0,
-          factura_numero: null,
-          fecha_pago: end,
-          fecha_comprobante: null,
-          estado: 'pendiente',
-          origen: 'cierre_mensual',
-          periodo_inicio: start,
-          periodo_fin: end,
-          notas: `CIERRE_MENSUAL:${tag} - Ingreso mensual (${curso.nombre || 'curso'})`
-        });
-      }
-
-      const keyPago = `${s.tutor_id}:${curso.id}`;
-      if (!pagosByTutorCurso.has(keyPago)) {
-        pagosByTutorCurso.set(keyPago, {
-          curso_id: curso.id,
-          matricula_id: null,
-          tutor_id: s.tutor_id,
-          sesion_id: null,
-          tipo: 'pago_tutor_pendiente',
-          monto: Number(curso.pago_tutor) || 0,
-          factura_numero: null,
-          fecha_pago: end,
-          fecha_comprobante: null,
-          estado: 'pendiente',
-          origen: 'cierre_mensual',
-          periodo_inicio: start,
-          periodo_fin: end,
-          notas: `CIERRE_MENSUAL:${tag} - Pago mensual tutor`
-        });
-      }
-    }
-
-    const ingresos = Array.from(ingresosByMatriculaCurso.values());
-    const pagos = Array.from(pagosByTutorCurso.values());
-
-    // 4) Evitar duplicados (si existen columnas origen/periodo_*). Si no existen, se genera pero puede duplicar.
-    let supportsOrigenPeriodo = true;
-    let existentes = [];
-    {
-      const { data, error } = await supabase
-        .from('movimientos_dinero')
-        .select('id, tipo, curso_id, matricula_id, tutor_id, origen, periodo_inicio, periodo_fin')
-        .eq('origen', 'cierre_mensual')
-        .eq('periodo_inicio', start)
-        .eq('periodo_fin', end);
-
-      if (error && (isMissingColumnError(error, 'origen') || isMissingColumnError(error, 'periodo_inicio') || isMissingColumnError(error, 'periodo_fin'))) {
-        supportsOrigenPeriodo = false;
-        existentes = [];
-      } else {
-        if (error) throw error;
-        existentes = data || [];
-      }
-    }
-
-    const existsKey = new Set();
-    if (supportsOrigenPeriodo) {
-      for (const e of existentes) {
-        const k = `${e.tipo}:${e.curso_id}:${e.matricula_id ?? 'null'}:${e.tutor_id ?? 'null'}`;
-        existsKey.add(k);
-      }
-    }
-
-    const toInsert = [];
-    let skipped = 0;
-    for (const mov of [...ingresos, ...pagos]) {
-      if (!supportsOrigenPeriodo) {
-        toInsert.push(mov);
-        continue;
-      }
-      const k = `${mov.tipo}:${mov.curso_id}:${mov.matricula_id ?? 'null'}:${mov.tutor_id ?? 'null'}`;
-      if (existsKey.has(k)) {
-        skipped++;
-        continue;
-      }
-      toInsert.push(mov);
-    }
-
-    if (toInsert.length > 0) {
-      const { error } = await supabase
-        .from('movimientos_dinero')
-        .insert(toInsert);
-      if (error) throw error;
-    }
-
-    res.json({
-      periodo_inicio: start,
-      periodo_fin: end,
-      tag,
-      cierre_mensual_dia: cierreDia,
-      hoy_dia: hoyDia,
-      supports_origen_periodo: supportsOrigenPeriodo,
-      sesiones_mensuales: sesionesMensuales.length,
-      ingresos_planeados: ingresos.length,
-      pagos_planeados: pagos.length,
-      insertados: toInsert.length,
-      skipped_existentes: skipped
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // POST - Registrar pago
 router.post('/', async (req, res) => {
   try {
@@ -442,7 +150,7 @@ router.post('/', async (req, res) => {
     
     res.status(201).json(formatted);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -509,7 +217,7 @@ router.get('/pendientes/resumen', async (req, res) => {
       movimientos: movimientos || []
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -546,7 +254,7 @@ router.get('/pendientes/resumen-tutores', async (_req, res) => {
 
     res.json({ tutores: rows });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -613,7 +321,7 @@ router.get('/pendientes/detalle-tutor', async (req, res) => {
       movimientos
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -621,7 +329,7 @@ router.get('/pendientes/detalle-tutor', async (req, res) => {
 // Query: fecha (YYYY-MM-DD) o fecha_inicio/fecha_fin
 router.get('/libro-diario', async (req, res) => {
   try {
-    const { fecha, fecha_inicio, fecha_fin, only_totals, tutor_id } = req.query;
+    const { fecha, fecha_inicio, fecha_fin, only_totals, tutor_id, incluir_pendientes } = req.query;
 
     const onlyTotals = ['1', 'true', 'yes'].includes(String(only_totals || '').trim().toLowerCase());
 
@@ -641,14 +349,22 @@ router.get('/libro-diario', async (req, res) => {
       return res.status(400).json({ error: 'tutor_id debe ser un entero válido' });
     }
 
+    const incluirPendientes = ['1', 'true', 'yes'].includes(String(incluir_pendientes || '').trim().toLowerCase());
+
     if (onlyTotals) {
       let q = supabase
         .from('movimientos_dinero')
-        .select('tipo, monto')
+        .select('tipo, monto, estado')
         .gte('fecha_pago', start)
         .lte('fecha_pago', end);
 
       if (tutorId) q = q.eq('tutor_id', tutorId);
+
+      // Por defecto, el libro diario representa movimientos REALES (completados/verificados).
+      if (!incluirPendientes) {
+        // Incluir también estado null por compatibilidad histórica.
+        q = q.or('estado.is.null,estado.in.(completado,verificado)');
+      }
 
       const { data, error } = await q;
       if (error) throw error;
@@ -660,8 +376,10 @@ router.get('/libro-diario', async (req, res) => {
       for (const r of rows) {
         const tipo = String(r?.tipo || '');
         const monto = Number(r?.monto) || 0;
-        const isIngreso = tipo === 'ingreso_estudiante' || tipo.startsWith('ingreso_');
+        const isIngreso = incluirPendientes ? (tipo === 'ingreso_estudiante' || tipo.startsWith('ingreso_')) : isRealIngresoTipo(tipo);
         const isEgreso = tipo === 'pago_tutor_pendiente' || tipo === 'pago_tutor' || tipo.startsWith('pago_') || tipo.startsWith('egreso_');
+
+        if (!incluirPendientes && !isRealEstado(r?.estado)) continue;
         if (isIngreso) totalDebe += monto;
         if (isEgreso) totalHaber += monto;
       }
@@ -692,6 +410,10 @@ router.get('/libro-diario', async (req, res) => {
 
     if (tutorId) q = q.eq('tutor_id', tutorId);
 
+    if (!incluirPendientes) {
+      q = q.or('estado.is.null,estado.in.(completado,verificado)');
+    }
+
     const { data, error } = await q;
 
     if (error) throw error;
@@ -700,7 +422,7 @@ router.get('/libro-diario', async (req, res) => {
       const tipo = String(m?.tipo || '');
       const monto = Number(m?.monto) || 0;
 
-      const isIngreso = tipo === 'ingreso_estudiante' || tipo.startsWith('ingreso_');
+      const isIngreso = incluirPendientes ? (tipo === 'ingreso_estudiante' || tipo.startsWith('ingreso_')) : isRealIngresoTipo(tipo);
       const isEgreso = tipo === 'pago_tutor_pendiente' || tipo === 'pago_tutor' || tipo.startsWith('pago_') || tipo.startsWith('egreso_');
 
       const comprobante_url = parseNotesForComprobanteUrl(m?.notas);
@@ -722,10 +444,11 @@ router.get('/libro-diario', async (req, res) => {
       total_debe: totalDebe,
       total_haber: totalHaber,
       neto: totalDebe - totalHaber,
+      incluir_pendientes: incluirPendientes,
       movimientos,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -844,7 +567,7 @@ router.post('/comprobantes-ingreso', async (req, res) => {
 
     res.status(201).json(comprobante);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -872,6 +595,7 @@ router.post('/movimientos/manual', async (req, res) => {
     let tutor_id = toIntOrNull(body.tutor_id);
     const estudiante_id = toIntOrNull(body.estudiante_id);
     let curso_id = toIntOrNull(body.curso_id);
+    const sesion_id = toIntOrNull(body.sesion_id);
 
     let matricula_id = null;
     if (estudiante_id) {
@@ -931,6 +655,7 @@ router.post('/movimientos/manual', async (req, res) => {
       categoria ? `CATEGORIA:${categoria}` : null,
       metodo ? `METODO:${metodo}` : null,
       detalle ? `DETALLE:${detalle}` : null,
+      sesion_id ? `SESION_ID:${sesion_id}` : null,
       estudiante_id ? `ESTUDIANTE_ID:${estudiante_id}` : null,
       tutor_id ? `TUTOR_ID:${tutor_id}` : null,
     ].filter(Boolean);
@@ -949,7 +674,7 @@ router.post('/movimientos/manual', async (req, res) => {
       tutor_id: tutor_id ? String(tutor_id) : null,
       curso_id: curso_id ? String(curso_id) : null,
       matricula_id: matricula_id ? String(matricula_id) : null,
-      sesion_id: null,
+      sesion_id: sesion_id ? String(sesion_id) : null,
     };
 
     const { data, error } = await supabase
@@ -978,7 +703,7 @@ router.post('/movimientos/manual', async (req, res) => {
       comprobante_url,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -1018,7 +743,7 @@ router.post('/movimientos/:id/comprobante', (req, res) => {
 
       res.status(201).json({ id, comprobante_url: publicUrl });
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      return sendSchemaError(res, error);
     }
   });
 });
@@ -1076,7 +801,7 @@ router.post('/movimientos/comprobante/bulk', async (req, res) => {
 
     res.json({ updated, comprobante_url: comprobanteUrl, ids: uniqIds });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -1085,35 +810,163 @@ router.get('/pendientes/resumen-estudiantes', async (_req, res) => {
   try {
     const { data: estudiantes, error: estError } = await supabase
       .from('estudiantes')
-      .select('id, nombre')
+      .select('id, nombre, matricula_grupo_id, encargado_id')
       .order('nombre', { ascending: true });
     if (estError) throw estError;
+
+    const { data: estudiantesBulk, error: bulkErr } = await supabase
+      .from('estudiantes_bulk')
+      .select('id, nombre')
+      .order('nombre', { ascending: true });
+    if (bulkErr) throw bulkErr;
+
+    const { data: bulkLinks, error: bulkLinksErr } = await supabase
+      .from('estudiantes_en_grupo')
+      .select('estudiante_bulk_id, matricula_grupo_id');
+    if (bulkLinksErr) throw bulkLinksErr;
+
+    const bulkToGrupo = new Map((bulkLinks || []).map((l) => [Number(l.estudiante_bulk_id), l.matricula_grupo_id ?? null]));
+
+    const groupMembers = new Map();
+    const studentToGrupo = new Map();
+    for (const e of estudiantes || []) {
+      const gid = e.matricula_grupo_id ?? null;
+      studentToGrupo.set(Number(e.id), gid ?? null);
+      if (!gid) continue;
+      if (!groupMembers.has(gid)) groupMembers.set(gid, { normales: new Set(), bulk: new Set() });
+      groupMembers.get(gid).normales.add(Number(e.id));
+    }
+    for (const [bulkId, gid] of bulkToGrupo.entries()) {
+      if (!gid) continue;
+      if (!groupMembers.has(gid)) groupMembers.set(gid, { normales: new Set(), bulk: new Set() });
+      groupMembers.get(gid).bulk.add(Number(bulkId));
+    }
+
+    const encargadoIds = Array.from(new Set((estudiantes || [])
+      .map((e) => Number(e?.encargado_id))
+      .filter((id) => Number.isFinite(id) && id > 0)));
+
+    let saldoMap = new Map();
+    if (encargadoIds.length) {
+      const { data: saldos, error: sErr } = await supabase
+        .from('tesoreria_saldos_encargados_v1')
+        .select('encargado_id, saldo_a_favor')
+        .in('encargado_id', encargadoIds);
+      if (!sErr) {
+        saldoMap = new Map((saldos || []).map((s) => [Number(s.encargado_id), Number(s.saldo_a_favor) || 0]));
+      }
+    }
+
+    let encargadoMap = new Map();
+    if (encargadoIds.length) {
+      const { data: encargadosRows, error: eErr } = await supabase
+        .from('encargados')
+        .select('id, nombre')
+        .in('id', encargadoIds);
+      if (!eErr) {
+        encargadoMap = new Map((encargadosRows || []).map((r) => [Number(r.id), r?.nombre || null]));
+      }
+    }
 
     // Traer movimientos pendientes y mapear a estudiante via matrícula
     const { data: movs, error: movsError } = await supabase
       .from('movimientos_dinero')
-      .select('monto, matricula:matricula_id (estudiante_id)')
+      .select('monto, origen, curso:curso_id (tipo_pago), matricula:matricula_id (estudiante_id, estudiante_ids, grupo_id)')
       .eq('tipo', 'ingreso_estudiante')
       .eq('estado', 'pendiente');
     if (movsError) throw movsError;
 
     const totalsByEst = new Map();
+    const totalsByBulk = new Map();
+    const normalIds = new Set((estudiantes || []).map((e) => Number(e.id)));
+    const bulkIds = new Set((estudiantesBulk || []).map((e) => Number(e.id)));
     for (const m of movs || []) {
-      const estId = m?.matricula?.estudiante_id;
-      if (!estId) continue;
-      const prev = totalsByEst.get(estId) || 0;
-      totalsByEst.set(estId, prev + (Number(m.monto) || 0));
+      const directId = m?.matricula?.estudiante_id;
+      const groupIds = Array.isArray(m?.matricula?.estudiante_ids) ? m.matricula.estudiante_ids : [];
+      const ids = (directId ? [directId] : groupIds).filter((id) => Number.isFinite(Number(id)) && Number(id) > 0);
+      const grupoId = m?.matricula?.grupo_id ?? null;
+
+      if (grupoId) {
+        const group = groupMembers.get(grupoId);
+        if (group) {
+          for (const id of group.normales) {
+            const prev = totalsByEst.get(id) || 0;
+            totalsByEst.set(id, prev + (Number(m.monto) || 0));
+          }
+          for (const id of group.bulk) {
+            const prev = totalsByBulk.get(id) || 0;
+            totalsByBulk.set(id, prev + (Number(m.monto) || 0));
+          }
+          continue;
+        }
+      }
+
+      if (!directId && groupIds.length > 0) {
+        const groupIdsFromStudents = Array.from(new Set(
+          groupIds
+            .map((id) => studentToGrupo.get(Number(id)))
+            .filter((gid) => Number.isFinite(Number(gid)) && Number(gid) > 0)
+        ));
+        if (groupIdsFromStudents.length === 1) {
+          const inferredGroupId = groupIdsFromStudents[0];
+          const group = groupMembers.get(inferredGroupId);
+          if (group) {
+            for (const id of group.normales) {
+              const prev = totalsByEst.get(id) || 0;
+              totalsByEst.set(id, prev + (Number(m.monto) || 0));
+            }
+            for (const id of group.bulk) {
+              const prev = totalsByBulk.get(id) || 0;
+              totalsByBulk.set(id, prev + (Number(m.monto) || 0));
+            }
+            continue;
+          }
+        }
+      }
+
+      if (ids.length > 0) {
+        for (const id of ids) {
+          const estId = Number(id);
+          if (normalIds.has(estId)) {
+            const prev = totalsByEst.get(estId) || 0;
+            totalsByEst.set(estId, prev + (Number(m.monto) || 0));
+            continue;
+          }
+          if (bulkIds.has(estId)) {
+            const prev = totalsByBulk.get(estId) || 0;
+            totalsByBulk.set(estId, prev + (Number(m.monto) || 0));
+          }
+        }
+        continue;
+      }
     }
 
-    const rows = (estudiantes || []).map(e => ({
-      estudiante_id: e.id,
-      estudiante_nombre: e.nombre,
-      total_pendiente: totalsByEst.get(e.id) || 0
-    }));
+    const rows = [
+      ...(estudiantes || []).map(e => ({
+        estudiante_id: e.id,
+        estudiante_bulk_id: null,
+        estudiante_nombre: e.nombre,
+        matricula_grupo_id: e.matricula_grupo_id ?? null,
+        encargado_id: e.encargado_id ?? null,
+        encargado_nombre: e.encargado_id ? (encargadoMap.get(Number(e.encargado_id)) || null) : null,
+        saldo_a_favor: e.encargado_id ? (saldoMap.get(Number(e.encargado_id)) || 0) : 0,
+        total_pendiente: totalsByEst.get(e.id) || 0,
+      })),
+      ...(estudiantesBulk || []).map(e => ({
+        estudiante_id: null,
+        estudiante_bulk_id: e.id,
+        estudiante_nombre: e.nombre,
+        matricula_grupo_id: bulkToGrupo.get(Number(e.id)) ?? null,
+        encargado_id: null,
+        encargado_nombre: null,
+        saldo_a_favor: 0,
+        total_pendiente: totalsByBulk.get(Number(e.id)) || 0,
+      })),
+    ];
 
     res.json({ estudiantes: rows });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -1121,9 +974,9 @@ router.get('/pendientes/resumen-estudiantes', async (_req, res) => {
 // Query params: estudiante_id (requerido), fecha_inicio, fecha_fin
 router.get('/pendientes/detalle-estudiante', async (req, res) => {
   try {
-    const { estudiante_id, fecha_inicio, fecha_fin } = req.query;
-    if (!estudiante_id) {
-      return res.status(400).json({ error: 'Query param requerido: estudiante_id' });
+    const { estudiante_id, estudiante_bulk_id, fecha_inicio, fecha_fin } = req.query;
+    if (!estudiante_id && !estudiante_bulk_id) {
+      return res.status(400).json({ error: 'Query param requerido: estudiante_id o estudiante_bulk_id' });
     }
     if (fecha_inicio && !isValidISODate(String(fecha_inicio))) {
       return res.status(400).json({ error: 'fecha_inicio debe ser YYYY-MM-DD' });
@@ -1132,16 +985,80 @@ router.get('/pendientes/detalle-estudiante', async (req, res) => {
       return res.status(400).json({ error: 'fecha_fin debe ser YYYY-MM-DD' });
     }
 
-    const { data: matriculas, error: matError } = await supabase
-      .from('matriculas')
-      .select('id')
-      .eq('estudiante_id', String(estudiante_id));
-    if (matError) throw matError;
+    let grupoId = null;
+    if (estudiante_id) {
+      const { data: studentRow, error: studentErr } = await supabase
+        .from('estudiantes')
+        .select('id, matricula_grupo_id')
+        .eq('id', String(estudiante_id))
+        .maybeSingle();
+      if (studentErr) throw studentErr;
+      grupoId = studentRow?.matricula_grupo_id ?? null;
+    }
+    if (!grupoId && estudiante_bulk_id) {
+      const { data: linkRow, error: linkErr } = await supabase
+        .from('estudiantes_en_grupo')
+        .select('matricula_grupo_id')
+        .eq('estudiante_bulk_id', String(estudiante_bulk_id))
+        .maybeSingle();
+      if (linkErr) throw linkErr;
+      grupoId = linkRow?.matricula_grupo_id ?? null;
+    }
 
-    const matriculaIds = (matriculas || []).map(m => m.id).filter(Boolean);
+    let groupRepresentativeId = null;
+    if (grupoId) {
+      const { data: groupMembers, error: groupErr } = await supabase
+        .from('estudiantes')
+        .select('id')
+        .eq('matricula_grupo_id', grupoId);
+      if (groupErr) throw groupErr;
+      if (groupMembers?.length) groupRepresentativeId = Number(groupMembers[0].id) || null;
+    }
+
+    let matriculas = [];
+    if (estudiante_id) {
+      const { data: matRows, error: matError } = await supabase
+        .from('matriculas')
+        .select('id, curso_id, tutor_id')
+        .eq('estudiante_id', String(estudiante_id));
+      if (matError) throw matError;
+      matriculas = matRows || [];
+    }
+
+    const groupMatTarget = estudiante_id ? Number(estudiante_id) : groupRepresentativeId;
+    let groupMatriculas = [];
+    if (groupMatTarget != null) {
+      let groupRows = null;
+      let groupMatErr = null;
+
+      ({ data: groupRows, error: groupMatErr } = await supabase
+        .from('matriculas')
+        .select('id, curso_id, tutor_id')
+        .contains('estudiante_ids', [groupMatTarget]));
+
+      if (groupMatErr && !isMissingColumnError(groupMatErr)) {
+        ({ data: groupRows, error: groupMatErr } = await supabase
+          .from('matriculas')
+          .select('id, curso_id, tutor_id')
+          .filter('estudiante_ids', 'cs', JSON.stringify([groupMatTarget])));
+      }
+
+      if (groupMatErr && !isMissingColumnError(groupMatErr)) {
+        ({ data: groupRows, error: groupMatErr } = await supabase
+          .from('matriculas')
+          .select('id, curso_id, tutor_id')
+          .filter('estudiante_ids', 'cs', `{${groupMatTarget}}`));
+      }
+
+      if (groupMatErr && !isMissingColumnError(groupMatErr)) throw groupMatErr;
+      groupMatriculas = groupRows || [];
+    }
+
+    const matriculaIds = Array.from(new Set([...(matriculas || []), ...groupMatriculas].map(m => m.id).filter(Boolean)));
     if (matriculaIds.length === 0) {
       return res.json({
-        estudiante_id: String(estudiante_id),
+        estudiante_id: estudiante_id ? String(estudiante_id) : null,
+        estudiante_bulk_id: estudiante_bulk_id ? String(estudiante_bulk_id) : null,
         fecha_inicio: fecha_inicio ? String(fecha_inicio) : null,
         fecha_fin: fecha_fin ? String(fecha_fin) : null,
         cantidad_movimientos: 0,
@@ -1152,7 +1069,7 @@ router.get('/pendientes/detalle-estudiante', async (req, res) => {
 
     let q = supabase
       .from('movimientos_dinero')
-      .select('id,curso_id,matricula_id,fecha_pago,monto,estado,tipo,origen,periodo_inicio,periodo_fin,curso:curso_id (nombre)')
+      .select('id,curso_id,matricula_id,fecha_pago,monto,estado,tipo,origen,periodo_inicio,periodo_fin,curso:curso_id (nombre),matricula:matricula_id (estudiante_ids,curso_id,tutor_id)')
       .eq('tipo', 'ingreso_estudiante')
       .eq('estado', 'pendiente')
       .in('matricula_id', matriculaIds);
@@ -1162,17 +1079,185 @@ router.get('/pendientes/detalle-estudiante', async (req, res) => {
     const { data: movimientos, error: movErr } = await q;
     if (movErr) throw movErr;
 
-    const total_monto = (movimientos || []).reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
+    const uniq = new Map();
+    for (const m of movimientos || []) {
+      if (!m?.id || uniq.has(m.id)) continue;
+      uniq.set(m.id, { ...m, monto: Number(m.monto) || 0 });
+    }
+
+    const normalizedMovs = Array.from(uniq.values());
+
+    const total_monto = normalizedMovs.reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
     res.json({
-      estudiante_id: String(estudiante_id),
+      estudiante_id: estudiante_id ? String(estudiante_id) : null,
+      estudiante_bulk_id: estudiante_bulk_id ? String(estudiante_bulk_id) : null,
       fecha_inicio: fecha_inicio ? String(fecha_inicio) : null,
       fecha_fin: fecha_fin ? String(fecha_fin) : null,
-      cantidad_movimientos: (movimientos || []).length,
+      cantidad_movimientos: normalizedMovs.length,
       total_monto,
-      movimientos: movimientos || []
+      movimientos: normalizedMovs
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
+  }
+});
+
+// GET - Sesiones pendientes para conciliar (ingreso_estudiante pendiente con sesion_id)
+// Query params: q?, tutor_id?, estudiante_id?, fecha_inicio?, fecha_fin?, limit?
+router.get('/pendientes/sesiones', async (req, res) => {
+  try {
+    const { q, tutor_id, estudiante_id, fecha_inicio, fecha_fin, limit } = req.query;
+
+    const tutorId = tutor_id ? toIntOrNull(tutor_id) : null;
+    if (tutor_id && (tutorId === null || tutorId <= 0)) {
+      return res.status(400).json({ error: 'tutor_id debe ser un entero válido' });
+    }
+
+    const estudianteId = estudiante_id ? toIntOrNull(estudiante_id) : null;
+    if (estudiante_id && (estudianteId === null || estudianteId <= 0)) {
+      return res.status(400).json({ error: 'estudiante_id debe ser un entero válido' });
+    }
+
+    if (fecha_inicio && !isValidISODate(String(fecha_inicio))) {
+      return res.status(400).json({ error: 'fecha_inicio debe ser YYYY-MM-DD' });
+    }
+    if (fecha_fin && !isValidISODate(String(fecha_fin))) {
+      return res.status(400).json({ error: 'fecha_fin debe ser YYYY-MM-DD' });
+    }
+
+    const limitN = clampInt(limit ?? 30, 1, 100) ?? 30;
+
+    let matriculaIds = null;
+    if (estudianteId) {
+      const { data: matriculas, error: matError } = await supabase
+        .from('matriculas')
+        .select('id')
+        .eq('estudiante_id', String(estudianteId));
+      if (matError) throw matError;
+      matriculaIds = (matriculas || []).map((m) => m.id).filter(Boolean);
+      if (!matriculaIds.length) {
+        return res.json({
+          q: q ? String(q) : null,
+          tutor_id: tutorId,
+          estudiante_id: estudianteId,
+          limit: limitN,
+          supports_detalles: true,
+          items: [],
+        });
+      }
+    }
+
+    const normalizeSearch = (value) =>
+      String(value || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/\p{Diacritic}/gu, '')
+        .trim();
+
+    const qNorm = q ? normalizeSearch(String(q)) : '';
+
+    let supportsDetalles = true;
+    let query = supabase
+      .from('movimientos_dinero')
+      .select(
+        `id, sesion_id, tutor_id, curso_id, matricula_id, fecha_pago, monto, estado, tipo,
+         tutor:tutor_id (nombre),
+         curso:curso_id (nombre),
+         matricula:matricula_id (id, estudiante_id, estudiante:estudiante_id (nombre)),
+         sesion:sesion_id (id, fecha, hora_inicio, hora_fin, estado)`
+      )
+      .eq('tipo', 'ingreso_estudiante')
+      .eq('estado', 'pendiente')
+      .not('sesion_id', 'is', null)
+      .order('fecha_pago', { ascending: false })
+      .limit(limitN);
+
+    if (tutorId) query = query.eq('tutor_id', tutorId);
+    if (fecha_inicio) query = query.gte('fecha_pago', String(fecha_inicio));
+    if (fecha_fin) query = query.lte('fecha_pago', String(fecha_fin));
+    if (matriculaIds) query = query.in('matricula_id', matriculaIds);
+
+    let { data, error } = await query;
+    if (error) {
+      supportsDetalles = false;
+      let q2 = supabase
+        .from('movimientos_dinero')
+        .select('id, sesion_id, tutor_id, curso_id, matricula_id, fecha_pago, monto, estado, tipo')
+        .eq('tipo', 'ingreso_estudiante')
+        .eq('estado', 'pendiente')
+        .not('sesion_id', 'is', null)
+        .order('fecha_pago', { ascending: false })
+        .limit(limitN);
+
+      if (tutorId) q2 = q2.eq('tutor_id', tutorId);
+      if (fecha_inicio) q2 = q2.gte('fecha_pago', String(fecha_inicio));
+      if (fecha_fin) q2 = q2.lte('fecha_pago', String(fecha_fin));
+      if (matriculaIds) q2 = q2.in('matricula_id', matriculaIds);
+
+      const res2 = await q2;
+      data = res2.data;
+      error = res2.error;
+    }
+    if (error) throw error;
+
+    let items = (data || []).map((m) => {
+      const tutorNombre = m?.tutor?.nombre;
+      const cursoNombre = m?.curso?.nombre;
+      const estudianteNombre = m?.matricula?.estudiante?.nombre;
+      const estudianteIdRow = m?.matricula?.estudiante_id ?? null;
+      const sesionFecha = m?.sesion?.fecha ?? null;
+      const sesionHoraInicio = m?.sesion?.hora_inicio ?? null;
+      const sesionHoraFin = m?.sesion?.hora_fin ?? null;
+
+      return {
+        movimiento_id: Number(m?.id) || null,
+        sesion_id: Number(m?.sesion_id) || null,
+        tutor_id: Number(m?.tutor_id) || null,
+        tutor_nombre: tutorNombre || null,
+        curso_id: Number(m?.curso_id) || null,
+        curso_nombre: cursoNombre || null,
+        matricula_id: Number(m?.matricula_id) || null,
+        estudiante_id: estudianteIdRow ? Number(estudianteIdRow) : null,
+        estudiante_nombre: estudianteNombre || null,
+        fecha_pago: m?.fecha_pago ?? null,
+        fecha_sesion: sesionFecha,
+        hora_inicio: sesionHoraInicio,
+        hora_fin: sesionHoraFin,
+        monto: Number(m?.monto) || 0,
+        estado: m?.estado ?? null,
+        tipo: m?.tipo ?? null,
+      };
+    });
+
+    if (qNorm) {
+      items = items.filter((it) => {
+        const hay = [
+          it?.tutor_nombre,
+          it?.estudiante_nombre,
+          it?.curso_nombre,
+          it?.fecha_sesion,
+          it?.fecha_pago,
+          it?.sesion_id,
+          it?.movimiento_id,
+        ]
+          .map((x) => normalizeSearch(x))
+          .join(' ');
+        return hay.includes(qNorm);
+      });
+    }
+
+    res.json({
+      q: q ? String(q) : null,
+      tutor_id: tutorId,
+      estudiante_id: estudianteId,
+      fecha_inicio: fecha_inicio ? String(fecha_inicio) : null,
+      fecha_fin: fecha_fin ? String(fecha_fin) : null,
+      limit: limitN,
+      supports_detalles: supportsDetalles,
+      items,
+    });
+  } catch (error) {
+    return sendSchemaError(res, error);
   }
 });
 
@@ -1180,7 +1265,7 @@ router.get('/pendientes/detalle-estudiante', async (req, res) => {
 // Body: estudiante_id (requerido), fecha_inicio, fecha_fin, metodo ('sinpe'|'transferencia'|'efectivo'), referencia, fecha_comprobante
 router.post('/ingresos/liquidar-estudiante', async (req, res) => {
   try {
-    const { estudiante_id, fecha_inicio, fecha_fin, metodo, referencia, fecha_comprobante } = req.body || {};
+    const { estudiante_id, fecha_inicio, fecha_fin, metodo, referencia, fecha_comprobante, movimiento_ids } = req.body || {};
 
     if (!estudiante_id) {
       return res.status(400).json({ error: 'Campo requerido: estudiante_id' });
@@ -1201,6 +1286,17 @@ router.post('/ingresos/liquidar-estudiante', async (req, res) => {
       return res.status(400).json({ error: "metodo debe ser 'sinpe', 'transferencia' o 'efectivo'" });
     }
 
+    if (metodoNorm !== 'efectivo' && !String(referencia || '').trim()) {
+      return res.status(400).json({ error: 'numero_comprobante requerido para pagos no-efectivo' });
+    }
+
+    const selectedIds = Array.isArray(movimiento_ids)
+      ? movimiento_ids.map((x) => toIntOrNull(x)).filter((x) => Number.isFinite(x) && x > 0)
+      : [];
+    if (!selectedIds.length) {
+      return res.status(400).json({ error: 'Debe seleccionar ingresos pendientes a liquidar (movimiento_ids)' });
+    }
+
     const { data: matriculas, error: matError } = await supabase
       .from('matriculas')
       .select('id')
@@ -1216,6 +1312,7 @@ router.post('/ingresos/liquidar-estudiante', async (req, res) => {
       .select('id,monto')
       .eq('tipo', 'ingreso_estudiante')
       .eq('estado', 'pendiente')
+      .in('id', selectedIds)
       .in('matricula_id', matriculaIds);
     if (fecha_inicio) q = q.gte('fecha_pago', String(fecha_inicio));
     if (fecha_fin) q = q.lte('fecha_pago', String(fecha_fin));
@@ -1224,6 +1321,12 @@ router.post('/ingresos/liquidar-estudiante', async (req, res) => {
     if (movErr) throw movErr;
     if (!movimientos || movimientos.length === 0) {
       return res.status(409).json({ error: 'No hay ingresos pendientes para marcar como pagados con esos filtros' });
+    }
+
+    if (movimientos.length !== selectedIds.length) {
+      return res.status(409).json({
+        error: 'Algunos ingresos seleccionados no son válidos o no están pendientes para este estudiante',
+      });
     }
 
     const ids = movimientos.map(m => m.id);
@@ -1242,17 +1345,147 @@ router.post('/ingresos/liquidar-estudiante', async (req, res) => {
     if (upd.error) throw upd.error;
 
     const total_monto = movimientos.reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
+
+    // Registrar el dinero REAL ingresado como movimiento manual.
+    // Esto mantiene el modelo: esperado (ingreso_estudiante pendiente) -> real (ingreso_manual).
+    let movimiento_manual = null;
+    try {
+      const fechaReal = (fecha_comprobante && isValidISODate(String(fecha_comprobante)))
+        ? String(fecha_comprobante)
+        : new Date().toISOString().slice(0, 10);
+
+      // Intentar inferir vínculo con una matrícula reciente (opcional)
+      let matricula_id = null;
+      let curso_id = null;
+      let tutor_id = null;
+      {
+        const { data: mats, error: mErr } = await supabase
+          .from('matriculas')
+          .select('id, curso_id, tutor_id')
+          .eq('estudiante_id', String(estudiante_id))
+          .order('id', { ascending: false })
+          .limit(1);
+        if (!mErr) {
+          const m0 = mats?.[0] ?? null;
+          matricula_id = m0?.id ?? null;
+          curso_id = m0?.curso_id ?? null;
+          tutor_id = m0?.tutor_id ?? null;
+        }
+      }
+
+      const notasParts = [
+        'MANUAL',
+        'ORIGEN:LIQ_ESTUDIANTE',
+        `ESTUDIANTE_ID:${String(estudiante_id)}`,
+        `METODO:${metodoNorm}`,
+        referencia ? `REF:${String(referencia)}` : null,
+        fecha_inicio ? `PERIODO_INICIO:${String(fecha_inicio)}` : null,
+        fecha_fin ? `PERIODO_FIN:${String(fecha_fin)}` : null,
+      ].filter(Boolean);
+
+      const insert = {
+        tipo: 'ingreso_manual',
+        monto: total_monto,
+        estado: 'completado',
+        fecha_pago: fechaReal,
+        fecha_comprobante: fechaReal,
+        factura_numero: referencia ? String(referencia) : null,
+        notas: notasParts.join(' | '),
+        origen: 'manual',
+        periodo_inicio: null,
+        periodo_fin: null,
+        tutor_id: tutor_id ? String(tutor_id) : null,
+        curso_id: curso_id ? String(curso_id) : null,
+        matricula_id: matricula_id ? String(matricula_id) : null,
+        sesion_id: null,
+      };
+
+      const ins = await supabase
+        .from('movimientos_dinero')
+        .insert(insert)
+        .select('id, tipo, monto, estado, fecha_pago')
+        .single();
+      if (!ins.error) movimiento_manual = ins.data;
+    } catch {
+      // Si falla el registro real, no rompemos la liquidación (pero el dashboard real quedará corto).
+      movimiento_manual = null;
+    }
+
     res.status(201).json({
       estudiante_id: String(estudiante_id),
       movimiento_ids: ids,
       movimientos_actualizados: ids.length,
       total_monto,
+      movimiento_manual_id: movimiento_manual?.id ?? null,
       metodo: metodoNorm,
       referencia: referencia ? String(referencia) : null,
       fecha_comprobante: fecha_comprobante ? String(fecha_comprobante) : null
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
+  }
+});
+
+// POST - Registrar pago de una sesión específica (conciliación por sesión)
+// Body: { sesion_id (requerido), metodo ('sinpe'|'transferencia'|'efectivo'), referencia?, fecha_comprobante? }
+router.post('/ingresos/liquidar-sesion', async (req, res) => {
+  try {
+    const { sesion_id, metodo, referencia, fecha_comprobante } = req.body || {};
+
+    const sesionId = toIntOrNull(sesion_id);
+    if (!sesionId || sesionId <= 0) {
+      return res.status(400).json({ error: 'Campo requerido: sesion_id (entero válido)' });
+    }
+
+    if (fecha_comprobante && !isValidISODate(String(fecha_comprobante))) {
+      return res.status(400).json({ error: 'fecha_comprobante debe ser YYYY-MM-DD' });
+    }
+
+    const metodoNorm = String(metodo || '').trim().toLowerCase();
+    const metodoOk = ['sinpe', 'transferencia', 'efectivo'].includes(metodoNorm);
+    if (!metodoOk) {
+      return res.status(400).json({ error: "metodo debe ser 'sinpe', 'transferencia' o 'efectivo'" });
+    }
+
+    const { data: mov, error: selErr } = await supabase
+      .from('movimientos_dinero')
+      .select('id, monto, estado, tipo')
+      .eq('tipo', 'ingreso_estudiante')
+      .eq('sesion_id', sesionId)
+      .maybeSingle();
+    if (selErr) throw selErr;
+    if (!mov) {
+      return res.status(404).json({ error: 'No se encontró ingreso_estudiante asociado a esa sesión' });
+    }
+
+    if (normalizeEstado(mov?.estado) !== 'pendiente') {
+      return res.status(409).json({ error: 'Ese ingreso ya no está pendiente (ya fue conciliado)', movimiento_id: mov.id });
+    }
+
+    const patch = {
+      estado: 'completado',
+      updated_at: new Date().toISOString(),
+      ...(fecha_comprobante ? { fecha_comprobante: String(fecha_comprobante) } : {}),
+      ...(referencia ? { factura_numero: String(referencia) } : {}),
+      notas: `PAGO_SESION:${metodoNorm}${referencia ? `:${String(referencia)}` : ''}`
+    };
+
+    const upd = await supabase
+      .from('movimientos_dinero')
+      .update(patch)
+      .eq('id', mov.id);
+    if (upd.error) throw upd.error;
+
+    return res.status(201).json({
+      sesion_id: sesionId,
+      movimiento_id: mov.id,
+      monto: Number(mov?.monto) || 0,
+      metodo: metodoNorm,
+      referencia: referencia ? String(referencia) : null,
+      fecha_comprobante: fecha_comprobante ? String(fecha_comprobante) : null,
+    });
+  } catch (error) {
+    return sendSchemaError(res, error);
   }
 });
 
@@ -1313,6 +1546,46 @@ router.post('/liquidar', async (req, res) => {
 
     const monto_total = movimientos.reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
     const cantidad_clases = movimientos.length;
+
+    // Validación: no se puede liquidar más de lo que hay en la bolsa REAL.
+    // Bolsa real = ingresos completados/verificados - egresos completados/verificados.
+    // (Los pendientes cuentan como esperado, no como efectivo disponible.)
+    {
+      let qIng = supabase
+        .from('movimientos_dinero')
+        .select('tipo, monto, estado')
+        .like('tipo', 'ingreso_%')
+        .neq('tipo', 'ingreso_estudiante');
+      qIng = qIng.or('estado.is.null,estado.in.(completado,verificado)');
+
+      let qEgr = supabase
+        .from('movimientos_dinero')
+        .select('tipo, monto, estado')
+        .or('tipo.like.pago_%,tipo.like.egreso_%');
+      qEgr = qEgr.or('estado.is.null,estado.in.(completado,verificado)');
+
+      const [ingRes, egrRes] = await Promise.all([qIng, qEgr]);
+      if (ingRes.error) throw ingRes.error;
+      if (egrRes.error) throw egrRes.error;
+
+      const totalIng = (ingRes.data || []).reduce((sum, r) => {
+        if (!isRealEstado(r?.estado)) return sum;
+        return sum + (Number(r?.monto) || 0);
+      }, 0);
+      const totalEgr = (egrRes.data || []).reduce((sum, r) => {
+        if (!isRealEstado(r?.estado)) return sum;
+        return sum + (Number(r?.monto) || 0);
+      }, 0);
+
+      const bolsaReal = totalIng - totalEgr;
+      if (monto_total > bolsaReal + 0.0001) {
+        return res.status(409).json({
+          error: 'No se puede liquidar: el monto excede la bolsa real disponible.',
+          bolsa_real: bolsaReal,
+          monto_solicitado: monto_total,
+        });
+      }
+    }
 
     const baseInsert = {
       tutor_id: String(tutor_id),
@@ -1375,7 +1648,7 @@ router.post('/liquidar', async (req, res) => {
       supports_pago_id: supportsPagoId
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -1439,7 +1712,7 @@ router.post('/calcular', async (req, res) => {
       clases_detalles: clases_procesadas
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 
@@ -1472,7 +1745,7 @@ router.put('/:id', async (req, res) => {
     
     res.json(formatted);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return sendSchemaError(res, error);
   }
 });
 

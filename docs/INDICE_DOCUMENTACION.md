@@ -12,6 +12,7 @@ Guía completa de toda la documentación disponible en el proyecto.
 3. **[guias/QUICKSTART.md](guias/QUICKSTART.md)** - Instalación rápida
 4. **[guias/GUIA_WINDOWS.md](guias/GUIA_WINDOWS.md)** - Instalación específica para Windows
 5. **[guias/RUNBOOK_DEBUG_PRODUCCION.md](guias/RUNBOOK_DEBUG_PRODUCCION.md)** - Debug y checklist de producción
+6. **[GUIA_USUARIO_COMPLETA.md](GUIA_USUARIO_COMPLETA.md)** - Cómo funciona el sistema (uso diario, Tesorería, cierres)
 
 ---
 
@@ -35,6 +36,19 @@ Guía completa de toda la documentación disponible en el proyecto.
 - **[ESPECIFICACION_NUEVA_ESTRUCTURA.md](ESPECIFICACION_NUEVA_ESTRUCTURA.md)** - Arquitectura v2.0
 - **[GUIA_IMPLEMENTACION_PAGOS.md](GUIA_IMPLEMENTACION_PAGOS.md)** - Sistema de pagos
 - **[RESUMEN_CAMBIOS_2026-01-19.md](RESUMEN_CAMBIOS_2026-01-19.md)** - Changelog completo
+
+---
+
+## 💳 Tesorería v2 (nuevo módulo)
+
+- **[TESORERIA_V2.md](TESORERIA_V2.md)** - Visión general y rutas
+- **[TESORERIA_V2_CONTABILIDAD_ESTRICTA.md](TESORERIA_V2_CONTABILIDAD_ESTRICTA.md)** - Reglas duras (evidencia, cierres, export)
+
+---
+
+## 🧪 Roundtrip / Stress Suite
+
+- **[ROUNDTRIP_STRESS_SUITE.md](ROUNDTRIP_STRESS_SUITE.md)** - Suite E2E para validar el sistema completo
 
 ---
 

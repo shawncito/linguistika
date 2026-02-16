@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
@@ -42,6 +42,19 @@ function createWindow(apiUrl) {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // Asegura que cualquier `window.open('https://...')` se abra en el navegador del sistema
+  // (y no en una nueva ventana dentro de Electron).
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+        shell.openExternal(url);
+      }
+    } catch (e) {
+      console.error('No se pudo abrir URL externa:', e);
+    }
+    return { action: 'deny' };
   });
 
   // Quita la barra/menú superior (File/Edit/View...) en Windows

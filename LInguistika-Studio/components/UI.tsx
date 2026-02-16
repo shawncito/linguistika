@@ -40,8 +40,11 @@ export const Button: React.FC<ButtonProps> = ({
 };
 
 // --- CARD (Material Paper) ---
-export const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = "" }) => (
-  <div className={`rounded-3xl border border-white/8 bg-[#0F2445] shadow-[0_30px_90px_-45px_rgba(0,0,0,0.8)] hover:shadow-cyan-500/15 transition-all duration-300 ${className}`}>
+export const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ children, className = "", ...props }) => (
+  <div
+    {...props}
+    className={`rounded-3xl border border-white/8 bg-[#0F2445] shadow-[0_30px_90px_-45px_rgba(0,0,0,0.8)] hover:shadow-cyan-500/15 transition-all duration-300 ${className}`}
+  >
     {children}
   </div>
 );
@@ -69,12 +72,17 @@ export const Label: React.FC<React.LabelHTMLAttributes<HTMLLabelElement>> = ({ c
   </label>
 );
 
-export const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ className = "", ...props }) => (
-  <input
-    {...props}
-    className={`flex h-12 w-full rounded-2xl border border-white/10 bg-[#0F2445] px-4 py-2 text-sm text-slate-100 placeholder:text-slate-500 transition-all focus:outline-none focus:ring-2 focus:ring-[#00AEEF]/50 focus:border-[#00AEEF] ${className}`}
-  />
+export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
+  ({ className = "", ...props }, ref) => (
+    <input
+      ref={ref}
+      {...props}
+      className={`flex h-12 w-full rounded-2xl border border-white/10 bg-[#0F2445] px-4 py-2 text-sm text-slate-100 placeholder:text-slate-500 transition-all focus:outline-none focus:ring-2 focus:ring-[#00AEEF]/50 focus:border-[#00AEEF] ${className}`}
+    />
+  )
 );
+
+Input.displayName = 'Input';
 
 export const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({ children, className = "", ...props }) => (
   <div className="relative group">
@@ -91,11 +99,11 @@ export const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = (
 );
 
 // --- BADGE ---
-export const Badge: React.FC<{ 
-  children: React.ReactNode; 
-  variant?: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info';
-  className?: string;
-}> = ({ children, variant = 'default', className = "" }) => {
+export const Badge: React.FC<
+  React.HTMLAttributes<HTMLDivElement> & {
+    variant?: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info';
+  }
+> = ({ children, variant = 'default', className = "", ...props }) => {
   const variants = {
     default: "bg-brand-blue/10 text-brand-navy border border-brand-blue/20",
     secondary: "bg-brand-blue/10 text-brand-blue border border-brand-blue/20",
@@ -106,7 +114,10 @@ export const Badge: React.FC<{
     warning: "bg-brand-yellow/20 text-brand-navy border border-brand-yellow/40",
   };
   return (
-    <div className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-bold ${variants[variant]} ${className}`}>
+    <div
+      {...props}
+      className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-bold ${variants[variant]} ${className}`}
+    >
       {children}
     </div>
   );
@@ -148,22 +159,61 @@ export const Dialog: React.FC<{
   maxWidthClass?: string;
   contentClassName?: string;
   zIndex?: number;
-}> = ({ isOpen, onClose, title, children, maxWidthClass = 'max-w-lg', contentClassName = '', zIndex = 100 }) => {
+  containerClassName?: string;
+  showBackdrop?: boolean;
+  position?: 'left' | 'center' | 'right';
+}> = ({
+  isOpen,
+  onClose,
+  title,
+  children,
+  maxWidthClass = 'max-w-lg',
+  contentClassName = '',
+  zIndex = 100,
+  containerClassName = '',
+  showBackdrop = true,
+  position = 'center',
+}) => {
   if (!isOpen) return null;
+
+  // Determinar la posición del modal
+  const positionClasses = {
+    left: 'left-2 top-1/2 -translate-y-1/2',
+    center: 'left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2',
+    right: 'right-2 top-1/2 -translate-y-1/2',
+  };
+
   return (
-    <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex }}>
-      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity" style={{ zIndex }} onClick={onClose} />
-      <div className={`relative w-full ${maxWidthClass} bg-[#0F2445] rounded-3xl border border-white/10 shadow-2xl shadow-black/40 animate-in fade-in zoom-in duration-300 ${contentClassName}`} style={{ zIndex: zIndex + 1 }}>
-        <div className="flex items-center justify-between p-6 border-b border-white/10">
-          <h2 className="text-xl font-bold text-white">{title}</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-2 rounded-full hover:bg-white/10">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-          </button>
-        </div>
-        <div className="p-8 text-slate-100">
-          {children}
+    <>
+      {showBackdrop && (
+        <div 
+          className="fixed inset-0 bg-[#051026]/70 backdrop-blur-sm transition-opacity" 
+          style={{ zIndex }} 
+          onClick={onClose} 
+        />
+      )}
+      <div 
+        className={`fixed w-full ${maxWidthClass} ${positionClasses[position]} p-4 ${containerClassName}`}
+        style={{ zIndex: zIndex + 1 }}
+      >
+        <div className={`relative bg-[#0F2445] rounded-3xl border border-white/10 shadow-2xl shadow-black/40 animate-in fade-in zoom-in duration-300 overflow-hidden max-h-[calc(100vh-2rem)] flex flex-col ${contentClassName}`}>
+          <div className="h-1 bg-[#FFC800]" />
+          <div className="flex items-center justify-between p-6 border-b border-white/10 bg-white/5">
+            <h2 className="text-xl font-bold text-white">{title}</h2>
+            <button
+              onClick={onClose}
+              className="text-slate-200 hover:text-white transition-colors p-2 rounded-full bg-white/10 border border-white/10 hover:bg-[#FFC800]/20 hover:border-[#FFC800]/50"
+              aria-label="Cerrar"
+              title="Cerrar"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+          <div className="p-8 text-slate-100 flex-1 overflow-y-auto min-h-0">
+            {children}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };
