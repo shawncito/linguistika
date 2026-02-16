@@ -2,6 +2,7 @@
   "name": "linguistika",
   "version": "0.2.0-alpha",
   "description": "Gestor de horarios y tutorías para centro de idiomas",
+  "author": "Linguistika Team",
   "private": true,
   "main": "desktop/main.cjs",
   "scripts": {
