@@ -17,6 +17,7 @@
     "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:prod": "npm run build:frontend && powershell -NoProfile -Command \"$env:FORCE_PROD='1'; npx electron .\"",
     "desktop:prod:debug": "npm run build:frontend && powershell -NoProfile -Command \"$env:FORCE_PROD='1'; $env:ELECTRON_DEBUG='1'; npx electron .\"",
+    "predesktop:build": "powershell -NoProfile -Command \"if (Test-Path release) { Remove-Item -Recurse -Force release -ErrorAction SilentlyContinue }\"",
     "desktop:build": "npm run build:frontend && electron-builder --win --x64",
     "generate:icons": "node scripts/generate-icons.cjs"
   },
