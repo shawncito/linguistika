@@ -1148,62 +1148,15 @@ router.post('/sesion/:matriculaId/:fecha/completar', async (req, res) => {
         return res.status(409).json({ error: 'Esta sesión ya fue cancelada para el día. No se puede marcar como dada.', sesion_id: existing.id });
       }
 
-      // Si es mensual, nunca generamos movimientos aquí
+      // Si es mensual, nunca generamos obligaciones aquí
       const tipoPago = String(m.cursos?.tipo_pago || 'sesion');
       if (tipoPago === 'mensual') {
         return res.json({ message: 'Sesión ya estaba marcada como dada (curso mensual).', sesion_id: existing.id, already_completed: true });
       }
 
-      // Verificar/crear movimientos faltantes para esta sesión (por si hubo retry tras error)
-      const tipos = ['ingreso_estudiante', 'pago_tutor_pendiente'];
-      const { data: movs, error: movSelErr } = await supabase
-        .from('movimientos_dinero')
-        .select('id, tipo')
-        .eq('sesion_id', existing.id)
-        .in('tipo', tipos);
-      if (movSelErr) throw movSelErr;
-
-      const existentes = new Set((movs || []).map((x) => x.tipo));
-      const inserts = [];
-      if (!existentes.has('ingreso_estudiante')) {
-        inserts.push({
-          curso_id: m.curso_id,
-          matricula_id: m.id,
-          tutor_id: m.tutor_id,
-          sesion_id: existing.id,
-          tipo: 'ingreso_estudiante',
-          monto: parseFloat(m.cursos?.costo_curso || 0),
-          factura_numero: null,
-          fecha_pago: fecha,
-          fecha_comprobante: null,
-          estado: 'pendiente',
-          notas: `Ingreso por sesión completada (${m.cursos?.nombre})`
-        });
-      }
-      if (!existentes.has('pago_tutor_pendiente')) {
-        inserts.push({
-          curso_id: m.curso_id,
-          matricula_id: m.id,
-          tutor_id: m.tutor_id,
-          sesion_id: existing.id,
-          tipo: 'pago_tutor_pendiente',
-          monto: parseFloat(m.cursos?.pago_tutor || 0),
-          factura_numero: null,
-          fecha_pago: fecha,
-          fecha_comprobante: null,
-          estado: 'pendiente',
-          notas: `Pago a tutor pendiente por sesión (${m.tutores?.nombre})`
-        });
-      }
-      if (inserts.length > 0) {
-        const { error: movInsErr } = await supabase.from('movimientos_dinero').insert(inserts);
-        if (movInsErr) throw movInsErr;
-      }
-
-      // Si ya estaba dada, igual intentamos (re)generar obligaciones de tesorería v2 por si antes falló.
-      if (tipoPago !== 'mensual') {
-        await ensureTesoreriaObligacionesV2(existing.id);
-      }
+      // Ya NO generamos movimientos_dinero para evitar duplicación.
+      // Solo regeneramos obligaciones de tesorería v2 si no son mensuales.
+      await ensureTesoreriaObligacionesV2(existing.id);
 
       return res.json({ message: 'Sesión ya estaba marcada como dada. No se duplicaron cobros.', sesion_id: existing.id, already_completed: true });
     }
@@ -1247,45 +1200,12 @@ router.post('/sesion/:matriculaId/:fecha/completar', async (req, res) => {
       .single();
     if (sErr) throw sErr;
 
-    // Generar movimientos SOLO si el curso es por sesion.
+    // Tesorería v2: generar obligaciones esperadas por sesión (cobro a encargado / pago a tutor)
+    // Ya NO generamos movimientos_dinero para evitar duplicación de deudas
     const tipoPago = String(m.cursos?.tipo_pago || 'sesion');
-    if (tipoPago === 'mensual') {
-      return res.json({ message: 'Sesión marcada como dada (curso mensual). Movimientos no se generan automáticamente.', sesion_id: sesion.id });
+    if (tipoPago !== 'mensual') {
+      await ensureTesoreriaObligacionesV2(sesion.id);
     }
-
-    // Generar movimientos: ingreso del estudiante y pago al tutor (pendiente)
-    const ingreso = {
-      curso_id: m.curso_id,
-      matricula_id: m.id,
-      tutor_id: m.tutor_id,
-      sesion_id: sesion.id,
-      tipo: 'ingreso_estudiante',
-      monto: parseFloat(m.cursos?.costo_curso || 0),
-      factura_numero: null,
-      fecha_pago: fecha,
-      fecha_comprobante: null,
-      estado: 'pendiente',
-      notas: `Ingreso por sesión completada (${m.cursos?.nombre})`
-    };
-    const pagoPendiente = {
-      curso_id: m.curso_id,
-      matricula_id: m.id,
-      tutor_id: m.tutor_id,
-      sesion_id: sesion.id,
-      tipo: 'pago_tutor_pendiente',
-      monto: parseFloat(m.cursos?.pago_tutor || 0),
-      factura_numero: null,
-      fecha_pago: fecha,
-      fecha_comprobante: null,
-      estado: 'pendiente',
-      notas: `Pago a tutor pendiente por sesión (${m.tutores?.nombre})`
-    };
-
-    const { error: movErr } = await supabase.from('movimientos_dinero').insert([ingreso, pagoPendiente]);
-    if (movErr) throw movErr;
-
-    // Tesorería v2 (opcional): generar obligaciones esperadas por sesión (cobro a encargado / pago a tutor)
-    await ensureTesoreriaObligacionesV2(sesion.id);
 
     res.json({ message: 'Sesión marcada como dada y movimientos generados', sesion_id: sesion.id });
   } catch (error) {
@@ -1548,6 +1468,7 @@ router.get('/estados-clases/:fecha', async (req, res) => {
   try {
     const { fecha } = req.params;
     
+    // Obtener estados de clases (avisado, confirmado)
     const { data: clases, error } = await supabase
       .from('clases')
       .select('id, matricula_id, fecha, avisado, confirmado, motivo_cancelacion')
@@ -1555,7 +1476,26 @@ router.get('/estados-clases/:fecha', async (req, res) => {
     
     if (error) throw error;
     
-    res.json(clases || []);
+    // Obtener sesiones dadas o canceladas
+    const { data: sesiones, error: sesErr } = await supabase
+      .from('sesiones_clases')
+      .select('matricula_id, estado')
+      .eq('fecha', fecha)
+      .in('estado', ['dada', 'cancelada']);
+    
+    if (sesErr) throw sesErr;
+    
+    // Crear mapa de matricula_id -> estado de sesión
+    const sesionesMap = new Map();
+    (sesiones || []).forEach(s => sesionesMap.set(s.matricula_id, s.estado));
+    
+    // Combinar información
+    const result = (clases || []).map(c => ({
+      ...c,
+      estado_sesion: sesionesMap.get(c.matricula_id) || null
+    }));
+    
+    res.json(result);
   } catch (error) {
     return sendSchemaError(res, error);
   }

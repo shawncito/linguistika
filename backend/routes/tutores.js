@@ -92,10 +92,10 @@ router.post('/', async (req, res) => {
       return res.status(409).json({ error: 'Ya existe un tutor con ese nombre' });
     }
 
-    // Validar formato de teléfono si se proporciona
-    const phoneRegex = /^(\+506\s?)?\d{4}-\d{4}$/;
+    // Validar formato de teléfono si se proporciona (acepta códigos internacionales)
+    const phoneRegex = /^(\+\d{1,4}\s?)?[\d\s-]{7,15}$/;
     if (telefono && !phoneRegex.test(telefono.trim())) {
-      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +506 8888-8888' });
+      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +XXX XXXXXXXX' });
     }
 
     // Validar color HEX si se proporciona
@@ -175,10 +175,10 @@ router.put('/:id', async (req, res) => {
   try {
     const userId = req.user?.id;
     
-    // Validar formato de teléfono si se proporciona
-    const phoneRegex = /^(\+506\s?)?\d{4}-\d{4}$/;
+    // Validar formato de teléfono si se proporciona (acepta códigos internacionales)
+    const phoneRegex = /^(\+\d{1,4}\s?)?[\d\s-]{7,15}$/;
     if (req.body.telefono && !phoneRegex.test(req.body.telefono.trim())) {
-      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +506 8888-8888' });
+      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +XXX XXXXXXXX' });
     }
 
     // Construir objeto de actualización solo con campos presentes

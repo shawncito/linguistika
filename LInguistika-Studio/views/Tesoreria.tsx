@@ -1,4 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+
+// Cargar obligaciones automáticamente al seleccionar encargado
+// (esto debe ir después de la declaración de los hooks de estado)
 import { api } from '../services/api';
 import { Button, Card, Badge, Input, Label, Select, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Dialog } from '../components/UI';
 import { formatCRC } from '../lib/format';
@@ -8,6 +11,8 @@ type EncargadoResumenItem = {
   encargado_id: number;
   deuda_pendiente: number;
   saldo_a_favor: number;
+  balance_neto: number;
+  estado: 'deuda' | 'saldo_favor' | 'al_dia';
   encargados?: { id: number; nombre?: string | null; email?: string | null; telefono?: string | null } | null;
 };
 
@@ -350,7 +355,12 @@ const Tesoreria: React.FC = () => {
         pago_tutor: pagoTutor,
       });
       setGrupoCobroForm({
+        monto: 0,
         fecha_pago: todayISO(),
+        metodo: 'sinpe',
+        numero_comprobante: '',
+        fecha_comprobante: todayISO(),
+        referencia: '',
         detalle: '',
       });
       setGrupoDetalle(grupoData);
@@ -417,7 +427,29 @@ const Tesoreria: React.FC = () => {
     setLoadingBolsa(true);
     try {
       const res = await api.tesoreria.getBolsa();
-      setBolsa((res?.bolsa || null) as BolsaInfo | null);
+      console.debug('TESORERIA: getBolsa response', res);
+      // Normalizar la forma de la respuesta: algunos endpoints devuelven { bolsa: { ... } }
+      // y otros devuelven los campos en la raíz { bolsa_real, debe_real, haber_real }.
+      let normalized: BolsaInfo | null = null;
+      const root = res || {};
+      if (root?.bolsa) {
+        const b = root.bolsa;
+        normalized = {
+          bolsa_real: Number(b?.bolsa_real) || 0,
+          debe_real: Number(b?.debe_real) || 0,
+          haber_real: Number(b?.haber_real) || 0,
+        };
+      } else if (typeof root?.bolsa_real !== 'undefined' || typeof root?.debe_real !== 'undefined' || typeof root?.haber_real !== 'undefined') {
+        normalized = {
+          bolsa_real: Number(root?.bolsa_real) || 0,
+          debe_real: Number(root?.debe_real) || 0,
+          haber_real: Number(root?.haber_real) || 0,
+        };
+      } else {
+        // no hay datos reconocibles
+        normalized = null;
+      }
+      setBolsa(normalized);
     } catch {
       setBolsa(null);
     } finally {
@@ -645,6 +677,27 @@ const Tesoreria: React.FC = () => {
   useEffect(() => {
     loadHistorialEncargado(selectedEncargadoId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEncargadoId]);
+
+  // Cargar obligaciones del encargado seleccionado para poder mostrar el desglose
+  useEffect(() => {
+    const id = selectedEncargadoId;
+    if (id == null) {
+      setEncObligaciones([]);
+      return;
+    }
+
+    setEncObligacionesLoading(true);
+    void (async () => {
+      try {
+        const res = await api.tesoreria.getObligacionesEncargado(id);
+        setEncObligaciones((res?.obligaciones || []) as ObligacionPendienteItem[]);
+      } catch {
+        setEncObligaciones([]);
+      } finally {
+        setEncObligacionesLoading(false);
+      }
+    })();
   }, [selectedEncargadoId]);
 
   useEffect(() => {
@@ -954,10 +1007,24 @@ const Tesoreria: React.FC = () => {
   }, [encObligaciones, pagoForm.monto]);
 
   const encObligacionesResumen = useMemo(() => {
+    // COMPENSACIÓN: usar datos de la vista (pagoTarget) en vez de obligaciones crudas
+    if (pagoTarget) {
+      const deuda = Number(pagoTarget.deuda_pendiente) || 0;
+      const saldo = Number(pagoTarget.saldo_a_favor) || 0;
+      const balance = deuda - saldo;
+      
+      // Solo contar si realmente debe (balance > 0)
+      if (balance > 0) {
+        return { count: encObligaciones.filter(o => (Number(o.restante) || 0) > 0).length, totalRestante: balance };
+      }
+      return { count: 0, totalRestante: 0 };
+    }
+    
+    // Fallback: calcular desde obligaciones (sin compensación)
     const pendientes = encObligaciones.filter((o) => (Number(o.restante) || 0) > 0);
     const totalRestante = pendientes.reduce((acc, o) => acc + (Number(o.restante) || 0), 0);
     return { count: pendientes.length, totalRestante };
-  }, [encObligaciones]);
+  }, [encObligaciones, pagoTarget]);
 
   const tutorObligacionesSeleccionTotal = useMemo(() => {
     const ids = new Set(tutorObligacionesSeleccionadas);
@@ -1191,7 +1258,7 @@ const Tesoreria: React.FC = () => {
                       const selected = selectedEncargadoId === x.encargado_id;
                       return (
                         <TableRow
-                          key={x.cuenta_id}
+                          key={x.cuenta_id || `encargado-${x.encargado_id}`}
                           className={`${selected ? 'border-[#00AEEF]/60 bg-white/5' : ''} cursor-pointer`}
                           onClick={() => setSelectedEncargadoId(x.encargado_id)}
                         >
@@ -1220,7 +1287,17 @@ const Tesoreria: React.FC = () => {
                     <div className="text-xs text-slate-300">Acciones y resumen del seleccionado</div>
                   </div>
                   {selectedEnc ? (
-                    <Button variant="primary" className="h-11" onClick={() => openPago(selectedEnc)}>Registrar pago</Button>
+                    <div className="flex gap-2">
+                      <Button variant="primary" className="h-11" onClick={() => openPago(selectedEnc)}>Registrar pago</Button>
+                      <Button
+                        variant="outline"
+                        className="h-11"
+                        onClick={() => setEncPagoDetallesOpen((v) => !v)}
+                        disabled={!selectedEnc}
+                      >
+                        {encPagoDetallesOpen ? 'Ocultar detalle de clases' : 'Ver detalle de clases'}
+                      </Button>
+                    </div>
                   ) : null}
                 </div>
 
@@ -1237,19 +1314,180 @@ const Tesoreria: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                        <div className="text-xs text-slate-300 font-bold uppercase tracking-wider">Deuda pendiente</div>
-                        <div className="text-xl font-black text-white mt-1">{formatCRC(Number(selectedEnc.deuda_pendiente) || 0)}</div>
-                      </div>
-                      <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                        <div className="text-xs text-slate-300 font-bold uppercase tracking-wider">Saldo a favor</div>
-                        <div className="text-xl font-black text-white mt-1">{formatCRC(Number(selectedEnc.saldo_a_favor) || 0)}</div>
+                    {/* TARJETA ÚNICA CON COMPENSACIÓN AUTOMÁTICA */}
+                    <div className={`rounded-2xl border p-4 ${
+                      selectedEnc.estado === 'deuda' 
+                        ? 'border-red-500/30 bg-red-500/5' 
+                        : selectedEnc.estado === 'saldo_favor'
+                        ? 'border-green-500/30 bg-green-500/5'
+                        : 'border-blue-500/30 bg-blue-500/5'
+                    }`}>
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          {selectedEnc.estado === 'deuda' && (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <div className="text-xs text-red-400 font-bold uppercase tracking-wider">🔴 Deuda pendiente</div>
+                              </div>
+                              <div className="text-3xl font-black text-red-400 mt-2">{formatCRC(Number(selectedEnc.deuda_pendiente) || 0)}</div>
+                              <div className="text-xs text-slate-400 mt-1">Requiere pago</div>
+                            </>
+                          )}
+                          {selectedEnc.estado === 'saldo_favor' && (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <div className="text-xs text-green-400 font-bold uppercase tracking-wider">🟢 Saldo a favor</div>
+                              </div>
+                              <div className="text-3xl font-black text-green-400 mt-2">{formatCRC(Number(selectedEnc.saldo_a_favor) || 0)}</div>
+                              <div className="text-xs text-slate-400 mt-1">Disponible para aplicar</div>
+                            </>
+                          )}
+                          {selectedEnc.estado === 'al_dia' && (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <div className="text-xs text-blue-400 font-bold uppercase tracking-wider">✅ Cuenta al día</div>
+                              </div>
+                              <div className="text-3xl font-black text-blue-400 mt-2">{formatCRC(0)}</div>
+                              <div className="text-xs text-slate-400 mt-1">Sin pagos pendientes</div>
+                            </>
+                          )}
+                        </div>
+                        {selectedEnc.estado === 'deuda' && (
+                          <Button 
+                            variant="primary" 
+                            className="h-10 bg-red-600 hover:bg-red-700"
+                            onClick={() => openPago(selectedEnc)}
+                          >
+                            Pagar
+                          </Button>
+                        )}
                       </div>
                     </div>
-                      <div className="grid grid-cols-1 gap-2">
-                        <Button variant="secondary" className="h-11" onClick={() => setTab('diario')}>Ver diario + tabla</Button>
+
+                    {/* DESGLOSE DE CLASES EN LA TARJETA PRINCIPAL */}
+                    {encPagoDetallesOpen && (
+                      <div className="mt-4">
+                        {encObligaciones.length > 0 ? (
+                          <>
+                            <div className="text-[11px] text-slate-400 px-1 mb-2">
+                              Historial de clases ({encObligaciones.length})
+                            </div>
+                            <div className="max-h-[280px] overflow-y-auto rounded-xl border border-white/10 bg-white/5">
+                              {encObligaciones.map((o: any) => {
+                                const date = String(o.fecha_devengo || '').slice(0, 10) || '—';
+                                const hora = extractHoraFromDetalle(o.detalle);
+                                const curso = o.cursos?.nombre || (o.detalle ? String(o.detalle) : 'Clase');
+                                const estudiante = o.estudiantes?.nombre || '—';
+                                const montoTotal = Number(o.monto) || 0;
+                                const restante = Number(o.restante) || 0;
+                                // Preferir campo explícito si existe
+                                const yaAplicadoField = Number(o.ya_aplicado ?? NaN);
+                                const yaAplicado = Number.isFinite(yaAplicadoField) ? yaAplicadoField : (montoTotal - restante);
+                                const aplicaAhora = Number(o._preview_aplicar) || 0;
+                                const estado = String(o.estado || '').toLowerCase();
+                                // Estado visual para historial — priorizar datos reales sobre texto libre
+                                let estadoBadge = '';
+                                let estadoColor = '';
+                                let estadoTexto = '';
+                                if (restante === 0 || yaAplicado >= montoTotal || estado === 'aplicado' || estado === 'completado' || estado === 'pagada') {
+                                  estadoBadge = '✅';
+                                  estadoColor = 'text-green-400';
+                                  estadoTexto = 'Pagada';
+                                } else if (yaAplicado > 0 && restante > 0) {
+                                  estadoBadge = '🟡';
+                                  estadoColor = 'text-yellow-400';
+                                  estadoTexto = 'Parcial';
+                                } else {
+                                  estadoBadge = '🔴';
+                                  estadoColor = 'text-red-400';
+                                  estadoTexto = 'Pendiente';
+                                }
+                                // Mostrar tutor, hora de marcado y empleado
+                                const tutorNombre = o.tutores?.nombre || o.tutor_nombre || '—';
+                                const horaMarcado = o.hora_marcado || hora || '—';
+                                const empleadoNombre = o.empleado_nombre || o.marcado_por_nombre || o.marcado_por || '—';
+                                return (
+                                  <div
+                                    key={o.id}
+                                    className="w-full flex items-start justify-between gap-3 px-3 py-3 border-b border-white/10 last:border-b-0 hover:bg-white/5 transition-colors"
+                                  >
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-2 mb-1">
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
+                                          {date}
+                                        </span>
+                                        {hora && (
+                                          <span className="text-[10px] text-slate-400">
+                                            {hora}
+                                          </span>
+                                        )}
+                                        <span className={`text-[10px] font-bold ${estadoColor}`}>
+                                          {estadoBadge} {estadoTexto}
+                                        </span>
+                                      </div>
+                                      <div className="text-sm font-black text-white truncate">{curso}</div>
+                                      <div className="text-[11px] text-slate-200 truncate">{estudiante}</div>
+                                      <div className="text-[11px] text-slate-400 mt-1">
+                                        <b>Profesor:</b> {tutorNombre} &nbsp;|&nbsp; <b>Marcado:</b> {horaMarcado} &nbsp;|&nbsp; <b>Empleado:</b> {empleadoNombre}
+                                      </div>
+                                      {yaAplicado > 0 && (
+                                        <div className="text-[10px] text-emerald-400 mt-1">
+                                          ✓ Aplicado: {formatCRC(yaAplicado)}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="text-right whitespace-nowrap flex flex-col items-end gap-1.5">
+                                      <div className="text-sm font-black text-white">
+                                        {formatCRC(montoTotal)}
+                                      </div>
+                                      {restante > 0 && restante !== montoTotal && (
+                                        <div className="text-[11px] text-amber-300">
+                                          Falta: {formatCRC(restante)}
+                                        </div>
+                                      )}
+                                      {restante === 0 && (
+                                        <div className="text-[11px] text-green-400 font-bold">
+                                          ✓ Completa
+                                        </div>
+                                      )}
+                                      {aplicaAhora > 0 && (
+                                        <div className="text-[11px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-bold">
+                                          +{formatCRC(aplicaAhora)}
+                                        </div>
+                                      )}
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="h-7 px-2 text-[11px] mt-1"
+                                        onClick={() => {
+                                          openSesionDetalle({
+                                            title: curso,
+                                            fecha: date,
+                                            monto: montoTotal,
+                                            estado: estado,
+                                            tipo: o.tipo || null,
+                                            sesion_id: o.sesion_id || null,
+                                            matricula_id: o.matricula_id || null,
+                                            detalle: o.detalle || null,
+                                          });
+                                        }}
+                                      >
+                                        Detalle
+                                      </Button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-xs text-slate-400">No hay clases registradas.</div>
+                        )}
                       </div>
+                    )}
+                    <div className="grid grid-cols-1 gap-2">
+                      <Button variant="secondary" className="h-11" onClick={() => setTab('diario')}>Ver diario + tabla</Button>
+                    </div>
                     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                       <div className="flex items-center justify-between">
                         <div className="text-sm font-black text-white">Últimos movimientos</div>
@@ -1339,7 +1577,7 @@ const Tesoreria: React.FC = () => {
                       const selected = selectedTutorId === x.tutor_id;
                       return (
                         <TableRow
-                          key={x.cuenta_id}
+                          key={x.cuenta_id || `tutor-${x.tutor_id}`}
                           className={`${selected ? 'border-[#00AEEF]/60 bg-white/5' : ''} cursor-pointer`}
                           onClick={() => setSelectedTutorId(x.tutor_id)}
                         >
@@ -2080,7 +2318,7 @@ const Tesoreria: React.FC = () => {
                           {m.comprobante_url ? (
                             <button
                               className="text-cyan-200 underline hover:text-cyan-100"
-                              onClick={() => window.open(m.comprobante_url, '_blank', 'noopener,noreferrer')}
+                              onClick={() => { if (m.comprobante_url) window.open(m.comprobante_url, '_blank', 'noopener,noreferrer'); }}
                             >
                               Ver
                             </button>
@@ -2160,7 +2398,7 @@ const Tesoreria: React.FC = () => {
             {cuentaDetalleItem?.comprobante_url ? (
               <button
                 className="text-cyan-200 underline hover:text-cyan-100"
-                onClick={() => window.open(cuentaDetalleItem.comprobante_url, '_blank', 'noopener,noreferrer')}
+                onClick={() => { if (cuentaDetalleItem?.comprobante_url) window.open(cuentaDetalleItem.comprobante_url, '_blank', 'noopener,noreferrer'); }}
               >
                 Ver PDF/Imagen
               </button>
@@ -2186,49 +2424,128 @@ const Tesoreria: React.FC = () => {
           <Card>
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-bold">Sesiones pendientes</div>
-                <div className="text-xs text-slate-300">{encObligacionesResumen.count} sesiones • total: {formatCRC(Number(encObligacionesResumen.totalRestante) || 0)}</div>
+                <div className="text-sm font-bold">Balance pendiente</div>
+                {encObligacionesResumen.totalRestante > 0 ? (
+                  <div className="text-xs text-red-300">🔴 Deuda: {formatCRC(Number(encObligacionesResumen.totalRestante) || 0)}</div>
+                ) : (
+                  <div className="text-xs text-green-300">✅ Al día • Sin pagos pendientes</div>
+                )}
+                {encObligaciones.length > 0 && (
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    {encObligaciones.length} {encObligaciones.length === 1 ? 'clase' : 'clases'} registrada{encObligaciones.length === 1 ? '' : 's'}
+                  </div>
+                )}
               </div>
-              <Button variant="outline" onClick={() => setEncPagoDetallesOpen((v) => !v)}>
-                {encPagoDetallesOpen ? 'Ocultar detalles' : 'Detalles'}
-              </Button>
+              {encObligaciones.length > 0 && (
+                <Button variant="outline" onClick={() => setEncPagoDetallesOpen((v) => !v)}>
+                  {encPagoDetallesOpen ? 'Ocultar desglose' : 'Ver desglose'}
+                </Button>
+              )}
             </div>
             {encObligacionesLoading ? (
-              <div className="text-xs text-slate-300">Cargando…</div>
-            ) : encPagoDetallesOpen && encObligacionesPreview.length ? (
-              <div className="mt-3 max-h-[240px] overflow-y-auto rounded-xl border border-white/10 bg-white/5">
-                {encObligacionesPreview.map((o: any) => {
+              <div className="text-xs text-slate-300 mt-3">Cargando desglose…</div>
+            ) : encPagoDetallesOpen && encObligacionesPreview.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                <div className="text-[11px] text-slate-400 px-1 mb-2">
+                  Desglose de {encObligacionesPreview.length} {encObligacionesPreview.length === 1 ? 'clase' : 'clases'}
+                </div>
+                <div className="max-h-[280px] overflow-y-auto rounded-xl border border-white/10 bg-white/5">
+                  {encObligacionesPreview.map((o: any) => {
                   const date = String(o.fecha_devengo || '').slice(0, 10) || '—';
                   const hora = extractHoraFromDetalle(o.detalle);
                   const curso = o.cursos?.nombre || (o.detalle ? String(o.detalle) : 'Clase');
                   const estudiante = o.estudiantes?.nombre || '—';
-                  const costo = Number(o.restante) || 0;
-                  const aplica = Number(o._preview_aplicar) || 0;
+                  const montoTotal = Number(o.monto) || 0;
+                  const restante = Number(o.restante) || 0;
+                  const yaAplicado = montoTotal - restante;
+                  const aplicaAhora = Number(o._preview_aplicar) || 0;
+                  const estado = o.estado || 'pendiente';
+                  
+                  // Determinar estado visual
+                  let estadoBadge = '';
+                  let estadoColor = '';
+                  let estadoTexto = '';
+                  
+                  if (estado === 'aplicado') {
+                    estadoBadge = '✅';
+                    estadoColor = 'text-green-400';
+                    estadoTexto = 'Pagada';
+                  } else if (yaAplicado > 0 && restante > 0) {
+                    estadoBadge = '🟡';
+                    estadoColor = 'text-yellow-400';
+                    estadoTexto = 'Parcial';
+                  } else if (restante > 0) {
+                    estadoBadge = '🔴';
+                    estadoColor = 'text-red-400';
+                    estadoTexto = 'Pendiente';
+                  } else {
+                    estadoBadge = '✅';
+                    estadoColor = 'text-green-400';
+                    estadoTexto = 'Pagada';
+                  }
+                  
                   return (
                     <div
                       key={o.id}
-                      className="w-full flex items-start justify-between gap-3 px-3 py-2 border-b border-white/10 last:border-b-0 hover:bg-white/5"
+                      className="w-full flex items-start justify-between gap-3 px-3 py-3 border-b border-white/10 last:border-b-0 hover:bg-white/5 transition-colors"
                     >
-                      <div className="min-w-0">
-                        <div className="text-[11px] text-slate-300 whitespace-nowrap">{date}{hora ? ` • ${hora}` : ''}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
+                            {date}
+                          </span>
+                          {hora && (
+                            <span className="text-[10px] text-slate-400">
+                              {hora}
+                            </span>
+                          )}
+                          <span className={`text-[10px] font-bold ${estadoColor}`}>
+                            {estadoBadge} {estadoTexto}
+                          </span>
+                        </div>
                         <div className="text-sm font-black text-white truncate">{curso}</div>
                         <div className="text-[11px] text-slate-200 truncate">{estudiante}</div>
+                        
+                        {yaAplicado > 0 && (
+                          <div className="text-[10px] text-emerald-400 mt-1">
+                            ✓ Aplicado: {formatCRC(yaAplicado)}
+                          </div>
+                        )}
                       </div>
-                      <div className="text-right whitespace-nowrap flex flex-col items-end gap-1">
-                        <div className="text-sm font-black text-white">{formatCRC(costo)}</div>
-                        {aplica > 0 ? (
-                          <div className="text-[11px] text-slate-300">Este pago: {formatCRC(aplica)}</div>
-                        ) : null}
+                      
+                      <div className="text-right whitespace-nowrap flex flex-col items-end gap-1.5">
+                        <div className="text-sm font-black text-white">
+                          {formatCRC(montoTotal)}
+                        </div>
+                        
+                        {restante > 0 && restante !== montoTotal && (
+                          <div className="text-[11px] text-amber-300">
+                            Falta: {formatCRC(restante)}
+                          </div>
+                        )}
+                        
+                        {restante === 0 && (
+                          <div className="text-[11px] text-green-400 font-bold">
+                            ✓ Completa
+                          </div>
+                        )}
+                        
+                        {aplicaAhora > 0 && (
+                          <div className="text-[11px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-bold">
+                            +{formatCRC(aplicaAhora)}
+                          </div>
+                        )}
+                        
                         <Button
                           type="button"
                           variant="outline"
-                          className="h-8 px-3"
+                          className="h-7 px-2 text-[11px] mt-1"
                           onClick={() => {
                             openSesionDetalle({
                               title: curso,
                               fecha: date,
-                              monto: Number(o.restante) || 0,
-                              estado: o.estado || null,
+                              monto: montoTotal,
+                              estado: estado,
                               tipo: o.tipo || null,
                               sesion_id: o.sesion_id || null,
                               matricula_id: o.matricula_id || null,
@@ -2236,12 +2553,13 @@ const Tesoreria: React.FC = () => {
                             });
                           }}
                         >
-                          Ver detalle
+                          Detalle
                         </Button>
                       </div>
                     </div>
                   );
                 })}
+                </div>
               </div>
             ) : (
               <div className="text-xs text-slate-300 mt-3">{encObligacionesPreview.length ? 'Pulsa “Detalles” para ver el desglose.' : 'No hay sesiones/obligaciones pendientes.'}</div>

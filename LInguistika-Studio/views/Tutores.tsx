@@ -7,6 +7,7 @@ import {
   Button, Card, CardHeader, CardTitle, CardDescription, CardContent,
   Badge, Input, Label, Select, Dialog, Table, TableHead, TableHeader, TableRow, TableCell, TableBody
 } from "../components/UI";
+import { PhoneInput } from "../components/PhoneInput";
 import { Plus, Edit, Trash2, Mail, Phone, Briefcase, MoreVertical, CheckCircle2, XCircle, Filter, Layers, Table as TableIcon } from "lucide-react";
 
 const DIAS_SEMANA = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"];
@@ -840,13 +841,13 @@ const Tutores: React.FC = () => {
                 </div>
                 <div>
                   <Label>Telefono *</Label>
-                  <Input
+                  <PhoneInput
                     value={formData.telefono}
-                    onChange={(e) => handlePhoneChange(e.target.value)}
-                    placeholder="+506 8888-8888"
+                    onChange={(value) => handlePhoneChange(value)}
+                    placeholder="8888-8888"
                     className={errors.telefono ? "border-red-500" : ""}
+                    error={errors.telefono}
                   />
-                  {errors.telefono && <p className="text-red-500 text-sm mt-1">{errors.telefono}</p>}
                 </div>
               </div>
 

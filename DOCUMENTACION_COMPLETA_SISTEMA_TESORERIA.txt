@@ -1,0 +1,2213 @@
+================================================================================
+                 DOCUMENTACIÓN COMPLETA - SISTEMA DE TESORERÍA
+                          Linguistika Studio v2
+================================================================================
+
+AUTOR: Sistema de documentación técnica
+FECHA: 17 de febrero de 2026
+VERSIÓN: Tesorería v2 (Sistema de Cuentas Corrientes + Compensación Automática)
+
+================================================================================
+📋 ÍNDICE
+================================================================================
+
+1. INTRODUCCIÓN Y ARQUITECTURA GENERAL
+2. GLOSARIO DE TÉRMINOS
+3. MODELO DE BASE DE DATOS
+   3.1. Tabla: encargados
+   3.2. Tabla: tesoreria_cuentas_corrientes
+   3.3. Tabla: tesoreria_obligaciones
+   3.4. Tabla: tesoreria_pagos
+   3.5. Tabla: tesoreria_aplicaciones
+   3.6. Tabla: movimientos_dinero (Legacy)
+4. VISTAS SQL Y CÁLCULOS AUTOMÁTICOS
+   4.1. Vista: tesoreria_saldos_encargados_v1
+   4.2. Vista: tesoreria_saldos_tutores_v1
+   4.3. Vista: tesoreria_libro_diario_v1
+5. FUNCIONES RPC (Remote Procedure Call)
+6. API BACKEND - ENDPOINTS
+   6.1. GET /tesoreria/encargados/resumen
+   6.2. GET /tesoreria/tutores/resumen
+   6.3. GET /tesoreria/resumen
+   6.4. GET /tesoreria/bolsa
+   6.5. GET /tesoreria/diario
+   6.6. POST /tesoreria/encargados/:encargadoId/pagos
+   6.7. POST /tesoreria/tutores/:tutorId/pagos
+   6.8. POST /tesoreria/pagos/:pagoId/comprobante
+   6.9. POST /tesoreria/grupos/:grupoId/cobro
+7. FLUJOS COMPLETOS DEL SISTEMA
+   7.1. Flujo: Marcar sesión como dada
+   7.2. Flujo: Encargado realiza un pago
+   7.3. Flujo: Aplicación automática FIFO
+   7.4. Flujo: Pago a tutor
+   7.5. Flujo: Cobro grupal (bulk)
+8. SISTEMA DE COMPENSACIÓN AUTOMÁTICA
+   8.1. Problema identificado
+   8.2. Solución implementada
+   8.3. Fórmula de balance neto
+   8.4. Estados contables
+   8.5. Lógica en SQL
+   8.6. Lógica en Backend
+   8.7. Lógica en Frontend
+9. CASOS DE USO Y EJEMPLOS PRÁCTICOS
+10. REGLAS DE NEGOCIO
+11. FRONTEND - COMPONENTES Y UI
+12. MANTENIMIENTO Y TROUBLESHOOTING
+
+================================================================================
+1. INTRODUCCIÓN Y ARQUITECTURA GENERAL
+================================================================================
+
+El Sistema de Tesorería de Linguistika Studio es un módulo de contabilidad
+completo que gestiona:
+
+➤ CUENTAS CORRIENTES por Encargado (padres/responsables) y Tutor
+➤ OBLIGACIONES (lo que SE ESPERA cobrar o pagar)
+➤ PAGOS (lo que SE RECIBIÓ o SE PAGÓ realmente)
+➤ APLICACIONES automáticas (vincular pagos a obligaciones pendientes)
+➤ COMPENSACIÓN automática (deudas vs saldos a favor)
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    ARQUITECTURA DEL SISTEMA                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  Frontend (React + TypeScript)                                   │
+│  └─> LInguistika-Studio/views/Tesoreria.tsx                     │
+│       • Vista de encargados con saldos                           │
+│       • Registro de pagos                                        │
+│       • Libro diario                                             │
+│       • Bolsa (efectivo en caja)                                 │
+│                                                                   │
+│  Backend (Node.js + Express)                                     │
+│  └─> backend/routes/tesoreria.js                                │
+│       • 18 endpoints REST                                        │
+│       • Validación de datos                                      │
+│       • Lógica de aplicación FIFO                               │
+│                                                                   │
+│  Base de Datos (PostgreSQL en Supabase)                         │
+│  └─> backend/migrations/017_tesoreria_v2_*.sql                  │
+│       • 5 tablas principales                                     │
+│       • 3 vistas calculadas                                      │
+│       • 2 funciones RPC                                          │
+│       • Sistema de compensación automática                       │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+
+FILOSOFÍA DE DISEÑO:
+--------------------
+✓ Doble entrada contable (libro diario con debe/haber)
+✓ Separación entre LO ESPERADO (obligaciones) y LO REAL (pagos)
+✓ Aplicación automática FIFO (First In, First Out)
+✓ Trazabilidad completa de cada transacción
+✓ Evidencia digital obligatoria para métodos no-efectivo
+✓ Compensación automática para evitar mostrar simultáneamente deuda y saldo
+
+
+================================================================================
+2. GLOSARIO DE TÉRMINOS
+================================================================================
+
+ENCARGADO:
+  Padre, madre o responsable legal del estudiante. Es quien recibe la factura
+  y realiza los pagos. Múltiples estudiantes pueden compartir el mismo encargado.
+
+CUENTA CORRIENTE:
+  Cuenta contable individual por encargado o tutor. Registra todas las
+  transacciones financieras de esa persona.
+
+OBLIGACIÓN:
+  Lo que SE ESPERA cobrar o pagar. Se crea cuando:
+  - Se marca una sesión como "dada" → genera obligación de cobro
+  - Se completa una sesión con tutor → genera obligación de pago al tutor
+  Estados: pendiente (sin aplicar), aplicado (completo), cancelado
+
+PAGO:
+  Lo que REALMENTE se recibió (entrada) o se pagó (salida). 
+  Direcciones: entrada (dinero que entra), salida (dinero que sale)
+  Estados: pendiente (registrado), completado (con evidencia), 
+           verificado (revisado por admin), cancelado (anulado)
+
+APLICACIÓN:
+  Vínculo entre un pago y las obligaciones que cubre. Por ejemplo:
+  - Encargado paga ₡15,000
+  - Se aplica automáticamente a las 2 primeras sesiones pendientes (₡7,500 c/u)
+
+BALANCE NETO:
+  Diferencia entre deuda pendiente y saldo a favor.
+  Fórmula: balance_neto = deuda_pendiente - saldo_a_favor
+  Si > 0: la persona DEBE dinero
+  Si < 0: la persona TIENE saldo a su favor
+  Si = 0: la cuenta está al día
+
+ESTADO CONTABLE:
+  Clasificación del balance de una cuenta:
+  - 'deuda': balance_neto > 0, debe pagar
+  - 'saldo_favor': balance_neto < 0, tiene crédito
+  - 'al_dia': balance_neto = 0, sin pendientes
+
+COMPENSACIÓN AUTOMÁTICA:
+  Proceso que evita mostrar simultáneamente "Deuda: ₡7,500" y "Saldo: ₡7,500".
+  El sistema calcula el balance neto y muestra SOLO UNO:
+  - Si debe: muestra deuda, oculta saldo
+  - Si tiene saldo: muestra saldo, oculta deuda
+  - Si está al día: muestra ₡0
+
+FIFO (First In, First Out):
+  Método de aplicación de pagos. Cuando un encargado paga, el dinero se aplica
+  primero a las obligaciones más antiguas (por fecha de devengo).
+
+BOLSA REAL:
+  Efectivo físico en caja. Se calcula como:
+  bolsa_real = total_ingresos - total_egresos
+  Solo se cuentan pagos en estado 'completado' o 'verificado'
+
+LIBRO DIARIO:
+  Registro cronológico de todas las transacciones con debe/haber.
+  Debe: dinero que entra (entrada)
+  Haber: dinero que sale (salida)
+
+
+================================================================================
+3. MODELO DE BASE DE DATOS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1. Tabla: encargados
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Almacena la información de contacto de los padres/responsables de estudiantes.
+  Permite deduplicación (un encargado puede tener múltiples estudiantes).
+
+CAMPOS:
+  id BIGSERIAL PRIMARY KEY
+    └─> Identificador único del encargado
+
+  nombre TEXT
+    └─> Nombre completo del encargado
+        Ejemplo: "María González Pérez"
+
+  email TEXT
+    └─> Correo electrónico (opcional)
+        Ejemplo: "maria.gonzalez@gmail.com"
+
+  telefono TEXT
+    └─> Número de teléfono (opcional)
+        Ejemplo: "+506 8888-9999"
+
+  email_norm TEXT GENERATED ALWAYS AS (lower(nullif(trim(email), ''))) STORED
+    └─> Email normalizado (lowercase, sin espacios)
+        Usado para constraint UNIQUE y evitar duplicados
+
+  telefono_norm TEXT GENERATED ALWAYS AS (nullif(trim(telefono), '')) STORED
+    └─> Teléfono normalizado (trimmed)
+        Usado para constraint UNIQUE y evitar duplicados
+
+  created_at TIMESTAMPTZ DEFAULT now()
+    └─> Fecha de creación del registro
+
+  updated_at TIMESTAMPTZ DEFAULT now()
+    └─> Fecha de última actualización
+
+CONSTRAINTS:
+  - UNIQUE (email_norm): No puede haber dos encargados con el mismo email
+  - UNIQUE (telefono_norm): No puede haber dos encargados con el mismo teléfono
+
+ÍNDICES:
+  - idx_encargados_nombre ON (nombre)
+    └─> Para búsquedas por nombre
+
+RELACIONES:
+  estudiantes.encargado_id → encargados.id
+    └─> Un encargado puede tener múltiples estudiantes
+    └─> Cuando se elimina el último estudiante, se elimina la cuenta de tesorería
+
+EJEMPLO DE REGISTRO:
+{
+  "id": 1,
+  "nombre": "Vanessa Arroyo Arce",
+  "email": "vanessa@example.com",
+  "telefono": "8888-1234",
+  "email_norm": "vanessa@example.com",
+  "telefono_norm": "8888-1234",
+  "created_at": "2026-01-15T10:30:00Z",
+  "updated_at": "2026-01-15T10:30:00Z"
+}
+
+
+--------------------------------------------------------------------------------
+3.2. Tabla: tesoreria_cuentas_corrientes
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Cada encargado y cada tutor tiene UNA SOLA cuenta corriente.
+  Esta es la entidad principal para toda la contabilidad.
+
+CAMPOS:
+  id BIGSERIAL PRIMARY KEY
+    └─> Identificador único de la cuenta
+
+  tipo ENUM('encargado', 'tutor') NOT NULL
+    └─> Tipo de cuenta
+        'encargado': cuenta de un padre/responsable (ellos PAGAN)
+        'tutor': cuenta de un maestro (nosotros les PAGAMOS)
+
+  encargado_id BIGINT REFERENCES encargados(id) ON DELETE RESTRICT
+    └─> ID del encargado (solo si tipo='encargado')
+        RESTRICT: no se puede eliminar un encargado si tiene cuenta activa
+
+  tutor_id BIGINT REFERENCES tutores(id) ON DELETE RESTRICT
+    └─> ID del tutor (solo si tipo='tutor')
+        RESTRICT: no se puede eliminar un tutor si tiene cuenta activa
+
+  created_at TIMESTAMPTZ DEFAULT now()
+  updated_at TIMESTAMPTZ DEFAULT now()
+
+CONSTRAINTS:
+  tesoreria_cuentas_corrientes_ref_check:
+    └─> Si tipo='encargado': encargado_id NOT NULL, tutor_id NULL
+    └─> Si tipo='tutor': tutor_id NOT NULL, encargado_id NULL
+
+ÍNDICES ÚNICOS:
+  ux_tesoreria_cc_encargado ON (encargado_id) WHERE tipo='encargado'
+    └─> Garantiza UNA SOLA cuenta por encargado
+
+  ux_tesoreria_cc_tutor ON (tutor_id) WHERE tipo='tutor'
+    └─> Garantiza UNA SOLA cuenta por tutor
+
+BACKFILL AUTOMÁTICO:
+  Al aplicar la migración, se crean automáticamente cuentas para:
+  - Todos los encargados existentes
+  - Todos los tutores existentes
+
+EJEMPLO DE REGISTROS:
+{
+  "id": 101,
+  "tipo": "encargado",
+  "encargado_id": 1,
+  "tutor_id": null,
+  "created_at": "2026-01-15T10:30:00Z"
+}
+{
+  "id": 201,
+  "tipo": "tutor",
+  "encargado_id": null,
+  "tutor_id": 42,
+  "created_at": "2026-01-15T10:30:00Z"
+}
+
+
+--------------------------------------------------------------------------------
+3.3. Tabla: tesoreria_obligaciones
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Registra LO ESPERADO (lo que debemos cobrar o pagar).
+  Cada sesión "dada" genera obligaciones:
+    1) cobro_sesion: lo que el encargado debe pagar
+    2) pago_tutor_sesion: lo que nosotros debemos pagar al tutor
+
+CAMPOS:
+  id BIGSERIAL PRIMARY KEY
+    └─> Identificador único de la obligación
+
+  tipo ENUM('cobro_sesion', 'pago_tutor_sesion', 'ajuste') NOT NULL
+    └─> Tipo de obligación:
+        'cobro_sesion': dinero que el encargado debe
+        'pago_tutor_sesion': dinero que debemos al tutor
+        'ajuste': ajustes manuales (descuentos, correcciones)
+
+  cuenta_id BIGINT NOT NULL REFERENCES tesoreria_cuentas_corrientes(id)
+    └─> Cuenta a la que pertenece esta obligación
+        ON DELETE RESTRICT: no se puede eliminar una cuenta con obligaciones
+
+  monto NUMERIC(12,2) NOT NULL CHECK (monto >= 0)
+    └─> Monto de la obligación en colones
+        Ejemplo: 7500.00 (₡7,500)
+
+  fecha_devengo DATE NOT NULL
+    └─> Fecha en que se devengó la obligación
+        Ejemplo: "2026-02-17" (fecha de la sesión)
+        Usado para ordenamiento FIFO
+
+  estado TEXT NOT NULL DEFAULT 'pendiente'
+    └─> Estado de la obligación:
+        'pendiente': aún no se ha aplicado ningún pago
+        'aplicado': completamente cubierta por aplicaciones
+        'cancelado': obligación anulada (no se cobra/paga)
+
+  -- REFERENCIAS PARA TRAZABILIDAD --
+  estudiante_id BIGINT REFERENCES estudiantes(id) ON DELETE SET NULL
+  tutor_id BIGINT REFERENCES tutores(id) ON DELETE SET NULL
+  curso_id BIGINT REFERENCES cursos(id) ON DELETE SET NULL
+  matricula_id BIGINT REFERENCES matriculas(id) ON DELETE SET NULL
+  sesion_id BIGINT REFERENCES sesiones_clases(id) ON DELETE SET NULL
+    └─> Vínculos con otras entidades para saber de dónde viene la obligación
+        ON DELETE SET NULL: si se elimina la sesión, la obligación queda huérfana
+        pero no se elimina (mantiene registro contable)
+
+  detalle TEXT
+    └─> Descripción de la obligación
+        Ejemplo: "Cobro esperado por sesión (Curso de Inglés A1)"
+
+  created_at TIMESTAMPTZ DEFAULT now()
+  updated_at TIMESTAMPTZ DEFAULT now()
+
+CONSTRAINTS:
+  CHECK (monto >= 0): el monto no puede ser negativo
+
+ÍNDICES ÚNICOS (para idempotencia):
+  ux_tesoreria_obligacion_cobro_sesion ON (sesion_id)
+    WHERE tipo='cobro_sesion' AND sesion_id IS NOT NULL
+    └─> Evita duplicar el cobro de la misma sesión
+
+  ux_tesoreria_obligacion_pago_tutor_sesion ON (sesion_id)
+    WHERE tipo='pago_tutor_sesion' AND sesion_id IS NOT NULL
+    └─> Evita duplicar el pago al tutor por la misma sesión
+
+ÍNDICES REGULARES:
+  idx_tesoreria_obligaciones_cuenta_fecha ON (cuenta_id, fecha_devengo)
+    └─> Para consultas FIFO (ordenar por fecha)
+
+  idx_tesoreria_obligaciones_estado ON (estado)
+    └─> Para filtrar por estado
+
+EJEMPLO DE REGISTROS:
+-- Cobro al encargado:
+{
+  "id": 5001,
+  "tipo": "cobro_sesion",
+  "cuenta_id": 101,
+  "monto": 7500.00,
+  "fecha_devengo": "2026-02-17",
+  "estado": "pendiente",
+  "estudiante_id": 25,
+  "tutor_id": 42,
+  "curso_id": 3,
+  "matricula_id": 88,
+  "sesion_id": 1234,
+  "detalle": "Cobro esperado por sesión (Inglés A1)"
+}
+
+-- Pago al tutor:
+{
+  "id": 5002,
+  "tipo": "pago_tutor_sesion",
+  "cuenta_id": 201,
+  "monto": 4500.00,
+  "fecha_devengo": "2026-02-17",
+  "estado": "pendiente",
+  "estudiante_id": 25,
+  "tutor_id": 42,
+  "curso_id": 3,
+  "matricula_id": 88,
+  "sesion_id": 1234,
+  "detalle": "Pago tutor esperado por sesión (Prof. Juan Pérez)"
+}
+
+
+--------------------------------------------------------------------------------
+3.4. Tabla: tesoreria_pagos
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Registra LO REAL (dinero que efectivamente entró o salió).
+  Cada pago debe tener evidencia digital (excepto efectivo).
+
+CAMPOS:
+  id BIGSERIAL PRIMARY KEY
+    └─> Identificador único del pago
+
+  cuenta_id BIGINT NOT NULL REFERENCES tesoreria_cuentas_corrientes(id)
+    └─> Cuenta que realizó/recibió el pago
+
+  direccion ENUM('entrada', 'salida') NOT NULL
+    └─> Dirección del movimiento:
+        'entrada': dinero que entra (encargado paga)
+        'salida': dinero que sale (pagamos a tutor)
+
+  monto NUMERIC(12,2) NOT NULL CHECK (monto > 0)
+    └─> Monto del pago (siempre positivo)
+        Ejemplo: 15000.00 (₡15,000)
+
+  fecha_pago DATE NOT NULL
+    └─> Fecha en que se realizó el pago
+        Ejemplo: "2026-02-17"
+
+  metodo TEXT
+    └─> Método de pago:
+        'efectivo', 'transferencia', 'sinpe', 'tarjeta', etc.
+
+  referencia TEXT
+    └─> Referencia bancaria o número de transacción
+        Ejemplo: "SINPE-123456789"
+
+  detalle TEXT
+    └─> Descripción adicional
+        Ejemplo: "Pago de 2 sesiones de enero"
+
+  -- EVIDENCIA DIGITAL (obligatoria para no-efectivo) --
+  numero_comprobante TEXT
+    └─> Número del comprobante de pago
+        Ejemplo: "COMP-2026-0234"
+
+  fecha_comprobante DATE
+    └─> Fecha del comprobante
+
+  comprobante_url TEXT
+    └─> URL del archivo adjunto (imagen/PDF)
+        Ejemplo: "/uploads/tesoreria/comprobante_1234.pdf"
+
+  estado ENUM('pendiente', 'completado', 'verificado', 'cancelado') NOT NULL
+    └─> Estado del pago:
+        'pendiente': registrado, falta evidencia
+        'completado': evidencia subida, listo para verificar
+        'verificado': revisado y aprobado por admin
+        'cancelado': pago anulado
+
+  created_at TIMESTAMPTZ DEFAULT now()
+  updated_at TIMESTAMPTZ DEFAULT now()
+
+CONSTRAINTS:
+  tesoreria_pagos_evidencia_check:
+    └─> Si método != 'efectivo' Y estado IN ('completado', 'verificado')
+        ENTONCES numero_comprobante, fecha_comprobante, comprobante_url NOT NULL
+        
+        Traducción: Los pagos electrónicos DEBEN tener evidencia completa
+        para estar completados o verificados.
+
+ÍNDICES:
+  idx_tesoreria_pagos_fecha ON (fecha_pago)
+  idx_tesoreria_pagos_cuenta_fecha ON (cuenta_id, fecha_pago)
+  idx_tesoreria_pagos_estado ON (estado)
+
+EJEMPLO DE REGISTROS:
+-- Pago en efectivo:
+{
+  "id": 3001,
+  "cuenta_id": 101,
+  "direccion": "entrada",
+  "monto": 7500.00,
+  "fecha_pago": "2026-02-17",
+  "metodo": "efectivo",
+  "referencia": null,
+  "detalle": "Pago sesión 17/02",
+  "numero_comprobante": null,
+  "fecha_comprobante": null,
+  "comprobante_url": null,
+  "estado": "completado"
+}
+
+-- Pago por transferencia:
+{
+  "id": 3002,
+  "cuenta_id": 101,
+  "direccion": "entrada",
+  "monto": 15000.00,
+  "fecha_pago": "2026-02-17",
+  "metodo": "sinpe",
+  "referencia": "SINPE-987654321",
+  "detalle": "SINPE Móvil desde cuenta *1234",
+  "numero_comprobante": "COMP-2026-0234",
+  "fecha_comprobante": "2026-02-17",
+  "comprobante_url": "/uploads/tesoreria/sinpe_987654321.jpg",
+  "estado": "verificado"
+}
+
+
+--------------------------------------------------------------------------------
+3.5. Tabla: tesoreria_aplicaciones
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Vincula PAGOS con OBLIGACIONES.
+  Cuando un encargado paga, ese dinero se aplica a sus obligaciones pendientes.
+
+CAMPOS:
+  id BIGSERIAL PRIMARY KEY
+    └─> Identificador único de la aplicación
+
+  pago_id BIGINT NOT NULL REFERENCES tesoreria_pagos(id) ON DELETE CASCADE
+    └─> Pago que se está aplicando
+        CASCADE: si se elimina el pago, se eliminan sus aplicaciones
+
+  obligacion_id BIGINT NOT NULL REFERENCES tesoreria_obligaciones(id)
+    └─> Obligación que se está cubriendo
+        ON DELETE RESTRICT: no se puede eliminar una obligación aplicada
+
+  monto NUMERIC(12,2) NOT NULL CHECK (monto > 0)
+    └─> Monto aplicado (puede ser parcial)
+        Ejemplo: Si paga ₡10,000 y debe ₡15,000 en 2 sesiones de ₡7,500
+        Se crea:
+          - Aplicación 1: ₡7,500 a sesión 1 (completa)
+          - Aplicación 2: ₡2,500 a sesión 2 (parcial)
+        Quedaría pendiente ₡5,000 en sesión 2
+
+  created_at TIMESTAMPTZ DEFAULT now()
+
+ÍNDICES:
+  idx_tesoreria_aplicaciones_pago ON (pago_id)
+  idx_tesoreria_aplicaciones_obligacion ON (obligacion_id)
+
+LÓGICA FIFO (First In, First Out):
+  Al crear un pago, el backend automáticamente:
+  1. Busca obligaciones pendientes de esa cuenta
+  2. Las ordena por fecha_devengo ASC (más antiguas primero)
+  3. Aplica el monto del pago hasta cubrir o agotar el dinero
+
+EJEMPLO DE APLICACIÓN:
+Situación:
+  - Encargado tiene 3 obligaciones:
+    • Sesión 01/02: ₡7,500 (pendiente completo)
+    • Sesión 08/02: ₡7,500 (pendiente completo)
+    • Sesión 15/02: ₡7,500 (pendiente completo)
+  - Encargado paga ₡15,000
+
+Resultado:
+{
+  "pago_id": 3001,
+  "aplicaciones": [
+    {
+      "id": 4001,
+      "pago_id": 3001,
+      "obligacion_id": 5001,
+      "monto": 7500.00,  // Sesión 01/02 → COMPLETA
+      "created_at": "2026-02-17T14:30:00Z"
+    },
+    {
+      "id": 4002,
+      "pago_id": 3001,
+      "obligacion_id": 5002,
+      "monto": 7500.00,  // Sesión 08/02 → COMPLETA
+      "created_at": "2026-02-17T14:30:00Z"
+    }
+  ],
+  "sobrante": 0,  // ₡15,000 - ₡7,500 - ₡7,500 = ₡0
+  "sesion_15/02": "pendiente ₡7,500"  // Aún debe esta sesión
+}
+
+
+--------------------------------------------------------------------------------
+3.6. Tabla: movimientos_dinero (LEGACY - Sistema Antiguo)
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Sistema ANTERIOR para cobros grupales (bulk).
+  YA NO SE USA para sesiones individuales (eliminado para evitar duplicación).
+
+USO ACTUAL:
+  SOLO para cobros grupales (estudiantes sin encargado individual).
+
+CAMPOS:
+  id BIGSERIAL PRIMARY KEY
+  tipo TEXT ('ingreso' o 'egreso')
+  monto NUMERIC
+  fecha DATE
+  metodo TEXT
+  estado TEXT ('pendiente', 'completado')
+  origen TEXT ('cobro_grupal', etc.)
+  ...
+
+MIGRACIÓN A TESORERÍA V2:
+  ✓ Sesiones individuales: ahora usan tesoreria_obligaciones
+  ✓ Cobros grupales: siguen usando movimientos_dinero
+  ✓ Vista de saldos: YA NO suma movimientos_dinero (solo obligaciones)
+
+NOTA IMPORTANTE:
+  El endpoint POST /sesion/:matriculaId/:fecha/completar
+  YA NO genera movimientos_dinero.
+  Solo genera obligaciones en tesoreria_obligaciones.
+
+
+================================================================================
+4. VISTAS SQL Y CÁLCULOS AUTOMÁTICOS
+================================================================================
+
+Las vistas SQL son "tablas virtuales" que se calculan automáticamente.
+No almacenan datos, solo ejecutan queries en tiempo real.
+
+--------------------------------------------------------------------------------
+4.1. Vista: tesoreria_saldos_encargados_v1
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Calcula el saldo de cada encargado con COMPENSACIÓN AUTOMÁTICA.
+  Retorna: deuda, saldo a favor, balance neto y estado contable.
+
+QUERY COMPLETA:
+---------------
+CREATE OR REPLACE VIEW public.tesoreria_saldos_encargados_v1 AS
+WITH cc AS (
+  -- Todas las cuentas de encargados
+  SELECT id AS cuenta_id, encargado_id
+  FROM public.tesoreria_cuentas_corrientes
+  WHERE tipo='encargado'
+),
+ob AS (
+  -- Total de obligaciones pendientes por cuenta
+  SELECT
+    o.cuenta_id,
+    SUM(CASE WHEN o.estado = 'pendiente' THEN o.monto ELSE 0 END) AS obligado_pendiente
+  FROM public.tesoreria_obligaciones o
+  WHERE o.tipo='cobro_sesion'
+  GROUP BY o.cuenta_id
+),
+app AS (
+  -- Total aplicado a obligaciones por cuenta
+  SELECT
+    o.cuenta_id,
+    SUM(a.monto) AS total_aplicado
+  FROM public.tesoreria_aplicaciones a
+  JOIN public.tesoreria_obligaciones o ON o.id = a.obligacion_id
+  WHERE o.tipo='cobro_sesion' AND o.estado <> 'cancelado'
+  GROUP BY o.cuenta_id
+),
+pagos AS (
+  -- Total pagado (completado/verificado) por cuenta
+  SELECT
+    p.cuenta_id,
+    SUM(CASE WHEN p.estado IN ('completado','verificado') AND p.direccion='entrada' 
+        THEN p.monto ELSE 0 END) AS total_pagado
+  FROM public.tesoreria_pagos p
+  GROUP BY p.cuenta_id
+),
+balances AS (
+  -- Cálculo de balance neto
+  SELECT
+    cc.cuenta_id,
+    cc.encargado_id,
+    COALESCE(ob.obligado_pendiente, 0) AS deuda_pendiente_bruta,
+    COALESCE(pagos.total_pagado, 0) - COALESCE(app.total_aplicado, 0) AS saldo_a_favor_bruto,
+    -- FÓRMULA CLAVE: balance_neto = deuda - saldo
+    COALESCE(ob.obligado_pendiente, 0) - 
+    (COALESCE(pagos.total_pagado, 0) - COALESCE(app.total_aplicado, 0)) AS balance_neto
+  FROM cc
+  LEFT JOIN ob ON ob.cuenta_id = cc.cuenta_id
+  LEFT JOIN app ON app.cuenta_id = cc.cuenta_id
+  LEFT JOIN pagos ON pagos.cuenta_id = cc.cuenta_id
+)
+SELECT
+  encargado_id,
+  cuenta_id,
+  
+  -- COMPENSACIÓN AUTOMÁTICA:
+  CASE 
+    WHEN balance_neto > 0 THEN balance_neto  -- Debe dinero → mostrar deuda
+    ELSE 0                                    -- Tiene saldo → deuda = 0
+  END AS deuda_pendiente,
+  
+  CASE 
+    WHEN balance_neto < 0 THEN ABS(balance_neto)  -- Tiene saldo → mostrarlo
+    ELSE 0                                         -- Debe dinero → saldo = 0
+  END AS saldo_a_favor,
+  
+  balance_neto,
+  
+  -- Estado contable
+  CASE
+    WHEN balance_neto > 0 THEN 'deuda'
+    WHEN balance_neto < 0 THEN 'saldo_favor'
+    ELSE 'al_dia'
+  END AS estado
+FROM balances;
+
+COLUMNAS RETORNADAS:
+--------------------
+encargado_id BIGINT
+  └─> ID del encargado
+
+cuenta_id BIGINT
+  └─> ID de la cuenta corriente
+
+deuda_pendiente NUMERIC
+  └─> Dinero que el encargado debe
+      Si balance_neto > 0: muestra el balance
+      Si balance_neto <= 0: muestra 0 (ya no debe nada)
+
+saldo_a_favor NUMERIC
+  └─> Dinero que el encargado tiene a su favor
+      Si balance_neto < 0: muestra el saldo (valor absoluto)
+      Si balance_neto >= 0: muestra 0 (no tiene saldo)
+
+balance_neto NUMERIC
+  └─> Diferencia real: deuda - saldo
+      > 0: debe dinero
+      < 0: tiene saldo a favor
+      = 0: está al día
+
+estado TEXT
+  └─> 'deuda', 'saldo_favor', 'al_dia'
+
+EJEMPLO PRÁCTICO:
+-----------------
+Situación: Vanessa tiene:
+  - Obligaciones pendientes: ₡7,500
+  - Pagos completados: ₡7,500
+  - Aplicaciones: ₡0 (no se han aplicado aún)
+
+Cálculo:
+  deuda_pendiente_bruta = 7500
+  saldo_a_favor_bruto = 7500 - 0 = 7500
+  balance_neto = 7500 - 7500 = 0
+
+Resultado ANTES de compensación (confuso):
+  deuda_pendiente = 7500
+  saldo_a_favor = 7500
+  ❌ Usuario ve: "Debes ₡7,500 pero tienes ₡7,500" (confuso)
+
+Resultado DESPUÉS de compensación (correcto):
+  deuda_pendiente = 0 (porque balance_neto = 0)
+  saldo_a_favor = 0 (porque balance_neto = 0)
+  balance_neto = 0
+  estado = 'al_dia'
+  ✅ Usuario ve: "Cuenta al día ₡0" (claro)
+
+
+--------------------------------------------------------------------------------
+4.2. Vista: tesoreria_saldos_tutores_v1
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Calcula cuánto le debemos a cada tutor.
+
+QUERY:
+------
+CREATE OR REPLACE VIEW public.tesoreria_saldos_tutores_v1 AS
+WITH cc AS (
+  SELECT id AS cuenta_id, tutor_id
+  FROM public.tesoreria_cuentas_corrientes
+  WHERE tipo='tutor'
+),
+ob AS (
+  SELECT
+    o.cuenta_id,
+    SUM(CASE WHEN o.estado = 'pendiente' THEN o.monto ELSE 0 END) AS por_pagar
+  FROM public.tesoreria_obligaciones o
+  WHERE o.tipo='pago_tutor_sesion'
+  GROUP BY o.cuenta_id
+),
+pagos AS (
+  SELECT
+    p.cuenta_id,
+    SUM(CASE WHEN p.estado IN ('completado','verificado') AND p.direccion='salida' 
+        THEN p.monto ELSE 0 END) AS pagado
+  FROM public.tesoreria_pagos p
+  GROUP BY p.cuenta_id
+)
+SELECT
+  cc.tutor_id,
+  cc.cuenta_id,
+  COALESCE(ob.por_pagar, 0) AS por_pagar,
+  COALESCE(pagos.pagado, 0) AS pagado
+FROM cc
+LEFT JOIN ob ON ob.cuenta_id = cc.cuenta_id
+LEFT JOIN pagos ON pagos.cuenta_id = cc.cuenta_id;
+
+COLUMNAS:
+---------
+tutor_id: ID del tutor
+cuenta_id: ID de la cuenta corriente
+por_pagar: Monto total pendiente de pagar
+pagado: Monto ya pagado (completado/verificado)
+
+
+--------------------------------------------------------------------------------
+4.3. Vista: tesoreria_libro_diario_v1
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Muestra TODOS los pagos en formato de libro contable con debe/haber.
+
+QUERY:
+------
+CREATE OR REPLACE VIEW public.tesoreria_libro_diario_v1 AS
+SELECT
+  p.id,
+  p.fecha_pago,
+  p.cuenta_id,
+  cc.tipo AS cuenta_tipo,
+  cc.encargado_id,
+  cc.tutor_id,
+  p.metodo,
+  p.referencia,
+  p.detalle,
+  p.numero_comprobante,
+  p.fecha_comprobante,
+  p.comprobante_url,
+  p.estado,
+  
+  -- Debe: dinero que entra
+  CASE WHEN p.direccion = 'entrada' THEN p.monto ELSE 0 END AS debe,
+  
+  -- Haber: dinero que sale
+  CASE WHEN p.direccion = 'salida' THEN p.monto ELSE 0 END AS haber,
+  
+  -- Neto del movimiento
+  (CASE WHEN p.direccion = 'entrada' THEN p.monto ELSE -p.monto END) AS neto_mov,
+  
+  -- Saldo acumulado (running total)
+  SUM(CASE WHEN p.direccion = 'entrada' THEN p.monto ELSE -p.monto END)
+    OVER (ORDER BY p.fecha_pago, p.id) AS saldo_acumulado
+FROM public.tesoreria_pagos p
+JOIN public.tesoreria_cuentas_corrientes cc ON cc.id = p.cuenta_id;
+
+COLUMNAS IMPORTANTES:
+---------------------
+debe: Dinero que entra (entrada = debe)
+haber: Dinero que sale (salida = haber)
+neto_mov: Entrada positiva, salida negativa
+saldo_acumulado: Balance acumulado cronológicamente
+
+
+================================================================================
+5. FUNCIONES RPC (Remote Procedure Call)
+================================================================================
+
+Son funciones SQL que se llaman como procedimientos almacenados.
+
+--------------------------------------------------------------------------------
+5.1. tesoreria_get_or_create_cuenta_encargado_v1
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Obtiene o crea la cuenta corriente de un encargado.
+
+FIRMA:
+------
+FUNCTION tesoreria_get_or_create_cuenta_encargado_v1(p_encargado_id BIGINT)
+RETURNS BIGINT
+
+LÓGICA:
+-------
+1. Busca si ya existe cuenta para ese encargado_id
+2. Si existe: retorna el cuenta_id
+3. Si no existe: crea nueva cuenta y retorna su id
+
+USO EN CÓDIGO:
+--------------
+const { data: cuentaId } = await supabase.rpc(
+  'tesoreria_get_or_create_cuenta_encargado_v1',
+  { p_encargado_id: 123 }
+);
+
+
+--------------------------------------------------------------------------------
+5.2. tesoreria_get_or_create_cuenta_tutor_v1
+--------------------------------------------------------------------------------
+
+Igual que la anterior pero para tutores.
+
+
+================================================================================
+6. API BACKEND - ENDPOINTS
+================================================================================
+
+Todos los endpoints están en: backend/routes/tesoreria.js
+
+--------------------------------------------------------------------------------
+6.1. GET /tesoreria/encargados/resumen
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Lista todos los encargados con sus saldos (deuda, saldo a favor, balance neto).
+
+FILTROS:
+  Solo muestra encargados que:
+  - Tienen al menos un estudiante activo, O
+  - Tienen cuenta de tesorería con movimientos
+
+QUERY SQL:
+----------
+SELECT 
+  e.id AS encargado_id,
+  e.nombre,
+  e.email,
+  e.telefono,
+  s.cuenta_id,
+  s.deuda_pendiente,
+  s.saldo_a_favor,
+  s.balance_neto,
+  s.estado
+FROM encargados e
+LEFT JOIN tesoreria_saldos_encargados_v1 s ON s.encargado_id = e.id
+WHERE (
+  EXISTS (SELECT 1 FROM estudiantes WHERE encargado_id = e.id)
+  OR s.cuenta_id IS NOT NULL
+)
+
+RESPONSE EJEMPLO:
+-----------------
+[
+  {
+    "cuenta_id": 101,
+    "encargado_id": 1,
+    "deuda_pendiente": 0,
+    "saldo_a_favor": 0,
+    "balance_neto": 0,
+    "estado": "al_dia",
+    "encargados": {
+      "id": 1,
+      "nombre": "Vanessa Arroyo Arce",
+      "email": "vanessa@example.com",
+      "telefono": "8888-1234"
+    }
+  },
+  {
+    "cuenta_id": 102,
+    "encargado_id": 2,
+    "deuda_pendiente": 15000,
+    "saldo_a_favor": 0,
+    "balance_neto": 15000,
+    "estado": "deuda",
+    "encargados": {
+      "id": 2,
+      "nombre": "Carlos Martínez",
+      "email": null,
+      "telefono": "7777-5555"
+    }
+  }
+]
+
+
+--------------------------------------------------------------------------------
+6.2. GET /tesoreria/tutores/resumen
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Lista todos los tutores con lo que se les debe pagar.
+
+RESPONSE EJEMPLO:
+-----------------
+[
+  {
+    "tutor_id": 42,
+    "cuenta_id": 201,
+    "por_pagar": 18000,
+    "pagado": 9000,
+    "tutores": {
+      "id": 42,
+      "nombre": "Prof. Juan Pérez",
+      "email": "juan.perez@example.com"
+    }
+  }
+]
+
+
+--------------------------------------------------------------------------------
+6.3. GET /tesoreria/resumen
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Totales globales: deuda total, saldo total, por pagar a tutores.
+
+QUERY LÓGICA:
+-------------
+1. Suma deuda_pendiente de todos los encargados (vista)
+2. Suma deuda de cobros grupales (movimientos_dinero legacy)
+3. Suma saldo_a_favor de todos los encargados
+4. Suma por_pagar de todos los tutores
+
+RESPONSE EJEMPLO:
+-----------------
+{
+  "deudaPendiente": 75000,
+  "saldoAFavor": 12000,
+  "porPagarTutores": 45000
+}
+
+
+--------------------------------------------------------------------------------
+6.4. GET /tesoreria/bolsa
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Calcula el efectivo real en caja (ingresos - egresos).
+
+QUERY LÓGICA:
+-------------
+SELECT 
+  SUM(CASE WHEN direccion='entrada' THEN monto ELSE 0 END) AS haber_real,
+  SUM(CASE WHEN direccion='salida' THEN monto ELSE 0 END) AS debe_real,
+  SUM(CASE WHEN direccion='entrada' THEN monto ELSE -monto END) AS bolsa_real
+FROM tesoreria_pagos
+WHERE estado IN ('completado', 'verificado')
+
+RESPONSE EJEMPLO:
+-----------------
+{
+  "haber_real": 150000,  // Total ingresado
+  "debe_real": 45000,    // Total egresado
+  "bolsa_real": 105000   // Neto en caja
+}
+
+
+--------------------------------------------------------------------------------
+6.5. GET /tesoreria/diario
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Libro diario completo con filtros por fecha.
+
+QUERY PARAMS:
+-------------
+?desde=2026-02-01&hasta=2026-02-28
+
+RESPONSE:
+---------
+Retorna registros de tesoreria_libro_diario_v1 con joins a encargados/tutores.
+
+
+--------------------------------------------------------------------------------
+6.6. POST /tesoreria/encargados/:encargadoId/pagos
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Registrar un pago de un encargado.
+
+REQUEST BODY:
+-------------
+{
+  "monto": 15000,
+  "fecha_pago": "2026-02-17",
+  "metodo": "sinpe",
+  "numero_comprobante": "COMP-2026-0234",
+  "fecha_comprobante": "2026-02-17",
+  "comprobante_url": "/uploads/tesoreria/sinpe_123.jpg",
+  "referencia": "SINPE-987654321",
+  "detalle": "Pago de 2 sesiones"
+}
+
+PROCESO:
+--------
+1. Obtiene o crea cuenta del encargado
+2. Inserta registro en tesoreria_pagos con direccion='entrada'
+3. Busca obligaciones pendientes (tipo='cobro_sesion') ordenadas por fecha_devengo ASC
+4. Aplica el pago FIFO hasta agotar el monto o cubrir todas las obligaciones
+5. Inserta registros en tesoreria_aplicaciones
+6. Actualiza estado de obligaciones a 'aplicado' si quedaron completas
+7. Si sobra dinero, queda como saldo_a_favor
+
+RESPONSE:
+---------
+{
+  "pago_id": 3001,
+  "monto": 15000,
+  "aplicaciones": [
+    { "obligacion_id": 5001, "monto": 7500 },
+    { "obligacion_id": 5002, "monto": 7500 }
+  ],
+  "monto_aplicado": 15000,
+  "sobrante": 0
+}
+
+
+--------------------------------------------------------------------------------
+6.7. POST /tesoreria/tutores/:tutorId/pagos
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Registrar pago a un tutor.
+
+REQUEST BODY:
+-------------
+{
+  "monto": 18000,
+  "fecha_pago": "2026-02-17",
+  "metodo": "transferencia",
+  "numero_comprobante": "TRANS-456",
+  "fecha_comprobante": "2026-02-17",
+  "comprobante_url": "/uploads/tesoreria/trans_456.pdf",
+  "funding_mode": "bolsa",  // o "encargado"
+  "source_encargado_id": null,
+  "obligacion_ids": [6001, 6002, 6003]
+}
+
+PROCESO:
+--------
+1. Obtiene cuenta del tutor
+2. Si funding_mode='bolsa': el dinero sale de la bolsa común
+3. Si funding_mode='encargado': el dinero sale del saldo a favor del encargado
+4. Inserta pago con direccion='salida'
+5. Aplica a las obligaciones especificadas en obligacion_ids
+
+
+--------------------------------------------------------------------------------
+6.8. POST /tesoreria/pagos/:pagoId/comprobante
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Subir archivo de comprobante (imagen/PDF) para un pago.
+
+REQUEST:
+--------
+Content-Type: multipart/form-data
+file: [archivo adjunto]
+
+PROCESO:
+--------
+1. Guarda archivo en uploads/tesoreria/
+2. Actualiza tesoreria_pagos.comprobante_url
+3. Cambia estado a 'completado'
+
+
+--------------------------------------------------------------------------------
+6.9. POST /tesoreria/grupos/:grupoId/cobro
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Registrar cobro grupal (estudiantes sin encargado individual).
+
+NOTA:
+  Este endpoint TODAVÍA usa movimientos_dinero (sistema legacy).
+
+
+================================================================================
+7. FLUJOS COMPLETOS DEL SISTEMA
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1. Flujo: Marcar sesión como dada
+--------------------------------------------------------------------------------
+
+ACTOR: Administrador o Tutor
+URL: POST /sesion/:matriculaId/:fecha/completar
+ARCHIVO: backend/routes/dashboard.js
+
+PASOS:
+------
+1. Usuario marca sesión como "dada" en el calendario
+   
+2. Backend valida:
+   - Matricula existe
+   - Fecha no es futura
+   - No hay sesión ya marcada para esa fecha
+
+3. Backend obtiene datos:
+   - Costo del curso (costo_curso)
+   - Pago al tutor (pago_tutor)
+   - Encargado de la matrícula
+
+4. Backend llama a ensureTesoreriaObligacionesV2(sesion.id):
+
+   a) Crear obligación de COBRO al encargado:
+      - Busca/crea cuenta corriente del encargado
+      - INSERT INTO tesoreria_obligaciones:
+        {
+          tipo: 'cobro_sesion',
+          cuenta_id: [cuenta del encargado],
+          monto: [costo_curso],
+          fecha_devengo: [fecha de la sesión],
+          estado: 'pendiente',
+          sesion_id: [id de la sesión],
+          detalle: "Cobro esperado por sesión (Nombre del curso)"
+        }
+
+   b) Crear obligación de PAGO al tutor (si hay tutor):
+      - Busca/crea cuenta corriente del tutor
+      - INSERT INTO tesoreria_obligaciones:
+        {
+          tipo: 'pago_tutor_sesion',
+          cuenta_id: [cuenta del tutor],
+          monto: [pago_tutor],
+          fecha_devengo: [fecha de la sesión],
+          estado: 'pendiente',
+          sesion_id: [id de la sesión],
+          detalle: "Pago tutor esperado por sesión (Nombre tutor)"
+        }
+
+5. Si el curso es tipo_pago='mensual':
+   - NO se generan obligaciones inmediatas
+   - Se generan al final del mes (otro proceso)
+
+6. Si hay duplicados (constraint ux_tesoreria_obligacion_cobro_sesion):
+   - Se ignoran silenciosamente (idempotencia)
+
+7. Response 200 OK con sesion_id
+
+RESULTADO EN BD:
+----------------
+- 1 registro nuevo en sesiones_clases
+- 1 registro nuevo en tesoreria_obligaciones (cobro al encargado)
+- 1 registro nuevo en tesoreria_obligaciones (pago al tutor)
+- 0 registros en movimientos_dinero (YA NO SE USA)
+
+EFECTO EN VISTA:
+----------------
+SELECT * FROM tesoreria_saldos_encargados_v1 WHERE encargado_id = X;
+  deuda_pendiente: +7500 (aumenta la deuda)
+  saldo_a_favor: sin cambios
+  balance_neto: +7500 (debe más dinero)
+  estado: 'deuda'
+
+
+--------------------------------------------------------------------------------
+7.2. Flujo: Encargado realiza un pago
+--------------------------------------------------------------------------------
+
+ACTOR: Encargado (padre/responsable)
+URL: POST /tesoreria/encargados/:encargadoId/pagos
+ARCHIVO: backend/routes/tesoreria.js
+
+PASOS:
+------
+1. Encargado paga (efectivo, SINPE, transferencia, etc.)
+
+2. Admin registra el pago en el sistema con datos:
+   {
+     "monto": 15000,
+     "fecha_pago": "2026-02-17",
+     "metodo": "sinpe",
+     "referencia": "SINPE-123456",
+     "detalle": "Pago de 2 sesiones"
+   }
+
+3. Backend llama a registrarPagoEncargadoV1():
+
+   a) Obtiene o crea cuenta corriente del encargado
+   
+   b) INSERT INTO tesoreria_pagos:
+      {
+        cuenta_id: [cuenta del encargado],
+        direccion: 'entrada',
+        monto: 15000,
+        fecha_pago: '2026-02-17',
+        metodo: 'sinpe',
+        referencia: 'SINPE-123456',
+        estado: 'pendiente',  // Si falta evidencia
+        ...
+      }
+
+   c) Si metodo != 'efectivo' Y hay comprobante:
+      - estado = 'completado'
+      - Requiere numero_comprobante, fecha_comprobante, comprobante_url
+
+4. Backend aplica el pago AUTOMÁTICAMENTE (FIFO):
+
+   a) SELECT obligaciones WHERE:
+      - cuenta_id = [cuenta del encargado]
+      - tipo = 'cobro_sesion'
+      - estado = 'pendiente'
+      ORDER BY fecha_devengo ASC
+
+   b) Recorre obligaciones en orden cronológico:
+   
+      Ejemplo:
+      - Obligación 1 (01/02): ₡7,500 pendientes
+      - Obligación 2 (08/02): ₡7,500 pendientes
+      - Obligación 3 (15/02): ₡7,500 pendientes
+      
+      Pago = ₡15,000
+      
+      Paso 1: Aplicar ₡7,500 a Obligación 1
+        → INSERT INTO tesoreria_aplicaciones (pago_id, obligacion_id, monto: 7500)
+        → UPDATE tesoreria_obligaciones SET estado='aplicado' WHERE id=1
+        → Restante: ₡15,000 - ₡7,500 = ₡7,500
+      
+      Paso 2: Aplicar ₡7,500 a Obligación 2
+        → INSERT INTO tesoreria_aplicaciones (pago_id, obligacion_id, monto: 7500)
+        → UPDATE tesoreria_obligaciones SET estado='aplicado' WHERE id=2
+        → Restante: ₡7,500 - ₡7,500 = ₡0
+      
+      Paso 3: No hay más dinero, se detiene
+        → Obligación 3 queda pendiente: ₡7,500
+
+5. Si sobrara dinero (por ejemplo, pagó ₡20,000):
+   - Se aplicarían las 3 obligaciones (₡22,500)
+   - No alcanza para todas, se aplica parcialmente
+   - O si no tiene más obligaciones, queda como saldo_a_favor
+
+6. Response 201 con detalles de aplicaciones
+
+RESULTADO EN BD:
+----------------
+- 1 registro nuevo en tesoreria_pagos
+- 2 registros nuevos en tesoreria_aplicaciones
+- 2 registros actualizados en tesoreria_obligaciones (estado='aplicado')
+
+EFECTO EN VISTA:
+----------------
+SELECT * FROM tesoreria_saldos_encargados_v1 WHERE encargado_id = X;
+
+ANTES:
+  deuda_pendiente: 22500 (3 sesiones × 7500)
+  saldo_a_favor: 0
+  balance_neto: 22500
+  estado: 'deuda'
+
+DESPUÉS (pagó ₡15,000):
+  deuda_pendiente: 7500 (solo 1 sesión pendiente)
+  saldo_a_favor: 0
+  balance_neto: 7500
+  estado: 'deuda'
+
+CÁLCULO INTERNO:
+  obligado_pendiente = 7500 (solo Obligación 3)
+  total_pagado = 15000
+  total_aplicado = 15000
+  saldo_a_favor_bruto = 15000 - 15000 = 0
+  balance_neto = 7500 - 0 = 7500
+
+
+--------------------------------------------------------------------------------
+7.3. Flujo: Aplicación automática FIFO
+--------------------------------------------------------------------------------
+
+REGLA:
+  Los pagos se aplican SIEMPRE a las obligaciones más antiguas primero.
+
+ALGORITMO:
+----------
+función aplicarPagoFIFO(pago_id, cuenta_id, monto_disponible):
+  
+  // 1. Obtener obligaciones pendientes ordenadas por fecha
+  obligaciones = SELECT * FROM tesoreria_obligaciones
+    WHERE cuenta_id = cuenta_id
+      AND tipo = 'cobro_sesion'
+      AND estado = 'pendiente'
+    ORDER BY fecha_devengo ASC, id ASC
+
+  monto_restante = monto_disponible
+  aplicaciones = []
+
+  // 2. Iterar sobre obligaciones
+  para cada obligacion en obligaciones:
+    
+    // Calcular cuánto falta por cubrir de esta obligación
+    total_aplicado_previa = SUM(monto) FROM tesoreria_aplicaciones 
+      WHERE obligacion_id = obligacion.id
+    
+    pendiente_obligacion = obligacion.monto - total_aplicado_previa
+    
+    si pendiente_obligacion <= 0:
+      continuar  // Ya está cubierta, saltar
+    
+    // Calcular cuánto aplicar
+    monto_a_aplicar = MIN(monto_restante, pendiente_obligacion)
+    
+    // Crear aplicación
+    INSERT INTO tesoreria_aplicaciones (pago_id, obligacion_id, monto)
+      VALUES (pago_id, obligacion.id, monto_a_aplicar)
+    
+    aplicaciones.agregar({
+      obligacion_id: obligacion.id,
+      monto: monto_a_aplicar
+    })
+    
+    // Reducir restante
+    monto_restante -= monto_a_aplicar
+    
+    // Verificar si quedó completa
+    nuevo_total_aplicado = total_aplicado_previa + monto_a_aplicar
+    si nuevo_total_aplicado >= obligacion.monto:
+      UPDATE tesoreria_obligaciones SET estado='aplicado' WHERE id=obligacion.id
+    
+    // Si ya no queda dinero, terminar
+    si monto_restante <= 0:
+      romper ciclo
+  
+  retornar {
+    aplicaciones: aplicaciones,
+    monto_aplicado: monto_disponible - monto_restante,
+    sobrante: monto_restante
+  }
+
+EJEMPLO VISUAL:
+---------------
+Timeline de obligaciones:
+┌──────────────────────────────────────────────────────────────┐
+│ 01/02  08/02  15/02  22/02  01/03                           │
+│ ₡7,500 ₡7,500 ₡7,500 ₡7,500 ₡7,500  (5 sesiones pendientes) │
+└──────────────────────────────────────────────────────────────┘
+
+Pago: ₡18,000
+
+Aplicación FIFO:
+  ▼
+01/02 → ₡7,500 aplicados → COMPLETA ✅
+  ▼
+08/02 → ₡7,500 aplicados → COMPLETA ✅
+  ▼
+15/02 → ₡3,000 aplicados → PARCIAL 🟡 (faltan ₡4,500)
+  
+Quedan pendientes:
+  15/02: ₡4,500
+  22/02: ₡7,500
+  01/03: ₡7,500
+
+
+--------------------------------------------------------------------------------
+7.4. Flujo: Pago a tutor
+--------------------------------------------------------------------------------
+
+ACTOR: Administrador
+URL: POST /tesoreria/tutores/:tutorId/pagos
+
+CASO 1: Pago desde la bolsa común
+-----------------------------------
+{
+  "monto": 18000,
+  "fecha_pago": "2026-02-17",
+  "metodo": "transferencia",
+  "funding_mode": "bolsa",
+  "obligacion_ids": [6001, 6002, 6003]
+}
+
+PROCESO:
+1. Valida que hay suficiente en bolsa_real
+2. INSERT INTO tesoreria_pagos (direccion='salida')
+3. Aplica a las obligaciones especificadas
+4. Reduce la bolsa_real
+
+CASO 2: Pago desde saldo a favor de un encargado
+-------------------------------------------------
+{
+  "monto": 18000,
+  "fecha_pago": "2026-02-17",
+  "metodo": "transferencia_interna",
+  "funding_mode": "encargado",
+  "source_encargado_id": 123,
+  "obligacion_ids": [6001, 6002]
+}
+
+PROCESO:
+1. Valida que el encargado tiene suficiente saldo_a_favor
+2. INSERT INTO tesoreria_pagos en cuenta del tutor (salida)
+3. Si es transferencia interna, también registra salida en cuenta del encargado
+4. Aplica a obligaciones del tutor
+
+
+--------------------------------------------------------------------------------
+7.5. Flujo: Cobro grupal (bulk)
+--------------------------------------------------------------------------------
+
+PROPÓSITO:
+  Para estudiantes sin encargado individual (eventos, talleres grupales).
+
+URL: POST /tesoreria/grupos/:grupoId/cobro
+
+PROCESO:
+1. Obtiene lista de estudiantes del grupo
+2. Para cada estudiante SIN encargado_id:
+   - INSERT INTO movimientos_dinero (tipo='ingreso', origen='cobro_grupal')
+3. NO genera obligaciones en tesoreria_obligaciones
+
+NOTA:
+  Este es el ÚNICO uso actual de movimientos_dinero.
+  Los cobros grupales NO se integran con el sistema v2 aún.
+
+
+================================================================================
+8. SISTEMA DE COMPENSACIÓN AUTOMÁTICA
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1. Problema identificado
+--------------------------------------------------------------------------------
+
+ANTES (sin compensación):
+-------------------------
+Usuario: Vanessa Arroyo Arce
+  - Debe 1 sesión: ₡7,500
+  - Ha pagado: ₡7,500
+  - El pago NO ha sido aplicado aún
+
+Vista en pantalla:
+  ┌────────────────────────────────────────┐
+  │ 🔴 Deuda pendiente: ₡7,500            │
+  │ 🟢 Saldo a favor: ₡7,500              │
+  └────────────────────────────────────────┘
+
+❌ PROBLEMA:
+  - Confunde al usuario: ¿debo o no debo?
+  - Viola principio contable: activos y pasivos deben compensar
+  - Matemáticamente: ₡7,500 - ₡7,500 = ₡0
+  - UI muestra ₡15,000 en total (engañoso)
+
+
+--------------------------------------------------------------------------------
+8.2. Solución implementada
+--------------------------------------------------------------------------------
+
+DESPUÉS (con compensación):
+---------------------------
+Misma situación: deuda ₡7,500, abonó ₡7,500
+
+Vista en pantalla:
+  ┌────────────────────────────────────────┐
+  │ ✅ Cuenta al día: ₡0                  │
+  │ Sin pagos pendientes                   │
+  └────────────────────────────────────────┘
+
+✅ SOLUCIÓN:
+  - Claro e inequívoco
+  - Refleja realidad contable
+  - Usuario entiende inmediatamente
+  - NUNCA muestra deuda y saldo simultáneamente
+
+
+--------------------------------------------------------------------------------
+8.3. Fórmula de balance neto
+--------------------------------------------------------------------------------
+
+balance_neto = deuda_pendiente - saldo_a_favor
+
+Donde:
+  deuda_pendiente = SUM(obligaciones.monto) WHERE estado='pendiente'
+  saldo_a_favor = total_pagado - total_aplicado
+
+total_pagado = SUM(pagos.monto) WHERE direccion='entrada' AND estado IN ('completado','verificado')
+total_aplicado = SUM(aplicaciones.monto)
+
+INTERPRETACIÓN:
+  balance_neto > 0  → La persona DEBE dinero
+  balance_neto < 0  → La persona TIENE saldo a favor
+  balance_neto = 0  → La cuenta está AL DÍA
+
+
+--------------------------------------------------------------------------------
+8.4. Estados contables
+--------------------------------------------------------------------------------
+
+El sistema define 3 estados mutuamente excluyentes:
+
+1. 'deuda':
+   - Condición: balance_neto > 0
+   - Interpretación: La persona debe pagar
+   - UI: Tarjeta roja 🔴
+   - Muestra: deuda_pendiente = balance_neto, saldo_a_favor = 0
+   - Acción: Botón "Pagar"
+
+2. 'saldo_favor':
+   - Condición: balance_neto < 0
+   - Interpretación: La persona tiene crédito
+   - UI: Tarjeta verde 🟢
+   - Muestra: saldo_a_favor = ABS(balance_neto), deuda_pendiente = 0
+   - Mensaje: "Disponible para aplicar"
+
+3. 'al_dia':
+   - Condición: balance_neto = 0
+   - Interpretación: Sin pendientes
+   - UI: Tarjeta azul ✅
+   - Muestra: ambos = 0
+   - Mensaje: "Sin pagos pendientes"
+
+
+--------------------------------------------------------------------------------
+8.5. Lógica en SQL (Vista)
+--------------------------------------------------------------------------------
+
+Ver sección 4.1 para el SQL completo.
+
+EXTRACTO CLAVE:
+---------------
+SELECT
+  CASE 
+    WHEN balance_neto > 0 THEN balance_neto
+    ELSE 0
+  END AS deuda_pendiente,
+  
+  CASE 
+    WHEN balance_neto < 0 THEN ABS(balance_neto)
+    ELSE 0
+  END AS saldo_a_favor,
+  
+  balance_neto,
+  
+  CASE
+    WHEN balance_neto > 0 THEN 'deuda'
+    WHEN balance_neto < 0 THEN 'saldo_favor'
+    ELSE 'al_dia'
+  END AS estado
+FROM balances;
+
+
+--------------------------------------------------------------------------------
+8.6. Lógica en Backend (API)
+--------------------------------------------------------------------------------
+
+ARCHIVO: backend/routes/tesoreria.js
+ENDPOINT: GET /encargados/resumen
+
+CÓDIGO:
+-------
+const { data: saldos } = await supabase
+  .from('tesoreria_saldos_encargados_v1')
+  .select('cuenta_id, encargado_id, deuda_pendiente, saldo_a_favor, balance_neto, estado');
+
+const resultado = saldos.map(saldo => ({
+  cuenta_id: saldo.cuenta_id,
+  encargado_id: saldo.encargado_id,
+  deuda_pendiente: Number(saldo.deuda_pendiente) || 0,
+  saldo_a_favor: Number(saldo.saldo_a_favor) || 0,
+  balance_neto: Number(saldo.balance_neto) || 0,
+  estado: saldo.estado || 'al_dia',
+  encargados: { ... }
+}));
+
+return res.json(resultado);
+
+El backend NO hace cálculos, solo pasa los datos de la vista.
+
+
+--------------------------------------------------------------------------------
+8.7. Lógica en Frontend (React)
+--------------------------------------------------------------------------------
+
+ARCHIVO: LInguistika-Studio/views/Tesoreria.tsx
+
+TYPE DEFINITION:
+----------------
+type EncargadoResumenItem = {
+  cuenta_id: number;
+  encargado_id: number;
+  deuda_pendiente: number;
+  saldo_a_favor: number;
+  balance_neto: number;
+  estado: 'deuda' | 'saldo_favor' | 'al_dia';
+  encargados?: { ... } | null;
+};
+
+UI COMPONENT:
+-------------
+<div className={`rounded-2xl border p-4 ${
+  estado === 'deuda' ? 'border-red-500/30 bg-red-500/5' :
+  estado === 'saldo_favor' ? 'border-green-500/30 bg-green-500/5' :
+  'border-blue-500/30 bg-blue-500/5'
+}`}>
+  
+  {estado === 'deuda' && (
+    <>
+      <div className="text-sm text-red-300">🔴 Deuda pendiente</div>
+      <div className="text-3xl font-black text-red-400">
+        {formatCRC(deuda_pendiente)}
+      </div>
+      <Button onClick={openPago} variant="destructive">
+        Pagar
+      </Button>
+    </>
+  )}
+  
+  {estado === 'saldo_favor' && (
+    <>
+      <div className="text-sm text-green-300">🟢 Saldo a favor</div>
+      <div className="text-3xl font-black text-green-400">
+        {formatCRC(saldo_a_favor)}
+      </div>
+      <div className="text-xs text-green-200 mt-2">
+        Disponible para aplicar
+      </div>
+    </>
+  )}
+  
+  {estado === 'al_dia' && (
+    <>
+      <div className="text-sm text-blue-300">✅ Cuenta al día</div>
+      <div className="text-3xl font-black text-blue-400">
+        {formatCRC(0)}
+      </div>
+      <div className="text-xs text-blue-200 mt-2">
+        Sin pagos pendientes
+      </div>
+    </>
+  )}
+</div>
+
+NOTA CRÍTICA:
+  NUNCA se renderizan ambas tarjetas (deuda y saldo) simultáneamente.
+  Es mutuamente excluyente basado en el estado.
+
+
+================================================================================
+9. CASOS DE USO Y EJEMPLOS PRÁCTICOS
+================================================================================
+
+--------------------------------------------------------------------------------
+CASO 1: Usuario nuevo sin actividad
+--------------------------------------------------------------------------------
+
+Estado inicial:
+  - Sin obligaciones
+  - Sin pagos
+  - cuenta_id: 101
+
+Vista SQL:
+  deuda_pendiente: 0
+  saldo_a_favor: 0
+  balance_neto: 0
+  estado: 'al_dia'
+
+UI Frontend:
+  ┌──────────────────────────┐
+  │ ✅ Cuenta al día         │
+  │ ₡0                       │
+  │ Sin pagos pendientes     │
+  └──────────────────────────┘
+
+
+--------------------------------------------------------------------------------
+CASO 2: Usuario con 2 sesiones dadas, sin pagos
+--------------------------------------------------------------------------------
+
+Obligaciones:
+  - Sesión 01/02: ₡7,500 (pendiente)
+  - Sesión 08/02: ₡7,500 (pendiente)
+
+Pagos:
+  - Ninguno
+
+Vista SQL:
+  deuda_pendiente: 15000
+  saldo_a_favor: 0
+  balance_neto: 15000
+  estado: 'deuda'
+
+UI Frontend:
+  ┌──────────────────────────┐
+  │ 🔴 Deuda pendiente       │
+  │ ₡15,000                  │
+  │ [Botón: Pagar]           │
+  └──────────────────────────┘
+
+
+--------------------------------------------------------------------------------
+CASO 3: Usuario pagó menos de lo que debe
+--------------------------------------------------------------------------------
+
+Obligaciones:
+  - Sesión 01/02: ₡7,500 (aplicado)
+  - Sesión 08/02: ₡7,500 (parcial: ₡2,500 aplicados)
+  - Sesión 15/02: ₡7,500 (pendiente)
+
+Pagos:
+  - Pago 1: ₡10,000 (completado)
+
+Aplicaciones:
+  - ₡7,500 a Sesión 01/02
+  - ₡2,500 a Sesión 08/02
+
+Cálculo:
+  obligado_pendiente = 0 + 5000 + 7500 = 12500
+  total_pagado = 10000
+  total_aplicado = 10000
+  saldo_a_favor_bruto = 10000 - 10000 = 0
+  balance_neto = 12500 - 0 = 12500
+
+Vista SQL:
+  deuda_pendiente: 12500
+  saldo_a_favor: 0
+  balance_neto: 12500
+  estado: 'deuda'
+
+UI Frontend:
+  ┌──────────────────────────┐
+  │ 🔴 Deuda pendiente       │
+  │ ₡12,500                  │
+  │ [Botón: Pagar]           │
+  └──────────────────────────┘
+
+
+--------------------------------------------------------------------------------
+CASO 4: Usuario pagó exactamente lo que debe (Vanessa)
+--------------------------------------------------------------------------------
+
+Obligaciones:
+  - Sesión 01/02: ₡7,500 (pendiente, no aplicado aún)
+
+Pagos:
+  - Pago 1: ₡7,500 (completado, pero no aplicado manualmente)
+
+Aplicaciones:
+  - Ninguna (pago registrado pero no procesado por FIFO)
+
+Cálculo:
+  obligado_pendiente = 7500
+  total_pagado = 7500
+  total_aplicado = 0
+  saldo_a_favor_bruto = 7500 - 0 = 7500
+  balance_neto = 7500 - 7500 = 0
+
+Vista SQL:
+  deuda_pendiente: 0  ← Compensación automática
+  saldo_a_favor: 0    ← Compensación automática
+  balance_neto: 0
+  estado: 'al_dia'
+
+UI Frontend:
+  ┌──────────────────────────┐
+  │ ✅ Cuenta al día         │
+  │ ₡0                       │
+  │ Sin pagos pendientes     │
+  └──────────────────────────┘
+
+🎯 Este es el caso que motivó la implementación de compensación.
+   ANTES mostraba ₡7,500 deuda + ₡7,500 saldo (confuso)
+   AHORA muestra ₡0 (correcto)
+
+
+--------------------------------------------------------------------------------
+CASO 5: Usuario pagó MÁS de lo que debe
+--------------------------------------------------------------------------------
+
+Obligaciones:
+  - Sesión 01/02: ₡7,500 (aplicado)
+  - Sesión 08/02: ₡7,500 (aplicado)
+
+Pagos:
+  - Pago 1: ₡20,000 (completado)
+
+Aplicaciones:
+  - ₡7,500 a Sesión 01/02
+  - ₡7,500 a Sesión 08/02
+  - Sobran: ₡5,000
+
+Cálculo:
+  obligado_pendiente = 0
+  total_pagado = 20000
+  total_aplicado = 15000
+  saldo_a_favor_bruto = 20000 - 15000 = 5000
+  balance_neto = 0 - 5000 = -5000
+
+Vista SQL:
+  deuda_pendiente: 0
+  saldo_a_favor: 5000  ← ABS(-5000)
+  balance_neto: -5000
+  estado: 'saldo_favor'
+
+UI Frontend:
+  ┌─────────────────────────────────┐
+  │ 🟢 Saldo a favor                │
+  │ ₡5,000                          │
+  │ Disponible para aplicar         │
+  └─────────────────────────────────┘
+
+
+--------------------------------------------------------------------------------
+CASO 6: Usuario con deuda, luego paga, genera nueva deuda
+--------------------------------------------------------------------------------
+
+Timeline:
+01/02: Sesión 1 marcada → obligación ₡7,500
+05/02: Paga ₡7,500 → aplicación completa
+10/02: Sesión 2 marcada → obligación ₡7,500
+15/02: Sesión 3 marcada → obligación ₡7,500
+17/02: Consulta saldo
+
+Obligaciones:
+  - Sesión 1: ₡7,500 (aplicado)
+  - Sesión 2: ₡7,500 (pendiente)
+  - Sesión 3: ₡7,500 (pendiente)
+
+Pagos:
+  - Pago 1: ₡7,500 (completado)
+
+Aplicaciones:
+  - ₡7,500 a Sesión 1
+
+Cálculo:
+  obligado_pendiente = 0 + 7500 + 7500 = 15000
+  total_pagado = 7500
+  total_aplicado = 7500
+  saldo_a_favor_bruto = 7500 - 7500 = 0
+  balance_neto = 15000 - 0 = 15000
+
+Vista SQL:
+  deuda_pendiente: 15000
+  saldo_a_favor: 0
+  balance_neto: 15000
+  estado: 'deuda'
+
+
+================================================================================
+10. REGLAS DE NEGOCIO
+================================================================================
+
+1. IDEMPOTENCIA:
+   - No se puede cobrar dos veces la misma sesión
+   - Constraint: ux_tesoreria_obligacion_cobro_sesion ON (sesion_id)
+
+2. EVIDENCIA OBLIGATORIA:
+   - Pagos no-efectivo requieren: numero_comprobante, fecha_comprobante, comprobante_url
+   - Constraint: tesoreria_pagos_evidencia_check
+
+3. APLICACIÓN AUTOMÁTICA:
+   - Los pagos se aplican SIEMPRE en orden FIFO (fecha_devengo ASC)
+   - No es configurable por el usuario
+
+4. COMPENSACIÓN AUTOMÁTICA:
+   - NUNCA se muestra deuda y saldo simultáneamente
+   - El balance_neto determina el estado
+   - La UI muestra UNA SOLA tarjeta
+
+5. ELIMINACIÓN DE ESTUDIANTES:
+   - Si se elimina el último estudiante de un encargado:
+     * Se elimina la cuenta de tesorería (si no tiene movimientos)
+   - Si tiene movimientos, se mantiene la cuenta
+
+6. ESTADOS DE PAGO:
+   - 'pendiente': Registrado, puede faltar evidencia
+   - 'completado': Evidencia completa, listo para verificar
+   - 'verificado': Revisado y aprobado por admin
+   - 'cancelado': Anulado (no se cuenta en bolsa ni aplicaciones)
+
+7. ESTADOS DE OBLIGACIÓN:
+   - 'pendiente': Aún no cubierta completamente
+   - 'aplicado': Cubierta por aplicaciones
+   - 'cancelado': Anulada (no se cobra)
+
+8. CUENTA POR ENTIDAD:
+   - UNA SOLA cuenta por encargado
+   - UNA SOLA cuenta por tutor
+   - Constraint: ux_tesoreria_cc_encargado, ux_tesoreria_cc_tutor
+
+9. MONTOS POSITIVOS:
+   - tesoreria_obligaciones.monto >= 0
+   - tesoreria_pagos.monto > 0
+   - tesoreria_aplicaciones.monto > 0
+
+10. INTEGRIDAD REFERENCIAL:
+    - No se pueden eliminar encargados/tutores con cuentas activas (RESTRICT)
+    - Si se elimina un pago, se eliminan sus aplicaciones (CASCADE)
+    - Si se elimina una sesión, las obligaciones quedan huérfanas (SET NULL)
+
+
+================================================================================
+11. FRONTEND - COMPONENTES Y UI
+================================================================================
+
+ARCHIVO PRINCIPAL:
+  LInguistika-Studio/views/Tesoreria.tsx
+
+SECCIONES:
+----------
+1. Encargados (lista con saldos)
+2. Tutores (lista con montos por pagar)
+3. Libro Diario (transacciones cronológicas)
+4. Bolsa Real (efectivo en caja)
+5. Totales Rápidos (resumen global)
+
+COMPONENTE: Lista de Encargados
+--------------------------------
+Muestra tabla con:
+  - Nombre del encargado
+  - Balance (tarjeta condicional según estado)
+  - Botón "Ver detalles"
+  - Botón "Pagar" (solo si tiene deuda)
+
+Si estado === 'deuda':
+  ┌─────────────────────────────┐
+  │ 🔴 Deuda pendiente          │
+  │ ₡15,000                     │
+  │ [Pagar]                     │
+  └─────────────────────────────┘
+
+Si estado === 'saldo_favor':
+  ┌─────────────────────────────┐
+  │ 🟢 Saldo a favor            │
+  │ ₡5,000                      │
+  │ Disponible para aplicar     │
+  └─────────────────────────────┘
+
+Si estado === 'al_dia':
+  ┌─────────────────────────────┐
+  │ ✅ Cuenta al día            │
+  │ ₡0                          │
+  │ Sin pagos pendientes        │
+  └─────────────────────────────┘
+
+MODAL: Registrar Pago
+---------------------
+Formulario con:
+  - Monto (₡)
+  - Fecha de pago
+  - Método (efectivo, sinpe, transferencia, tarjeta)
+  - Referencia (opcional)
+  - Número de comprobante (requerido si no es efectivo)
+  - Fecha de comprobante
+  - Adjuntar archivo (imagen/PDF)
+  - Detalle (opcional)
+
+Validaciones:
+  - Monto > 0
+  - Si metodo != 'efectivo': comprobante obligatorio
+
+COMPONENTE: Libro Diario
+-------------------------
+Tabla con columnas:
+  - Fecha
+  - Cuenta (encargado/tutor)
+  - Método
+  - Referencia
+  - Debe (entrada)
+  - Haber (salida)
+  - Saldo acumulado
+  - Estado
+  - Acciones (ver comprobante)
+
+Filtros:
+  - Rango de fechas
+  - Tipo de cuenta
+  - Estado
+
+COMPONENTE: Bolsa Real
+----------------------
+Card mostrando:
+  - Bolsa real actual (neto)
+  - Total debe (ingresos)
+  - Total haber (egresos)
+
+┌─────────────────────────────┐
+│ Bolsa Real                  │
+│ ₡105,000                    │
+│                             │
+│ Debe: ₡150,000             │
+│ Haber: ₡45,000             │
+└─────────────────────────────┘
+
+
+================================================================================
+12. MANTENIMIENTO Y TROUBLESHOOTING
+================================================================================
+
+PROBLEMA: Vanessa muestra ₡7,500 deuda + ₡7,500 saldo
+CAUSA: Vista antigua sin compensación
+SOLUCIÓN:
+  1. Ejecutar COMPENSACION_AUTOMATICA_TESORERIA.sql en Supabase
+  2. Reiniciar backend
+  3. Recargar frontend
+
+PROBLEMA: Pago registrado pero NO aparece en libro diario
+CAUSA: Estado del pago es 'pendiente' o 'cancelado'
+VERIFICACIÓN:
+  SELECT * FROM tesoreria_pagos WHERE id = [pago_id]
+SOLUCIÓN:
+  UPDATE tesoreria_pagos SET estado='completado' WHERE id = [pago_id]
+
+PROBLEMA: Obligación duplicada
+CAUSA: Marcar sesión como dada dos veces
+VERIFICACIÓN:
+  SELECT * FROM tesoreria_obligaciones WHERE sesion_id = [sesion_id]
+SOLUCIÓN:
+  Los constraints ux_tesoreria_obligacion_* previenen esto automáticamente.
+  Si hay duplicados, verificar que las migraciones se aplicaron correctamente.
+
+PROBLEMA: Aplicación FIFO no funciona
+CAUSA: fecha_devengo incorrecta o obligacion.estado != 'pendiente'
+VERIFICACIÓN:
+  SELECT * FROM tesoreria_obligaciones 
+  WHERE cuenta_id = [cuenta_id] AND estado='pendiente'
+  ORDER BY fecha_devengo ASC
+SOLUCIÓN:
+  Corregir fechas o estados manualmente
+
+PROBLEMA: No se puede eliminar encargado
+CAUSA: Tiene cuenta de tesorería con movimientos
+VERIFICACIÓN:
+  SELECT * FROM tesoreria_cuentas_corrientes WHERE encargado_id = [id]
+SOLUCIÓN:
+  1. Verificar que no tiene estudiantes activos
+  2. Si tiene cuenta con obligaciones/pagos: NO eliminar (integridad contable)
+  3. Si la cuenta está vacía: eliminarla primero, luego el encargado
+
+PROBLEMA: Saldo_a_favor negativo
+IMPOSIBLE: El CASE en la vista garantiza que siempre es >= 0
+VERIFICACIÓN:
+  SELECT * FROM tesoreria_saldos_encargados_v1 WHERE saldo_a_favor < 0
+  (debería retornar 0 filas)
+
+PROBLEMA: Balance_neto incorrecto
+CAUSA RARA: Posible inconsistencia en aplicaciones
+VERIFICACIÓN MANUAL:
+  -- Para un encargado específico:
+  WITH cuentas AS (
+    SELECT id FROM tesoreria_cuentas_corrientes 
+    WHERE tipo='encargado' AND encargado_id = [X]
+  ),
+  ob AS (
+    SELECT SUM(monto) AS total
+    FROM tesoreria_obligaciones
+    WHERE cuenta_id IN (SELECT * FROM cuentas) AND estado='pendiente'
+  ),
+  pagos AS (
+    SELECT SUM(monto) AS total
+    FROM tesoreria_pagos
+    WHERE cuenta_id IN (SELECT * FROM cuentas) 
+      AND direccion='entrada' 
+      AND estado IN ('completado','verificado')
+  ),
+  app AS (
+    SELECT SUM(a.monto) AS total
+    FROM tesoreria_aplicaciones a
+    JOIN tesoreria_obligaciones o ON o.id = a.obligacion_id
+    WHERE o.cuenta_id IN (SELECT * FROM cuentas)
+  )
+  SELECT 
+    (SELECT total FROM ob) AS deuda,
+    (SELECT total FROM pagos) AS pagado,
+    (SELECT total FROM app) AS aplicado,
+    ((SELECT total FROM pagos) - (SELECT total FROM app)) AS saldo,
+    ((SELECT total FROM ob) - ((SELECT total FROM pagos) - (SELECT total FROM app))) AS balance_neto;
+
+COMANDOS ÚTILES:
+----------------
+-- Ver todas las cuentas con saldos:
+SELECT * FROM tesoreria_saldos_encargados_v1;
+
+-- Ver libro diario del mes actual:
+SELECT * FROM tesoreria_libro_diario_v1 
+WHERE fecha_pago >= date_trunc('month', CURRENT_DATE);
+
+-- Ver pagos sin aplicar:
+SELECT p.* FROM tesoreria_pagos p
+LEFT JOIN tesoreria_aplicaciones a ON a.pago_id = p.id
+WHERE a.id IS NULL AND p.estado IN ('completado','verificado');
+
+-- Ver obligaciones con aplicaciones parciales:
+SELECT 
+  o.id, 
+  o.monto AS obligado, 
+  COALESCE(SUM(a.monto), 0) AS aplicado,
+  o.monto - COALESCE(SUM(a.monto), 0) AS pendiente
+FROM tesoreria_obligaciones o
+LEFT JOIN tesoreria_aplicaciones a ON a.obligacion_id = o.id
+WHERE o.estado='pendiente'
+GROUP BY o.id, o.monto
+HAVING o.monto - COALESCE(SUM(a.monto), 0) > 0;
+
+-- Recalcular obligaciones por sesión:
+SELECT 
+  s.id AS sesion_id,
+  s.fecha,
+  COUNT(o.id) AS num_obligaciones,
+  SUM(o.monto) AS total_obligado
+FROM sesiones_clases s
+LEFT JOIN tesoreria_obligaciones o ON o.sesion_id = s.id
+WHERE s.estado = 'dada'
+GROUP BY s.id, s.fecha
+ORDER BY s.fecha DESC;
+
+-- Verificar integridad de aplicaciones (no debe haber sobre-aplicación):
+SELECT 
+  o.id, 
+  o.monto, 
+  SUM(a.monto) AS aplicado
+FROM tesoreria_obligaciones o
+JOIN tesoreria_aplicaciones a ON a.obligacion_id = o.id
+GROUP BY o.id, o.monto
+HAVING SUM(a.monto) > o.monto;
+-- Si retorna filas: HAY ERROR (aplicado más de lo obligado)
+
+
+================================================================================
+FIN DEL DOCUMENTO
+================================================================================
+
+Este documento describe COMPLETAMENTE el sistema de tesorería de Linguistika.
+
+Para actualizaciones o dudas, consultar:
+  - Migraciones: backend/migrations/017_tesoreria_v2_*.sql
+  - Código backend: backend/routes/tesoreria.js
+  - Código frontend: LInguistika-Studio/views/Tesoreria.tsx
+  - Script compensación: backend/COMPENSACION_AUTOMATICA_TESORERIA.sql
+
+Última actualización: 17 de febrero de 2026
+Versión del sistema: Tesorería v2 con Compensación Automática

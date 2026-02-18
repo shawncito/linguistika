@@ -106,10 +106,10 @@ router.post('/', async (req, res) => {
       return res.status(409).json({ error: 'Ya existe un estudiante con ese nombre' });
     }
 
-    // Validar formato de teléfono si se proporciona
-    const phoneRegex = /^(\+506\s?)?\d{4}-\d{4}$/;
+    // Validar formato de teléfono si se proporciona (acepta códigos internacionales)
+    const phoneRegex = /^(\+\d{1,4}\s?)?[\d\s-]{7,15}$/;
     if (telefono_encargado && !phoneRegex.test(telefono_encargado.trim())) {
-      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +506 8888-8888' });
+      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +XXX XXXXXXXX' });
     }
 
     const encargado_id = await getOrCreateEncargadoId({
@@ -162,10 +162,10 @@ router.put('/:id', async (req, res) => {
   try {
     const userId = req.user?.id;
     
-    // Validar formato de teléfono si se proporciona
-    const phoneRegex = /^(\+506\s?)?\d{4}-\d{4}$/;
+    // Validar formato de teléfono si se proporciona (acepta códigos internacionales)
+    const phoneRegex = /^(\+\d{1,4}\s?)?[\d\s-]{7,15}$/;
     if (req.body.telefono_encargado && !phoneRegex.test(req.body.telefono_encargado.trim())) {
-      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +506 8888-8888' });
+      return res.status(400).json({ error: 'Formato de teléfono inválido. Usa: +XXX XXXXXXXX' });
     }
 
     // Construir objeto de actualización solo con campos presentes
@@ -235,12 +235,51 @@ router.put('/:id', async (req, res) => {
 // DELETE - Eliminar estudiante permanentemente
 router.delete('/:id', async (req, res) => {
   try {
+    const estudianteId = Number(req.params.id);
+    
+    // Obtener encargado_id del estudiante antes de eliminarlo
+    const { data: estudiante, error: estErr } = await supabase
+      .from('estudiantes')
+      .select('encargado_id')
+      .eq('id', estudianteId)
+      .single();
+    
+    if (estErr && estErr.code !== 'PGRST116') throw estErr;
+    const encargadoId = estudiante?.encargado_id;
+    
+    // Eliminar estudiante
     const { error } = await supabase
       .from('estudiantes')
       .delete()
-      .eq('id', req.params.id);
+      .eq('id', estudianteId);
     
     if (error) throw error;
+    
+    // Si tenía encargado, verificar si quedan otros estudiantes con el mismo encargado
+    if (encargadoId) {
+      const { data: otrosEstudiantes, error: otrosErr } = await supabase
+        .from('estudiantes')
+        .select('id')
+        .eq('encargado_id', encargadoId)
+        .limit(1);
+      
+      if (otrosErr) throw otrosErr;
+      
+      // Si no quedan estudiantes, eliminar cuenta de tesorería del encargado
+      if (!otrosEstudiantes || otrosEstudiantes.length === 0) {
+        const { error: cuentaErr } = await supabase
+          .from('tesoreria_cuentas_corrientes')
+          .delete()
+          .eq('tipo', 'encargado')
+          .eq('encargado_id', encargadoId);
+        
+        // No lanzar error si la cuenta no existe o falla (puede no tener cuenta creada)
+        if (cuentaErr) {
+          console.warn(`No se pudo eliminar cuenta de encargado ${encargadoId}:`, cuentaErr.message);
+        }
+      }
+    }
+    
     res.json({ message: 'Estudiante eliminado correctamente' });
   } catch (error) {
     return sendSchemaError(res, error);

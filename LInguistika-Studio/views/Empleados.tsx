@@ -18,6 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from '../components/UI';
+import { PhoneInput } from '../components/PhoneInput';
 
 type RolEmpleado = 'admin' | 'contador' | 'tutor_view_only';
 
@@ -241,7 +242,7 @@ const Empleados: React.FC = () => {
 
             <div>
               <Label className="text-slate-300">Teléfono (opcional)</Label>
-              <Input value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="+506 ..." />
+              <PhoneInput value={telefono} onChange={(value) => setTelefono(value)} placeholder="..." />
             </div>
 
             <div className="md:col-span-2">
@@ -304,7 +305,7 @@ const Empleados: React.FC = () => {
                   </TableCell>
                   <TableCell>
                     {editingId === u.id ? (
-                      <Input value={editTelefono} onChange={(e) => setEditTelefono(e.target.value)} placeholder="+506 ..." />
+                      <PhoneInput value={editTelefono} onChange={(value) => setEditTelefono(value)} placeholder="..." />
                     ) : (
                       (u.telefono ?? '—')
                     )}

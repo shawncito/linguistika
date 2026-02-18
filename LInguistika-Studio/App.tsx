@@ -20,7 +20,7 @@ import { auth } from './services/api';
 import { api } from './services/api';
 import { ActivityLogDrawer, ACTIVITY_LAST_SEEN_KEY } from './components/ActivityLogDrawer';
 
-const TopNav = () => {
+const TopNav: React.FC<{ canSeeTesoreria?: boolean }> = ({ canSeeTesoreria = true }) => {
   const location = useLocation();
 
   const navItems = [
@@ -29,9 +29,9 @@ const TopNav = () => {
     { name: 'Tutores', path: '/tutores', icon: <Users className="w-4 h-4" /> },
     { name: 'Cursos', path: '/cursos', icon: <BookOpen className="w-4 h-4" /> },
     { name: 'Matrículas', path: '/matriculas', icon: <ClipboardList className="w-4 h-4" /> },
-    { name: 'Tesoreria', path: '/pagos', icon: <CreditCard className="w-4 h-4" /> },
+    { name: 'Tesoreria', path: '/pagos', icon: <CreditCard className="w-4 h-4" />, requiresTesoreria: true },
     { name: 'Empleados', path: '/empleados', icon: <Users className="w-4 h-4" /> },
-  ];
+  ].filter(item => !item.requiresTesoreria || canSeeTesoreria);
 
   return (
     <nav className="flex items-center gap-2">
@@ -179,6 +179,7 @@ const AppHeader: React.FC<{
 
   const rol: string = (me?.rol ?? 'tutor_view_only') as string;
   const canSeeActivity = rol === 'admin' || rol === 'contador';
+  const canSeeTesoreria = rol === 'admin' || rol === 'contador';
 
   const roleLabel = useMemo(() => {
     switch (rol) {
@@ -445,7 +446,7 @@ const AppHeader: React.FC<{
     {/* Segunda fila: Navegación y Búsqueda */}
     <div className="h-14 flex items-center justify-between px-6 bg-[#051026]/50 gap-4 border-b border-[#FFC800]/20">
       {/* Navegación horizontal */}
-      <TopNav />
+      <TopNav canSeeTesoreria={canSeeTesoreria} />
       
       {/* Barra de búsqueda */}
       <div className="flex items-center justify-end gap-3 flex-1">
@@ -498,6 +499,31 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return <>{children}</>;
 };
 
+const RequireTesoreria: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [me, setMe] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    api.auth.me()
+      .then(setMe)
+      .catch(() => setMe(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-[#051026]">
+        <div className="text-white">Cargando...</div>
+      </div>
+    );
+  }
+
+  const rol: string = (me?.rol ?? 'tutor_view_only') as string;
+  const canSeeTesoreria = rol === 'admin' || rol === 'contador';
+  
+  return canSeeTesoreria ? <>{children}</> : <Navigate to="/" replace />;
+};
+
 const ProtectedLayout: React.FC = () => {
   const [uiScale, setUiScale] = useState<number>(() => {
     try {
@@ -547,7 +573,7 @@ const App: React.FC = () => {
           <Route path="/cursos" element={<Cursos />} />
           <Route path="/estudiantes" element={<Estudiantes />} />
           <Route path="/matriculas" element={<Matriculas />} />
-          <Route path="/pagos" element={<Tesoreria />} />
+          <Route path="/pagos" element={<RequireTesoreria><Tesoreria /></RequireTesoreria>} />
           <Route path="/empleados" element={<Empleados />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

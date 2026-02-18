@@ -315,6 +315,7 @@ FROM public.tesoreria_pagos p
 JOIN public.tesoreria_cuentas_corrientes cc ON cc.id = p.cuenta_id;
 
 -- Saldos por encargado: deuda pendiente + saldo a favor
+-- SISTEMA V2 ÚNICAMENTE: Solo usa obligaciones, NO movimientos_dinero
 CREATE OR REPLACE VIEW public.tesoreria_saldos_encargados_v1 AS
 WITH cc AS (
   SELECT id AS cuenta_id, encargado_id
@@ -329,17 +330,6 @@ ob AS (
   FROM public.tesoreria_obligaciones o
   WHERE o.tipo='cobro_sesion'
   GROUP BY o.cuenta_id
-),
--- Deudas de movimientos_dinero (cierre mensual de cursos pagados mensualmente)
-mov_deudas AS (
-  SELECT
-    e.encargado_id,
-    SUM(CASE WHEN md.estado = 'pendiente' AND md.tipo = 'ingreso_estudiante' THEN md.monto ELSE 0 END) AS movimiento_pendiente
-  FROM public.movimientos_dinero md
-  JOIN public.matriculas m ON m.id = md.matricula_id
-  JOIN public.estudiantes e ON e.id = m.estudiante_id
-  WHERE md.estado = 'pendiente' AND md.tipo = 'ingreso_estudiante'
-  GROUP BY e.encargado_id
 ),
 app AS (
   SELECT
@@ -360,11 +350,10 @@ pagos AS (
 SELECT
   cc.encargado_id,
   cc.cuenta_id,
-  COALESCE(ob.obligado_pendiente, 0) + COALESCE(mov_deudas.movimiento_pendiente, 0) AS deuda_pendiente,
+  COALESCE(ob.obligado_pendiente, 0) AS deuda_pendiente,
   GREATEST(COALESCE(pagos.total_pagado, 0) - COALESCE(app.total_aplicado, 0), 0) AS saldo_a_favor
 FROM cc
 LEFT JOIN ob ON ob.cuenta_id = cc.cuenta_id
-LEFT JOIN mov_deudas ON mov_deudas.encargado_id = cc.encargado_id
 LEFT JOIN app ON app.cuenta_id = cc.cuenta_id
 LEFT JOIN pagos ON pagos.cuenta_id = cc.cuenta_id;
 

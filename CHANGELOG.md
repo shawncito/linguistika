@@ -114,6 +114,12 @@ Implementación de logos personalizados, calendario interactivo en Dashboard, re
 </div>
 ```
 
+## v0.3.0-alpha
+
+- Fecha: 2026-02-17
+- Resumen: Integración del `Desglose de clases` en la tarjeta principal de Tesorería, carga automática de obligaciones al seleccionar encargado, y normalización de la API de bolsa. Ver `RELEASE_v0.3.0-alpha.md` para detalles.
+
+
 #### Cards Oscuras
 - `bg-[#0F2445]`
 - `border-white/10`

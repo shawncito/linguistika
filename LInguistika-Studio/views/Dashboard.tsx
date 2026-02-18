@@ -37,6 +37,7 @@ interface SesionDelDia {
   avisado?: boolean;
   confirmado?: boolean;
   fecha?: string;
+  estado_sesion?: 'dada' | 'cancelada' | null;
 }
 
 interface MetricasFinancieras {
@@ -731,7 +732,7 @@ const Dashboard: React.FC = () => {
             tutor_id: tutor.id,
             estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
             curso_id: curso.id,
-            avisado: false,
+            avisado: true,
             confirmado: false,
             fecha
           });
@@ -750,7 +751,7 @@ const Dashboard: React.FC = () => {
             tutor_id: tutor.id,
             estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
             curso_id: curso.id,
-            avisado: false,
+            avisado: true,
             confirmado: false,
             fecha
           });
@@ -866,7 +867,7 @@ const Dashboard: React.FC = () => {
               tutor_id: tutor.id,
               estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
               curso_id: curso.id,
-              avisado: false,
+              avisado: true,
               confirmado: false,
               fecha: dateStr
             });
@@ -885,7 +886,7 @@ const Dashboard: React.FC = () => {
               tutor_id: tutor.id,
               estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
               curso_id: curso.id,
-              avisado: false,
+              avisado: true,
               confirmado: false,
               fecha: dateStr
             });
@@ -898,20 +899,25 @@ const Dashboard: React.FC = () => {
         }
       }
       
-      // Cargar estados (avisado, confirmado) desde la base de datos para todas las fechas
+      // Cargar estados (avisado, confirmado, estado_sesion) desde la base de datos para todas las fechas
       for (const dateStr of Object.keys(sesionesmes)) {
         try {
           const estados = await api.dashboard.obtenerEstadosClases(dateStr);
           // Crear un mapa de matricula_id -> estado para búsqueda rápida
           const estadosMap: Record<number, any> = {};
           estados.forEach((e: any) => {
-            estadosMap[e.matricula_id] = { avisado: e.avisado, confirmado: e.confirmado };
+            estadosMap[e.matricula_id] = { 
+              avisado: e.avisado, 
+              confirmado: e.confirmado,
+              estado_sesion: e.estado_sesion || null
+            };
           });
           // Actualizar sesiones con estados reales del backend
           sesionesmes[dateStr].forEach((sesion: SesionDelDia) => {
             if (estadosMap[sesion.matricula_id]) {
               sesion.avisado = estadosMap[sesion.matricula_id].avisado || false;
               sesion.confirmado = estadosMap[sesion.matricula_id].confirmado || false;
+              sesion.estado_sesion = estadosMap[sesion.matricula_id].estado_sesion;
             }
           });
         } catch (e) {
@@ -1437,7 +1443,13 @@ const Dashboard: React.FC = () => {
                         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const isToday = dateStr === hoy;
                         const isSelected = selectedDate === dateStr;
-                        const sesionesEnDia = sesionesDelMes[dateStr] || [];
+                        const isPast = dateStr < hoy;
+                        
+                        // Filtrar sesiones pasadas: solo mostrar si fueron dadas
+                        const sesionesEnDia = isPast 
+                          ? (sesionesDelMes[dateStr] || []).filter(s => s.estado_sesion === 'dada')
+                          : (sesionesDelMes[dateStr] || []);
+                        
                         const hasClasses = sesionesEnDia.length > 0;
                         const diaSemana = getDiaSemana(dateStr);
                         const diaCorto = diaSemana.slice(0, 3);
@@ -2086,12 +2098,23 @@ const Dashboard: React.FC = () => {
                         <p className="whitespace-normal break-words"><span className="font-semibold text-slate-200">{sesion.estudiante_nombre}</span></p>
                         <p className="text-slate-500 text-[11px]">Docente: {sesion.tutor_nombre}</p>
                         <div className="flex items-center gap-2 text-[11px]">
-                          <span className={`px-2 py-0.5 rounded-full border text-[10px] ${enCurso ? 'border-cyan-300 text-cyan-200 bg-cyan-400/10' : sesion.avisado ? 'border-amber-300 text-amber-200 bg-amber-300/10' : 'border-slate-500 text-slate-400 bg-slate-700/30'}`}>
-                            {enCurso ? 'En curso' : sesion.avisado ? 'En espera' : 'Programada'}
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-full border text-[10px] ${sesion.confirmado ? 'border-emerald-400 text-emerald-300 bg-emerald-400/10' : 'border-amber-400 text-amber-200 bg-amber-400/10'}`}>
-                            {sesion.confirmado ? 'Confirmada' : 'Confirmar'}
-                          </span>
+                          {sesion.estado_sesion === 'dada' ? (
+                            <span className="px-2 py-0.5 rounded-full border text-[10px] border-emerald-400 text-emerald-300 bg-emerald-400/10">
+                              Dada
+                            </span>
+                          ) : sesion.estado_sesion === 'cancelada' ? (
+                            <span className="px-2 py-0.5 rounded-full border text-[10px] border-red-400 text-red-300 bg-red-400/10">
+                              Cancelada
+                            </span>
+                          ) : enCurso ? (
+                            <span className="px-2 py-0.5 rounded-full border text-[10px] border-cyan-300 text-cyan-200 bg-cyan-400/10">
+                              En curso
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full border text-[10px] border-amber-300 text-amber-200 bg-amber-300/10">
+                              Futura
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2 mt-3 text-[11px]">

@@ -173,20 +173,45 @@ const writeXlsx = async ({ res, filename, sheetName, columns, rows }) => {
 
 router.get('/encargados/resumen', async (_req, res) => {
   try {
-    // Traer TODOS los encargados
-    const { data: todosEncargados, error: encErr } = await supabase
+    // Traer solo encargados que tienen estudiantes activos o cuenta de tesorería
+    const { data: encargadosConEstudiantes, error: encErr } = await supabase
       .from('encargados')
-      .select('id, nombre, email, telefono')
+      .select(`
+        id, nombre, email, telefono,
+        estudiantes!inner(id)
+      `)
       .order('nombre', { ascending: true });
 
     if (encErr) throw encErr;
 
-    // Traer saldos solo de los que tienen movimientos
+    // Traer saldos de los que tienen cuenta de tesorería (con compensación automática)
     const { data: saldos, error: saldErr } = await supabase
       .from('tesoreria_saldos_encargados_v1')
-      .select('cuenta_id, encargado_id, deuda_pendiente, saldo_a_favor');
+      .select('cuenta_id, encargado_id, deuda_pendiente, saldo_a_favor, balance_neto, estado');
 
     if (saldErr) throw saldErr;
+
+    // IDs de encargados con estudiantes
+    const idsConEstudiantes = new Set(
+      (encargadosConEstudiantes || []).map(e => e.id)
+    );
+
+    // IDs de encargados con cuenta de tesorería
+    const idsConCuenta = new Set(
+      (saldos || []).map(s => s.encargado_id)
+    );
+
+    // Combinar ambos sets (union)
+    const todosIds = new Set([...idsConEstudiantes, ...idsConCuenta]);
+
+    // Obtener datos completos de encargados
+    const { data: todosEncargados, error: encTodosErr } = await supabase
+      .from('encargados')
+      .select('id, nombre, email, telefono')
+      .in('id', Array.from(todosIds))
+      .order('nombre', { ascending: true });
+
+    if (encTodosErr) throw encTodosErr;
 
     // Crear mapa de saldos por encargado_id
     const saldosMap = (saldos || []).reduce((acc, s) => {
@@ -194,7 +219,7 @@ router.get('/encargados/resumen', async (_req, res) => {
       return acc;
     }, {});
 
-    // Combinar todos los encargados con sus saldos (si existen)
+    // Combinar encargados con sus saldos (con balance neto y compensación)
     const resultado = (todosEncargados || []).map(enc => {
       const saldo = saldosMap[enc.id] || {};
       return {
@@ -202,6 +227,8 @@ router.get('/encargados/resumen', async (_req, res) => {
         encargado_id: enc.id,
         deuda_pendiente: Number(saldo.deuda_pendiente) || 0,
         saldo_a_favor: Number(saldo.saldo_a_favor) || 0,
+        balance_neto: Number(saldo.balance_neto) || 0,
+        estado: saldo.estado || 'al_dia',
         encargados: {
           id: enc.id,
           nombre: enc.nombre,

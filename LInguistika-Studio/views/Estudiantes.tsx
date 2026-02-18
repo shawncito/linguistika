@@ -4,6 +4,7 @@ import { supabaseClient } from '../lib/supabaseClient';
 import { usePersistentState } from '../lib/usePersistentState';
 import { Estudiante } from '../types';
 import { Button, Card, CardHeader, CardTitle, CardDescription, CardContent, Input, Label, Select, Badge, Dialog, Table, TableHead, TableHeader, TableRow, TableCell, TableBody } from '../components/UI';
+import { PhoneInput } from '../components/PhoneInput';
 import { Plus, Edit, Trash2, Mail, Phone, User, X, MoreVertical, Filter, Layers, Table as TableIcon, CheckCircle2, XCircle, Upload, FolderKanban, Wand2, GraduationCap, ArrowLeft, Users } from 'lucide-react';
 
 const GRADOS = ['1ro', '2do', '3ro', '4to', '5to', '6to', '7mo', '8vo', '9no', '10mo', '11mo', 'No aplica'];
@@ -2437,11 +2438,11 @@ const Estudiantes: React.FC = () => {
 
                   <div>
                     <Label>Teléfono del Encargado</Label>
-                    <Input
+                    <PhoneInput
                       value={formData.telefono_encargado}
-                      onChange={(e) => setFormData(prev => ({ ...prev, telefono_encargado: e.target.value }))}
-                      placeholder="+506 8888-8888"
-                      className={errors.telefono_encargado ? 'border-red-500' : ''}
+                      onChange={(value) => setFormData(prev => ({ ...prev, telefono_encargado: value }))}
+                      placeholder="8888-8888"
+                      error={errors.telefono_encargado}
                     />
                     {errors.telefono_encargado && <p className="text-red-500 text-sm mt-1">{errors.telefono_encargado}</p>}
                   </div>
