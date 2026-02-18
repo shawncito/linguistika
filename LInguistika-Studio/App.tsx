@@ -505,7 +505,7 @@ const RequireTesoreria: React.FC<{ children: React.ReactNode }> = ({ children })
   
   useEffect(() => {
     api.auth.me()
-      .then(setMe)
+      .then((res) => setMe(res?.user ?? null))
       .catch(() => setMe(null))
       .finally(() => setLoading(false));
   }, []);
