@@ -150,6 +150,14 @@ Implementación de logos personalizados, calendario interactivo en Dashboard, re
 
 ---
 
+# Changelog - Sistema Linguistika
+
+## [2026-02-18] - Fix
+
+- ✅ Corrección: Normalización de nombres de días en la vista de `Cursos` (soluciona incompatibilidad con "Miércoles").
+  - Archivo modificado: `LInguistika-Studio/views/Cursos.tsx`
+  - Descripción: Se añadió una función `normalizeDiaKey()` y se adaptó la lógica de comparación de horarios para evitar fallos por tildes/variantes en los nombres de días.
+
 ## [2026-01-22] - Herramienta de Migración y Mejoras de Dashboard
 
 ### 🎯 Resumen

@@ -19,6 +19,15 @@ const timeToMinutes = (value?: string | null) => {
   return h * 60 + m;
 };
 
+const normalizeDiaKey = (value?: string | null) => {
+  if (value == null) return '';
+  return String(value)
+    .trim()
+    .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+};
+
 const formatRange = (inicio?: string | null, fin?: string | null) =>
   inicio && fin ? `${inicio}-${fin}` : 'Sin horario';
 
@@ -269,42 +278,53 @@ const Cursos: React.FC = () => {
     const diasCurso = formData.dias || [];
     const scheduleCurso = formData.dias_schedule || {};
 
-    tutoresActivos.forEach((tutor) => {
-      const diasHorarios = (tutor as any).dias_horarios || {};
-      const issues: string[] = [];
+      tutoresActivos.forEach((tutor) => {
+        const diasHorarios = (tutor as any).dias_horarios || {};
 
-      diasCurso.forEach((dia) => {
-        const cursoDia = scheduleCurso[dia];
-        if (!cursoDia?.hora_inicio || !cursoDia?.hora_fin) return;
+        // Construir índice por clave normalizada (ej: "Miércoles" -> "miercoles")
+        const tutorKeyByNorm: Record<string, string> = {};
+        Object.keys(diasHorarios).forEach(k => {
+          const nk = normalizeDiaKey(k);
+          if (nk && !tutorKeyByNorm[nk]) tutorKeyByNorm[nk] = k;
+        });
 
-        const tutorDia = diasHorarios?.[dia];
-        if (!tutorDia?.hora_inicio || !tutorDia?.hora_fin) {
-          issues.push(`${dia}: sin horario`);
-          return;
-        }
+        const issues: string[] = [];
 
-        const cursoInicio = timeToMinutes(cursoDia.hora_inicio);
-        const cursoFin = timeToMinutes(cursoDia.hora_fin);
-        const tutorInicio = timeToMinutes(tutorDia.hora_inicio);
-        const tutorFin = timeToMinutes(tutorDia.hora_fin);
+        diasCurso.forEach((dia) => {
+          const cursoDia = scheduleCurso[dia];
+          if (!cursoDia?.hora_inicio || !cursoDia?.hora_fin) return;
 
-        if (
-          cursoInicio == null || cursoFin == null ||
-          tutorInicio == null || tutorFin == null ||
-          cursoInicio < tutorInicio ||
-          cursoFin > tutorFin
-        ) {
-          issues.push(`${dia}: ${formatRange(cursoDia.hora_inicio, cursoDia.hora_fin)} (tutor ${formatRange(tutorDia.hora_inicio, tutorDia.hora_fin)})`);
-        }
+          const diaNorm = normalizeDiaKey(dia);
+          const tutorKey = tutorKeyByNorm[diaNorm];
+          const tutorDia = tutorKey ? diasHorarios[tutorKey] : undefined;
+
+          if (!tutorDia?.hora_inicio || !tutorDia?.hora_fin) {
+            issues.push(`${dia}: sin horario`);
+            return;
+          }
+
+          const cursoInicio = timeToMinutes(cursoDia.hora_inicio);
+          const cursoFin = timeToMinutes(cursoDia.hora_fin);
+          const tutorInicio = timeToMinutes(tutorDia.hora_inicio);
+          const tutorFin = timeToMinutes(tutorDia.hora_fin);
+
+          if (
+            cursoInicio == null || cursoFin == null ||
+            tutorInicio == null || tutorFin == null ||
+            cursoInicio < tutorInicio ||
+            cursoFin > tutorFin
+          ) {
+            issues.push(`${dia}: ${formatRange(cursoDia.hora_inicio, cursoDia.hora_fin)} (tutor ${formatRange(tutorDia.hora_inicio, tutorDia.hora_fin)})`);
+          }
+        });
+
+        map[tutor.id] = {
+          compatible: issues.length === 0,
+          detalles: issues.length
+            ? `No cubre: ${issues.join(' · ')}`
+            : 'Disponible para todos los días y horarios del curso',
+        };
       });
-
-      map[tutor.id] = {
-        compatible: issues.length === 0,
-        detalles: issues.length
-          ? `No cubre: ${issues.join(' · ')}`
-          : 'Disponible para todos los días y horarios del curso',
-      };
-    });
 
     return map;
   }, [tutoresActivos, formData.dias, formData.dias_schedule]);
