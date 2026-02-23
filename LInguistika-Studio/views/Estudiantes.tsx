@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { api } from '../services/api';
 import { supabaseClient } from '../lib/supabaseClient';
 import { usePersistentState } from '../lib/usePersistentState';
@@ -233,6 +234,37 @@ const Estudiantes: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Open detail if URL has ?open=<id>
+  const location = useLocation();
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const openId = params.get('open');
+    if (openId) {
+      const id = Number(openId);
+      if (!Number.isNaN(id)) {
+        api.estudiantes.getById(id)
+          .then((e) => {
+            if (e) {
+              setSelectedEstudiante({
+                key: `est-${e.id}`,
+                kind: 'normal',
+                id: e.id,
+                nombre: e.nombre,
+                grado: e.grado ?? null,
+                estado: typeof e.estado === 'number' ? e.estado : e.estado ? 1 : 0,
+                email: e.correo ?? e.email ?? null,
+                nombre_encargado: e.nombre_encargado ?? null,
+                email_encargado: e.email_encargado ?? null,
+                telefono: e.telefono ?? null,
+              });
+              setDetailOpen(true);
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  }, [location.search]);
 
   const downloadBulkTemplate = async () => {
     setBulkMsg(null);

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { useLocation } from "react-router-dom";
 import { api } from "../services/api";
 import { supabaseClient } from "../lib/supabaseClient";
 import { usePersistentState } from "../lib/usePersistentState";
@@ -131,6 +132,29 @@ const Tutores: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  const location = useLocation();
+
+  // Open detail if URL has ?open=<id> (works with HashRouter via location.search)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const openId = params.get('open');
+    if (openId) {
+      const id = Number(openId);
+      if (!Number.isNaN(id)) {
+        api.tutores.getById(id)
+          .then((t) => {
+            if (t) {
+              setSelectedTutor(t);
+              setDetailOpen(true);
+            }
+          })
+          .catch(() => {
+            // ignore
+          });
+      }
+    }
+  }, [location.search]);
 
   const especialidadesDisponibles = useMemo(() => {
     const set = new Set<string>();
