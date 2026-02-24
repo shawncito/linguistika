@@ -531,6 +531,10 @@ const Tutores: React.FC = () => {
                         >
                           {selectedTutor.especialidad}
                         </Badge>
+                        {/* Grupo */}
+                        <div className="mt-2 text-xs text-slate-500">Grupo: {selectedTutor.grupo || "Sin grupo"}</div>
+                        {/* Encargado */}
+                        <div className="mt-1 text-xs text-blue-500">Encargado: {selectedTutor.encargado || "Sin encargado"}</div>
                       </div>
                     </div>
 
