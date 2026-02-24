@@ -2359,23 +2359,32 @@ const Dashboard: React.FC = () => {
             <CardDescription className="text-xs">Conteo de estudiantes activos por docente</CardDescription>
           </CardHeader>
           <CardContent>
-            {resumenTutores.length === 0 ? (
+            {tutoresMapa && matriculasLista && Object.values(tutoresMapa).length === 0 ? (
               <div className="text-xs text-slate-400 font-bold uppercase tracking-widest py-6 text-center">Sin datos</div>
             ) : (
               <div className="space-y-2 max-h-[400px] overflow-y-auto">
-                {resumenTutores.map((r) => (
-                  <button onClick={() => cargarAlumnosTutor(r.tutor_id, r.tutor_nombre)} key={r.tutor_id} className="w-full flex items-center justify-between p-2.5 rounded-xl border border-white/10 hover:border-[#00AEEF]/30 hover:bg-white/5 transition-all">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-white font-bold text-xs">
-                        {r.tutor_nombre.charAt(0)}
+                {Object.values(tutoresMapa).map((tutor) => {
+                  // Filtrar matrículas activas de este tutor
+                  const matrics = (matriculasLista || []).filter((m) => m.tutor_id === tutor.id && m.estado !== 0);
+                  // Contar alumnos individuales
+                  const individuales = matrics.filter((m) => !m.es_grupo && m.estudiante_id).length;
+                  // Contar alumnos grupales
+                  const grupales = matrics.filter((m) => m.es_grupo && Array.isArray(m.estudiante_ids)).reduce((acc, m) => acc + m.estudiante_ids.length, 0);
+                  const total = individuales + grupales;
+                  return (
+                    <button onClick={() => cargarAlumnosTutor(tutor.id, tutor.nombre)} key={tutor.id} className="w-full flex items-center justify-between p-2.5 rounded-xl border border-white/10 hover:border-[#00AEEF]/30 hover:bg-white/5 transition-all">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-white font-bold text-xs">
+                          {tutor.nombre.charAt(0)}
+                        </div>
+                        <span className="font-semibold text-slate-200 text-sm">{tutor.nombre}</span>
                       </div>
-                      <span className="font-semibold text-slate-200 text-sm">{r.tutor_nombre}</span>
-                    </div>
-                    <span className="text-[11px] font-bold text-[#FFC800] bg-[#FFC800]/15 px-2.5 py-1 rounded-full border border-[#FFC800]/30">
-                      {r.total_estudiantes}
-                    </span>
-                  </button>
-                ))}
+                      <span className="text-[11px] font-bold text-[#FFC800] bg-[#FFC800]/15 px-2.5 py-1 rounded-full border border-[#FFC800]/30">
+                        {total}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </CardContent>
