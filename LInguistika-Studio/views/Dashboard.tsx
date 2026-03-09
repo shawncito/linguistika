@@ -1828,7 +1828,7 @@ const Dashboard: React.FC = () => {
 
       {/* Sidebar derecha - 30% */}
       <aside className="w-[30%] space-y-6 sticky top-24 self-start">
-        {programacionSesion?.modo === 'info' && (
+        {programacionSesion && (
           <Card className="border-white/10 bg-[#0F2445] overflow-hidden">
             <div className="h-1.5 bg-[#FFC800]/45" />
             <CardHeader className="border-b border-white/10 bg-white/5">

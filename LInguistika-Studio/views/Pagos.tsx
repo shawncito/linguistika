@@ -1,4 +1,4 @@
-
+﻿
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
 import { supabaseClient } from '../lib/supabaseClient';
@@ -977,17 +977,39 @@ const Pagos: React.FC = () => {
               <li><span className="font-black text-rose-200">Haber</span>: liquidaciones/pagos a tutores + salidas manuales.</li>
             </ul>
           </div>
+        </div>
+      </Dialog>
 
-                className="h-11"
-                onClick={() => {
-                  setSesionPickerQuery('');
-                  cargarSesionesPendientesPicker({ q: '' });
-                }}
-                disabled={sesionPickerLoading}
-              >
-                Limpiar
-              </Button>
-            </div>
+      <Dialog
+        isOpen={sesionPickerOpen}
+        onClose={() => setSesionPickerOpen(false)}
+        title="Buscar sesión pendiente"
+        maxWidthClass="max-w-xl"
+        zIndex={300}
+      >
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            <Input
+              value={sesionPickerQuery}
+              onChange={(e) => {
+                setSesionPickerQuery(e.target.value);
+                cargarSesionesPendientesPicker({ q: e.target.value });
+              }}
+              placeholder="Buscar por estudiante, tutor o curso…"
+              className="flex-1 h-11"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11"
+              onClick={() => {
+                setSesionPickerQuery('');
+                cargarSesionesPendientesPicker({ q: '' });
+              }}
+              disabled={sesionPickerLoading}
+            >
+              Limpiar
+            </Button>
           </div>
 
           <div className="text-xs text-slate-400">
@@ -1136,6 +1158,27 @@ const Pagos: React.FC = () => {
                             )}
                           </div>
 
+                          {ingresoPendientesLoading && (
+                            <div className="py-3 text-sm text-slate-400 font-semibold">Cargando sesiones pendientes…</div>
+                          )}
+                          {ingresoPendientesError ? (
+                            <div className="rounded-xl border border-rose-400/20 bg-rose-500/10 p-3 text-rose-100 text-sm font-semibold">{ingresoPendientesError}</div>
+                          ) : null}
+                          <div>
+                            {(ingresoPendientes || []).length > 0 && (
+                              <div className="rounded-2xl border border-white/10 overflow-hidden">
+                                {(ingresoPendientes || []).map((it: any) => {
+                                  const movId = Number(it?.movimiento_id) || 0;
+                                  const fecha = it?.fecha_sesion || it?.fecha_pago || '';
+                                  const hora = it?.hora_inicio && it?.hora_fin ? `${it.hora_inicio} - ${it.hora_fin}` : '';
+                                  const curso = it?.curso_nombre || '—';
+                                  const checked = ingresoSeleccionSet.has(movId);
+                                  return (
+                                    <label
+                                      key={movId}
+                                      className="flex items-start justify-between px-4 py-3 cursor-pointer hover:bg-white/5 transition-colors select-none gap-4"
+                                    >
+                                      <div className="flex items-start gap-3 flex-1">
                                           <input
                                             type="checkbox"
                                             className="mt-1 h-4 w-4"
@@ -2257,6 +2300,7 @@ const Pagos: React.FC = () => {
                   Al usar “Cobrar”, se abre el panel de pago del estudiante abajo. Debes seleccionar las sesiones a cubrir y,
                   si el método no es efectivo, el comprobante es obligatorio.
                 </div>
+              </div>
 
             </Card>
           )}

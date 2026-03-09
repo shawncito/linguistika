@@ -253,7 +253,7 @@ const Estudiantes: React.FC = () => {
                 nombre: e.nombre,
                 grado: e.grado ?? null,
                 estado: typeof e.estado === 'number' ? e.estado : e.estado ? 1 : 0,
-                email: e.correo ?? e.email ?? null,
+                email: (e as any).correo ?? e.email ?? null,
                 nombre_encargado: e.nombre_encargado ?? null,
                 email_encargado: e.email_encargado ?? null,
                 telefono: e.telefono ?? null,

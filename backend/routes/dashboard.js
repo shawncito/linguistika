@@ -1554,7 +1554,7 @@ router.get('/estados-clases-rango', async (req, res) => {
     const inicio = String(fecha_inicio || '').trim();
     const fin = String(fecha_fin || '').trim();
 
-    if (!isValidISODate(inicio) || !isValidISODate(fin)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(inicio) || !/^\d{4}-\d{2}-\d{2}$/.test(fin)) {
       return res.status(400).json({ error: 'fecha_inicio y fecha_fin son requeridas (YYYY-MM-DD)' });
     }
 
@@ -1564,14 +1564,15 @@ router.get('/estados-clases-rango', async (req, res) => {
       ttlMs: 10_000,
       bypass,
       compute: async () => {
+        const db = supabaseAdmin ?? supabaseForToken(req.accessToken);
         const [clasesRes, sesionesRes] = await Promise.all([
-          supabase
+          db
             .from('clases')
             .select('id, matricula_id, fecha, avisado, confirmado, motivo_cancelacion')
             .gte('fecha', inicio)
             .lte('fecha', fin)
             .order('id', { ascending: false }),
-          supabase
+          db
             .from('sesiones_clases')
             .select('id, matricula_id, fecha, estado')
             .gte('fecha', inicio)
