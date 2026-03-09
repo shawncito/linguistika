@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 import ExcelJS from 'exceljs';
 import { createClient } from '@supabase/supabase-js';
 import { supabase, supabaseAdmin } from '../../shared/config/supabaseClient.mjs';
-import { registerPagoEncargadoV1, registrarPagoTutorV1, updatePagoEvidenciaYEstado } from '../../shared/utils/tesoreria/registrarMovimiento.mjs';
+import { registrarPagoEncargadoV1, registrarPagoTutorV1, updatePagoEvidenciaYEstado } from '../../shared/utils/tesoreria/registrarMovimiento.mjs';
 import { AppError } from '../../shared/errors/AppError.mjs';
 import { TESORERIA_DEFAULT_LIMIT, TESORERIA_MAX_LIMIT } from './tesoreria.schemas.mjs';
 
@@ -279,7 +279,7 @@ export async function getObligacionesTutor(tutorId) {
 /* ─── Pagos ──────────────────────────────────────────────────────────────── */
 
 export async function registrarPagoEncargado({ encargadoId, body, userId }) {
-  return registerPagoEncargadoV1({ encargadoId, ...body, registradoPor: userId });
+  return registrarPagoEncargadoV1({ encargadoId, ...body, registradoPor: userId });
 }
 
 export async function registrarPagoTutor({ tutorId, body, userId }) {
