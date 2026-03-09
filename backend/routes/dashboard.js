@@ -6,6 +6,28 @@ import { schemaErrorPayload } from '../utils/schemaErrors.js';
 
 const router = express.Router();
 
+const dashboardCache = new Map();
+
+function shouldBypassCache(req) {
+  const value = String(req?.query?.no_cache ?? '').toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+async function getCachedOrCompute({ key, ttlMs, bypass = false, compute }) {
+  const now = Date.now();
+  if (!bypass) {
+    const cached = dashboardCache.get(key);
+    if (cached && cached.expiresAt > now) return cached.value;
+  }
+
+  const value = await compute();
+  dashboardCache.set(key, {
+    value,
+    expiresAt: now + Math.max(1, Number(ttlMs) || 1),
+  });
+  return value;
+}
+
 function sendSchemaError(res, error) {
   const payload = schemaErrorPayload(error);
   if (payload) return res.status(400).json(payload);
@@ -371,30 +393,38 @@ router.get('/resumen-tutores/:fecha', async (req, res) => {
 // GET - Resumen por tutor: conteo de estudiantes activos
 router.get('/resumen-tutores-estudiantes', async (_req, res) => {
   try {
-    const { data: matriculas, error } = await supabase
-      .from('matriculas')
-      .select('tutor_id, estudiante_id')
-      .eq('estado', true);
-    if (error) throw error;
+    const bypass = shouldBypassCache(_req);
+    const resultado = await getCachedOrCompute({
+      key: 'dashboard:resumen-tutores-estudiantes',
+      ttlMs: 30_000,
+      bypass,
+      compute: async () => {
+        const { data: matriculas, error } = await supabase
+          .from('matriculas')
+          .select('tutor_id, estudiante_id')
+          .eq('estado', true);
+        if (error) throw error;
 
-    const { data: tutores, error: tErr } = await supabase
-      .from('tutores')
-      .select('id, nombre')
-      .eq('estado', true);
-    if (tErr) throw tErr;
+        const { data: tutores, error: tErr } = await supabase
+          .from('tutores')
+          .select('id, nombre')
+          .eq('estado', true);
+        if (tErr) throw tErr;
 
-    const mapa = new Map();
-    for (const m of matriculas || []) {
-      const key = m.tutor_id;
-      if (!mapa.has(key)) mapa.set(key, new Set());
-      mapa.get(key).add(m.estudiante_id);
-    }
+        const mapa = new Map();
+        for (const m of matriculas || []) {
+          const key = m.tutor_id;
+          if (!mapa.has(key)) mapa.set(key, new Set());
+          mapa.get(key).add(m.estudiante_id);
+        }
 
-    const resultado = (tutores || []).map(t => ({
-      tutor_id: t.id,
-      tutor_nombre: t.nombre,
-      total_estudiantes: mapa.get(t.id)?.size || 0
-    })).sort((a, b) => b.total_estudiantes - a.total_estudiantes);
+        return (tutores || []).map(t => ({
+          tutor_id: t.id,
+          tutor_nombre: t.nombre,
+          total_estudiantes: mapa.get(t.id)?.size || 0
+        })).sort((a, b) => b.total_estudiantes - a.total_estudiantes);
+      },
+    });
 
     res.json(resultado);
   } catch (error) {
@@ -405,34 +435,42 @@ router.get('/resumen-tutores-estudiantes', async (_req, res) => {
 // GET - Resumen por curso: conteo de estudiantes y grupos
 router.get('/resumen-cursos-grupos', async (_req, res) => {
   try {
-    const { data: matriculas, error } = await supabase
-      .from('matriculas')
-      .select('curso_id, estudiante_id, grupo_id, es_grupo, grupo_nombre')
-      .eq('estado', true);
-    if (error) throw error;
+    const bypass = shouldBypassCache(_req);
+    const resultado = await getCachedOrCompute({
+      key: 'dashboard:resumen-cursos-grupos',
+      ttlMs: 30_000,
+      bypass,
+      compute: async () => {
+        const { data: matriculas, error } = await supabase
+          .from('matriculas')
+          .select('curso_id, estudiante_id, grupo_id, es_grupo, grupo_nombre')
+          .eq('estado', true);
+        if (error) throw error;
 
-    const { data: cursos, error: cErr } = await supabase
-      .from('cursos')
-      .select('id, nombre, grado_activo, grado_nombre, grado_color, tipo_clase, max_estudiantes')
-      .eq('estado', true);
-    if (cErr) throw cErr;
+        const { data: cursos, error: cErr } = await supabase
+          .from('cursos')
+          .select('id, nombre, grado_activo, grado_nombre, grado_color, tipo_clase, max_estudiantes')
+          .eq('estado', true);
+        if (cErr) throw cErr;
 
-    const resultado = (cursos || []).map(curso => {
-      const mats = (matriculas || []).filter(m => m.curso_id === curso.id);
-      const estudiantesSet = new Set(mats.map(m => m.estudiante_id));
-      const gruposSet = new Set(mats.filter(m => m.es_grupo).map(m => m.grupo_id));
-      return {
-        curso_id: curso.id,
-        curso_nombre: curso.nombre,
-        grado_activo: curso.grado_activo,
-        grado_nombre: curso.grado_nombre,
-        grado_color: curso.grado_color,
-        tipo_clase: curso.tipo_clase,
-        max_estudiantes: curso.max_estudiantes,
-        total_estudiantes: estudiantesSet.size,
-        total_grupos: gruposSet.size,
-      };
-    }).sort((a, b) => b.total_estudiantes - a.total_estudiantes);
+        return (cursos || []).map(curso => {
+          const mats = (matriculas || []).filter(m => m.curso_id === curso.id);
+          const estudiantesSet = new Set(mats.map(m => m.estudiante_id));
+          const gruposSet = new Set(mats.filter(m => m.es_grupo).map(m => m.grupo_id));
+          return {
+            curso_id: curso.id,
+            curso_nombre: curso.nombre,
+            grado_activo: curso.grado_activo,
+            grado_nombre: curso.grado_nombre,
+            grado_color: curso.grado_color,
+            tipo_clase: curso.tipo_clase,
+            max_estudiantes: curso.max_estudiantes,
+            total_estudiantes: estudiantesSet.size,
+            total_grupos: gruposSet.size,
+          };
+        }).sort((a, b) => b.total_estudiantes - a.total_estudiantes);
+      },
+    });
 
     res.json(resultado);
   } catch (error) {
@@ -475,63 +513,70 @@ router.get('/debug/matriculas-cursos', async (req, res) => {
 // GET - Estadísticas generales
 router.get('/estadisticas/general', async (req, res) => {
   try {
-    const [tutoresRes, estudiantesRes, cursosRes, matriculasRes, clasesRes] = await Promise.all([
-      supabase.from('tutores').select('id', { count: 'exact', head: true }).eq('estado', true),
-      supabase.from('estudiantes').select('id', { count: 'exact', head: true }).eq('estado', true),
-      supabase.from('cursos').select('id', { count: 'exact', head: true }).eq('estado', true),
-      supabase.from('matriculas').select('id', { count: 'exact', head: true }).eq('estado', true),
-      supabase.from('clases').select('id', { count: 'exact', head: true }),
-    ]);
+    const bypass = shouldBypassCache(req);
+    const data = await getCachedOrCompute({
+      key: 'dashboard:estadisticas-general',
+      ttlMs: 20_000,
+      bypass,
+      compute: async () => {
+        const [tutoresRes, estudiantesRes, cursosRes, matriculasRes, clasesRes] = await Promise.all([
+          supabase.from('tutores').select('id', { count: 'exact', head: true }).eq('estado', true),
+          supabase.from('estudiantes').select('id', { count: 'exact', head: true }).eq('estado', true),
+          supabase.from('cursos').select('id', { count: 'exact', head: true }).eq('estado', true),
+          supabase.from('matriculas').select('id', { count: 'exact', head: true }).eq('estado', true),
+          supabase.from('clases').select('id', { count: 'exact', head: true }),
+        ]);
 
-    const safeMsg = (err) => String(err?.message || '').toLowerCase();
-    const isMissingV2 = (err) => {
-      const msg = safeMsg(err);
-      return msg.includes('does not exist') && msg.includes('tesoreria_');
-    };
+        const safeMsg = (err) => String(err?.message || '').toLowerCase();
+        const isMissingV2 = (err) => {
+          const msg = safeMsg(err);
+          return msg.includes('does not exist') && msg.includes('tesoreria_');
+        };
 
-    let dinero_ingresado_total = 0;
+        let dinero_ingresado_total = 0;
 
-    // Fuente principal: Tesorería v2 (pagos reales)
-    // Definición: total de entradas completadas/verificadas (no neto).
-    try {
-      const { data: pagos, error: pErr } = await supabase
-        .from('tesoreria_pagos')
-        .select('direccion, monto, estado')
-        .eq('direccion', 'entrada');
-      if (pErr) throw pErr;
+        try {
+          const { data: pagos, error: pErr } = await supabase
+            .from('tesoreria_pagos')
+            .select('direccion, monto, estado')
+            .eq('direccion', 'entrada');
+          if (pErr) throw pErr;
 
-      dinero_ingresado_total = (pagos || []).reduce((sum, r) => {
-        if (!isRealEstado(r?.estado)) return sum;
-        return sum + (Number(r?.monto) || 0);
-      }, 0);
-    } catch (err) {
-      // Fallback: esquema legacy (movimientos_dinero)
-      if (!isMissingV2(err)) {
-        throw err;
-      }
+          dinero_ingresado_total = (pagos || []).reduce((sum, r) => {
+            if (!isRealEstado(r?.estado)) return sum;
+            return sum + (Number(r?.monto) || 0);
+          }, 0);
+        } catch (err) {
+          if (!isMissingV2(err)) {
+            throw err;
+          }
 
-      const { data: ingresos, error: iErr } = await supabase
-        .from('movimientos_dinero')
-        .select('tipo, monto, estado')
-        .like('tipo', 'ingreso_%');
-      if (iErr) throw iErr;
+          const { data: ingresos, error: iErr } = await supabase
+            .from('movimientos_dinero')
+            .select('tipo, monto, estado')
+            .like('tipo', 'ingreso_%');
+          if (iErr) throw iErr;
 
-      dinero_ingresado_total = (ingresos || []).reduce((sum, r) => {
-        if (!isRealEstado(r?.estado)) return sum;
-        if (!isRealIngresoTipo(r?.tipo)) return sum;
-        return sum + (Number(r?.monto) || 0);
-      }, 0);
-    }
+          dinero_ingresado_total = (ingresos || []).reduce((sum, r) => {
+            if (!isRealEstado(r?.estado)) return sum;
+            if (!isRealIngresoTipo(r?.tipo)) return sum;
+            return sum + (Number(r?.monto) || 0);
+          }, 0);
+        }
 
-    res.json({
-      tutores: tutoresRes.count || 0,
-      estudiantes: estudiantesRes.count || 0,
-      cursos: cursosRes.count || 0,
-      matriculas: matriculasRes.count || 0,
-      clases_totales: clasesRes.count || 0,
-      ingresos_pendientes: dinero_ingresado_total,
-      dinero_ingresado_total
+        return {
+          tutores: tutoresRes.count || 0,
+          estudiantes: estudiantesRes.count || 0,
+          cursos: cursosRes.count || 0,
+          matriculas: matriculasRes.count || 0,
+          clases_totales: clasesRes.count || 0,
+          ingresos_pendientes: dinero_ingresado_total,
+          dinero_ingresado_total
+        };
+      },
     });
+
+    res.json(data);
   } catch (error) {
     return sendSchemaError(res, error);
   }
@@ -1495,6 +1540,71 @@ router.get('/estados-clases/:fecha', async (req, res) => {
       estado_sesion: sesionesMap.get(c.matricula_id) || null
     }));
     
+    res.json(result);
+  } catch (error) {
+    return sendSchemaError(res, error);
+  }
+});
+
+// GET estados de clases para un rango de fechas (optimiza calendario mensual)
+router.get('/estados-clases-rango', async (req, res) => {
+  try {
+    const { fecha_inicio, fecha_fin } = req.query;
+
+    const inicio = String(fecha_inicio || '').trim();
+    const fin = String(fecha_fin || '').trim();
+
+    if (!isValidISODate(inicio) || !isValidISODate(fin)) {
+      return res.status(400).json({ error: 'fecha_inicio y fecha_fin son requeridas (YYYY-MM-DD)' });
+    }
+
+    const bypass = shouldBypassCache(req);
+    const result = await getCachedOrCompute({
+      key: `dashboard:estados-rango:${inicio}:${fin}`,
+      ttlMs: 10_000,
+      bypass,
+      compute: async () => {
+        const [clasesRes, sesionesRes] = await Promise.all([
+          supabase
+            .from('clases')
+            .select('id, matricula_id, fecha, avisado, confirmado, motivo_cancelacion')
+            .gte('fecha', inicio)
+            .lte('fecha', fin)
+            .order('id', { ascending: false }),
+          supabase
+            .from('sesiones_clases')
+            .select('id, matricula_id, fecha, estado')
+            .gte('fecha', inicio)
+            .lte('fecha', fin)
+            .in('estado', ['dada', 'cancelada'])
+            .order('id', { ascending: false }),
+        ]);
+
+        if (clasesRes.error) throw clasesRes.error;
+        if (sesionesRes.error) throw sesionesRes.error;
+
+        const clasesMap = new Map();
+        for (const c of (clasesRes.data || [])) {
+          const key = `${c.fecha}|${c.matricula_id}`;
+          if (!clasesMap.has(key)) clasesMap.set(key, c);
+        }
+
+        const sesionesMap = new Map();
+        for (const s of (sesionesRes.data || [])) {
+          const key = `${s.fecha}|${s.matricula_id}`;
+          if (!sesionesMap.has(key)) sesionesMap.set(key, s.estado);
+        }
+
+        return Array.from(clasesMap.values()).map((c) => {
+          const key = `${c.fecha}|${c.matricula_id}`;
+          return {
+            ...c,
+            estado_sesion: sesionesMap.get(key) || null,
+          };
+        });
+      },
+    });
+
     res.json(result);
   } catch (error) {
     return sendSchemaError(res, error);

@@ -1,5 +1,35 @@
 # Changelog - Sistema Linguistika
 
+## [2026-03-09] - Optimización de Rendimiento en Dashboard (v0.4)
+
+### 🎯 Objetivo
+Reducir tiempos de carga inicial en `Dashboard` eliminando llamadas redundantes y consolidando consultas de estado.
+
+### ✅ Cambios realizados
+- `LInguistika-Studio/views/Dashboard.tsx`
+  - Se eliminó patrón N+1 en el cálculo de sesiones del día y del mes.
+  - Se reutilizan datos ya disponibles desde `matriculas.getAll()` (campos `curso_*`, `tutor_*`, `estudiante_*`) en vez de pedir curso/tutor/estudiante por matrícula.
+  - Se reemplazó la consulta de estados "día por día" por una sola consulta por rango mensual.
+
+- `LInguistika-Studio/services/api.ts`
+  - Nuevo método: `dashboard.obtenerEstadosClasesRango({ fecha_inicio, fecha_fin })`.
+
+- `backend/routes/dashboard.js`
+  - Nuevo endpoint: `GET /api/dashboard/estados-clases-rango`.
+  - Devuelve estados consolidados (`avisado`, `confirmado`, `estado_sesion`) para un rango de fechas.
+
+### 📈 Impacto esperado
+- Menor cantidad de requests en carga inicial de Dashboard.
+- Menor latencia percibida al abrir la vista.
+- Menor presión sobre Supabase en consultas repetitivas del calendario mensual.
+
+### 🧪 Validación
+- Archivos modificados sin errores de diagnóstico local en:
+  - `backend/routes/dashboard.js`
+  - `LInguistika-Studio/services/api.ts`
+  - `LInguistika-Studio/views/Dashboard.tsx`
+- Nota: el `typecheck` global del frontend sigue reportando errores preexistentes en `LInguistika-Studio/views/Pagos.tsx`.
+
 ## [2026-01-26] - Mejoras UI - Logos, Calendarios y Refactorización de Layouts
 
 ### 🎯 Resumen

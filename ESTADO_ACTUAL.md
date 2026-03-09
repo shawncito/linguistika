@@ -1,5 +1,36 @@
 # 📊 ESTADO ACTUAL DEL PROYECTO - LINGUISTIKA
 
+## ✅ ACTUALIZACIÓN VIGENTE (v0.4)
+
+**Fecha:** 9 de marzo de 2026  
+**Rama:** `v0.4`  
+**Estado general:** Estabilización y optimización de rendimiento (Dashboard)
+
+### Resumen de avance reciente
+- Se optimizó la carga de `Dashboard` para reducir tiempo inicial.
+- Se eliminó patrón N+1 en frontend para sesiones del día y del mes.
+- Se implementó endpoint por rango para estados de clases:
+  - `GET /api/dashboard/estados-clases-rango`
+- Se consolidó lectura de estados (`avisado`, `confirmado`, `estado_sesion`) en una sola llamada mensual.
+
+### Archivos tocados en esta fase
+- `backend/routes/dashboard.js`
+- `LInguistika-Studio/services/api.ts`
+- `LInguistika-Studio/views/Dashboard.tsx`
+- `CHANGELOG.md`
+
+### Impacto esperado
+- Menos requests al abrir Dashboard.
+- Menor carga en backend/Supabase durante render inicial.
+- Mejor experiencia percibida al entrar a la vista principal.
+
+### Pendiente técnico identificado
+- El `typecheck` global del frontend presenta errores preexistentes en:
+  - `LInguistika-Studio/views/Pagos.tsx`
+- Esto no bloquea la mejora de rendimiento del Dashboard, pero sí es recomendable corregirlo antes de una release estable.
+
+---
+
 **Fecha:** 22 de enero de 2026  
 **Rama:** master  
 **Estado:** En desarrollo (Feature: Asignación de Tutores a Cursos)

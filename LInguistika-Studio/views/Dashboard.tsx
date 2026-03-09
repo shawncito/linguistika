@@ -693,45 +693,37 @@ const Dashboard: React.FC = () => {
         return isActiva && hasCursoTutor && (isIndividual || isGrupo);
       });
       setMatriculasLista(matriculas);
-      setMatriculasLista(matriculas);
-      const cursosPromises = matriculas.map(m => api.cursos.getById(m.curso_id));
-      const tutoresPromises = matriculas.map(m => api.tutores.getById(m.tutor_id));
-      const estudiantesPromises = matriculas.map((m: any) => (m?.estudiante_id != null ? api.estudiantes.getById(m.estudiante_id) : Promise.resolve(undefined)));
-      const [cursos, tutores, estudiantes] = await Promise.all([
-        Promise.all(cursosPromises),
-        Promise.all(tutoresPromises),
-        Promise.all(estudiantesPromises)
-      ]);
 
       const sesiones: SesionDelDia[] = [];
       // Para cada matrícula activa, verificar si el curso tiene clase en el día solicitado
-      matriculas.forEach((matricula, index) => {
-        const curso = cursos[index];
-        const tutor = tutores[index];
-        const estudiante = estudiantes[index];
+      matriculas.forEach((matricula: any) => {
         const isGrupo = Boolean((matricula as any)?.es_grupo);
         const grupoNombre = String((matricula as any)?.grupo_nombre || '').trim();
         const grupoCount = Array.isArray((matricula as any)?.estudiante_ids) ? (matricula as any).estudiante_ids.length : 0;
         const estudianteNombre = !isGrupo
-          ? (estudiante?.nombre || (matricula as any)?.estudiante_nombre || `Alumno ${(matricula as any)?.estudiante_id}`)
+          ? ((matricula as any)?.estudiante_nombre || `Alumno ${(matricula as any)?.estudiante_id}`)
           : `Grupo: ${grupoNombre || 'Sin nombre'}${grupoCount ? ` (${grupoCount})` : ''}`;
-        const sched = getCursoScheduleForDay(curso, diaSemana);
+        const cursoLike = {
+          dias_schedule: (matricula as any)?.curso_dias_schedule,
+          dias_turno: (matricula as any)?.curso_dias_turno,
+        };
+        const sched = getCursoScheduleForDay(cursoLike, diaSemana);
         // Verificar si el curso tiene horario definido (dias_schedule) para este día de la semana
         if (sched?.kind === 'schedule' && sched.value) {
           const schedule = sched.value as any;
           sesiones.push({
             matricula_id: matricula.id,
-            curso_nombre: curso.nombre,
+            curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
             estudiante_nombre: estudianteNombre,
-            tutor_nombre: tutor.nombre,
+            tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
             hora_inicio: schedule.hora_inicio || schedule.horaInicio || schedule.start || '—',
             hora_fin: schedule.hora_fin || schedule.horaFin || schedule.end || '—',
             duracion_horas: schedule.duracion_horas || 0,
             turno: schedule.turno,
-            curso_tipo_pago: (curso as any)?.tipo_pago ?? null,
-            tutor_id: tutor.id,
-            estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
-            curso_id: curso.id,
+            curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
+            tutor_id: (matricula as any)?.tutor_id,
+            estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
+            curso_id: (matricula as any)?.curso_id,
             avisado: true,
             confirmado: false,
             fecha
@@ -740,17 +732,17 @@ const Dashboard: React.FC = () => {
           const turno = sched.value as any;
           sesiones.push({
             matricula_id: matricula.id,
-            curso_nombre: curso.nombre,
+            curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
             estudiante_nombre: estudianteNombre,
-            tutor_nombre: tutor.nombre,
+            tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
             hora_inicio: '—',
             hora_fin: '—',
             duracion_horas: 0,
             turno: turno,
-            curso_tipo_pago: (curso as any)?.tipo_pago ?? null,
-            tutor_id: tutor.id,
-            estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
-            curso_id: curso.id,
+            curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
+            tutor_id: (matricula as any)?.tutor_id,
+            estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
+            curso_id: (matricula as any)?.curso_id,
             avisado: true,
             confirmado: false,
             fecha
@@ -822,14 +814,6 @@ const Dashboard: React.FC = () => {
         const isGrupo = !!m?.es_grupo && Array.isArray(m?.estudiante_ids) && m.estudiante_ids.length > 0;
         return isActiva && hasCursoTutor && (isIndividual || isGrupo);
       });
-      const cursosPromises = matriculas.map(m => api.cursos.getById(m.curso_id));
-      const tutoresPromises = matriculas.map(m => api.tutores.getById(m.tutor_id));
-      const estudiantesPromises = matriculas.map((m: any) => (m?.estudiante_id != null ? api.estudiantes.getById(m.estudiante_id) : Promise.resolve(undefined)));
-      const [cursos, tutores, estudiantes] = await Promise.all([
-        Promise.all(cursosPromises),
-        Promise.all(tutoresPromises),
-        Promise.all(estudiantesPromises)
-      ]);
 
       const sesionesmes: Record<string, SesionDelDia[]> = {};
       
@@ -839,34 +823,35 @@ const Dashboard: React.FC = () => {
         const diaSemana = getDiaSemana(dateStr);
         const sesiones: SesionDelDia[] = [];
         
-        matriculas.forEach((matricula, index) => {
-          const curso = cursos[index];
-          const tutor = tutores[index];
-          const estudiante = estudiantes[index];
+        matriculas.forEach((matricula: any) => {
           const isGrupo = Boolean((matricula as any)?.es_grupo);
           const grupoNombre = String((matricula as any)?.grupo_nombre || '').trim();
           const grupoCount = Array.isArray((matricula as any)?.estudiante_ids) ? (matricula as any).estudiante_ids.length : 0;
           const estudianteNombre = !isGrupo
-            ? (estudiante?.nombre || (matricula as any)?.estudiante_nombre || `Alumno ${(matricula as any)?.estudiante_id}`)
+            ? ((matricula as any)?.estudiante_nombre || `Alumno ${(matricula as any)?.estudiante_id}`)
             : `Grupo: ${grupoNombre || 'Sin nombre'}${grupoCount ? ` (${grupoCount})` : ''}`;
 
-          const sched = getCursoScheduleForDay(curso, diaSemana);
+          const cursoLike = {
+            dias_schedule: (matricula as any)?.curso_dias_schedule,
+            dias_turno: (matricula as any)?.curso_dias_turno,
+          };
+          const sched = getCursoScheduleForDay(cursoLike, diaSemana);
           if (sched?.kind === 'schedule' && sched.value) {
             const schedule = sched.value as any;
             
             sesiones.push({
               matricula_id: matricula.id,
-              curso_nombre: curso.nombre,
+              curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
               estudiante_nombre: estudianteNombre,
-              tutor_nombre: tutor.nombre,
+              tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
               hora_inicio: schedule.hora_inicio || schedule.horaInicio || schedule.start || '—',
               hora_fin: schedule.hora_fin || schedule.horaFin || schedule.end || '—',
               duracion_horas: schedule.duracion_horas || 0,
               turno: schedule.turno,
-              curso_tipo_pago: (curso as any)?.tipo_pago ?? null,
-              tutor_id: tutor.id,
-              estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
-              curso_id: curso.id,
+              curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
+              tutor_id: (matricula as any)?.tutor_id,
+              estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
+              curso_id: (matricula as any)?.curso_id,
               avisado: true,
               confirmado: false,
               fecha: dateStr
@@ -875,17 +860,17 @@ const Dashboard: React.FC = () => {
             const turno = sched.value as any;
             sesiones.push({
               matricula_id: matricula.id,
-              curso_nombre: curso.nombre,
+              curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
               estudiante_nombre: estudianteNombre,
-              tutor_nombre: tutor.nombre,
+              tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
               hora_inicio: '—',
               hora_fin: '—',
               duracion_horas: 0,
               turno: turno,
-              curso_tipo_pago: (curso as any)?.tipo_pago ?? null,
-              tutor_id: tutor.id,
-              estudiante_id: !isGrupo ? (estudiante?.id ?? (matricula as any)?.estudiante_id) : undefined,
-              curso_id: curso.id,
+              curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
+              tutor_id: (matricula as any)?.tutor_id,
+              estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
+              curso_id: (matricula as any)?.curso_id,
               avisado: true,
               confirmado: false,
               fecha: dateStr
@@ -899,30 +884,40 @@ const Dashboard: React.FC = () => {
         }
       }
       
-      // Cargar estados (avisado, confirmado, estado_sesion) desde la base de datos para todas las fechas
-      for (const dateStr of Object.keys(sesionesmes)) {
-        try {
-          const estados = await api.dashboard.obtenerEstadosClases(dateStr);
-          // Crear un mapa de matricula_id -> estado para búsqueda rápida
-          const estadosMap: Record<number, any> = {};
-          estados.forEach((e: any) => {
-            estadosMap[e.matricula_id] = { 
-              avisado: e.avisado, 
-              confirmado: e.confirmado,
-              estado_sesion: e.estado_sesion || null
-            };
-          });
-          // Actualizar sesiones con estados reales del backend
+      // Cargar estados (avisado, confirmado, estado_sesion) en una sola llamada por rango
+      const fechaInicioMes = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+      const fechaFinMes = `${year}-${String(month + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+      try {
+        const estadosRango = await api.dashboard.obtenerEstadosClasesRango({
+          fecha_inicio: fechaInicioMes,
+          fecha_fin: fechaFinMes,
+        });
+
+        const estadosMap = new Map<string, { avisado: boolean; confirmado: boolean; estado_sesion: 'dada' | 'cancelada' | null }>();
+        (estadosRango || []).forEach((e: any) => {
+          const key = `${String(e.fecha || '').slice(0, 10)}|${e.matricula_id}`;
+          if (!key.startsWith('|')) {
+            estadosMap.set(key, {
+              avisado: Boolean(e.avisado),
+              confirmado: Boolean(e.confirmado),
+              estado_sesion: (e.estado_sesion as 'dada' | 'cancelada' | null) || null,
+            });
+          }
+        });
+
+        for (const dateStr of Object.keys(sesionesmes)) {
           sesionesmes[dateStr].forEach((sesion: SesionDelDia) => {
-            if (estadosMap[sesion.matricula_id]) {
-              sesion.avisado = estadosMap[sesion.matricula_id].avisado || false;
-              sesion.confirmado = estadosMap[sesion.matricula_id].confirmado || false;
-              sesion.estado_sesion = estadosMap[sesion.matricula_id].estado_sesion;
+            const key = `${dateStr}|${sesion.matricula_id}`;
+            const estado = estadosMap.get(key);
+            if (estado) {
+              sesion.avisado = estado.avisado;
+              sesion.confirmado = estado.confirmado;
+              sesion.estado_sesion = estado.estado_sesion;
             }
           });
-        } catch (e) {
-          console.warn(`No se pudieron cargar estados para ${dateStr}:`, e);
         }
+      } catch (e) {
+        console.warn('No se pudieron cargar estados por rango:', e);
       }
       
       setSesionesDelMes(sesionesmes);

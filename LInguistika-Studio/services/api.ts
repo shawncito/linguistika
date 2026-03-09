@@ -840,6 +840,10 @@ export const api = {
       const res = await http.get<any[]>(`/dashboard/estados-clases/${fecha}`);
       return res.data as any[];
     },
+    obtenerEstadosClasesRango: async (params: { fecha_inicio: string; fecha_fin: string }): Promise<any[]> => {
+      const res = await http.get<any[]>('/dashboard/estados-clases-rango', { params });
+      return res.data as any[];
+    },
 
     getMetricas: async (params?: { mes?: string; tutor_id?: number }): Promise<any> => {
       const res = await http.get('/dashboard/metricas', { params });
