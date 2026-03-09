@@ -2,6 +2,12 @@ const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
+// Carga variables de entorno desde backend/.env antes de importar el servidor
+const dotenvPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'backend', '.env')
+  : path.join(__dirname, '..', 'backend', '.env');
+require('dotenv').config({ path: dotenvPath });
+
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception (Electron main):', err);
 });
