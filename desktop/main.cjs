@@ -17,12 +17,12 @@ async function startBackend() {
   // En producción, el backend se copia como recurso externo (extraResources)
   // para que pueda resolver sus dependencias (backend/node_modules) fuera del asar.
   const serverPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'backend', 'server.js')
-    : path.join(__dirname, '..', 'backend', 'server.js');
+    ? path.join(process.resourcesPath, 'backend', 'src', 'main.mjs')
+    : path.join(__dirname, '..', 'backend', 'src', 'main.mjs');
   const mod = await import(pathToFileURL(serverPath).href);
 
   if (!mod?.startServer) {
-    throw new Error('backend/server.js no exporta startServer');
+    throw new Error('backend/src/main.mjs no exporta startServer');
   }
 
   // Puerto 0 => sistema elige uno libre (evita conflictos con 5000)
@@ -81,7 +81,7 @@ function createWindow(apiUrl) {
 app.whenReady().then(async () => {
   try {
     const { host, port } = await startBackend();
-    const apiUrl = `http://${host}:${port}/api`;
+    const apiUrl = `http://${host}:${port}/api/v1`;
     createWindow(apiUrl);
 
     app.on('activate', () => {

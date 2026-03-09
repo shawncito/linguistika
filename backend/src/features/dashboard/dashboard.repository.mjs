@@ -1,0 +1,208 @@
+import { supabase } from '../../shared/config/supabaseClient.mjs';
+
+const diasSemanaES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+
+function safeJsonParse(value) {
+  try {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'object') return value;
+    return JSON.parse(String(value));
+  } catch { return null; }
+}
+
+function calcDuracionHoras(hi, hf) {
+  try {
+    const [hh, mm] = String(hi).split(':').map(Number);
+    const [hh2, mm2] = String(hf).split(':').map(Number);
+    if (![hh, mm, hh2, mm2].every(Number.isFinite)) return null;
+    const min = (hh2 * 60 + mm2) - (hh * 60 + mm);
+    return min > 0 ? parseFloat((min / 60).toFixed(2)) : null;
+  } catch { return null; }
+}
+
+export async function buildTutoriasMerged(fecha, bloqueadasSet) {
+  const date = new Date(`${fecha}T00:00:00`);
+  const diaSemana = diasSemanaES[date.getDay()];
+
+  const { data: clasesRaw, error: clasesErr } = await supabase
+    .from('clases')
+    .select(`id,fecha,hora_inicio,hora_fin,estado,avisado,confirmado,motivo_cancelacion,matricula_id,
+      matriculas!inner(id,estudiante_id,tutor_id,curso_id,estado,
+        estudiantes(id,nombre),tutores(id,nombre),
+        cursos(nombre,tipo_pago,dias_turno,dias_schedule))`)
+    .eq('fecha', fecha)
+    .eq('matriculas.estado', true)
+    .in('estado', ['programada', 'completada'])
+    .order('hora_inicio', { ascending: true });
+  if (clasesErr) throw clasesErr;
+
+  const clases = (clasesRaw ?? [])
+    .filter(t => !t?.matricula_id || !bloqueadasSet.has(t.matricula_id))
+    .map(t => ({
+      id: t.id, fecha: t.fecha, hora_inicio: t.hora_inicio, hora_fin: t.hora_fin,
+      estado: t.estado, avisado: Boolean(t.avisado), confirmado: Boolean(t.confirmado),
+      motivo_cancelacion: t.motivo_cancelacion ?? null,
+      matricula_id: t.matricula_id || t.matriculas?.id,
+      estudiante_id: t.matriculas?.estudiante_id, estudiante_nombre: t.matriculas?.estudiantes?.nombre,
+      tutor_id: t.matriculas?.tutor_id, tutor_nombre: t.matriculas?.tutores?.nombre,
+      curso_nombre: t.matriculas?.cursos?.nombre, curso_tipo_pago: t.matriculas?.cursos?.tipo_pago ?? null,
+      turno: null, duracion_horas: null, _source: 'clases',
+    }));
+
+  const clasesByMatricula = new Map();
+  for (const c of clases) { if (c.matricula_id && !clasesByMatricula.has(c.matricula_id)) clasesByMatricula.set(c.matricula_id, c); }
+
+  const { data: matriculasActivas, error: mErr } = await supabase
+    .from('matriculas')
+    .select(`id,estudiante_id,tutor_id,curso_id,
+      estudiantes:estudiante_id(nombre),tutores:tutor_id(nombre),
+      cursos:curso_id(nombre,tipo_pago,dias_turno,dias_schedule)`)
+    .eq('estado', true);
+  if (mErr) throw mErr;
+
+  const computed = [];
+  for (const m of matriculasActivas ?? []) {
+    if (bloqueadasSet.has(m.id)) continue;
+    const curso = m.cursos;
+    const diasScheduleObj = safeJsonParse(curso?.dias_schedule);
+    const diasTurnoObj = safeJsonParse(curso?.dias_turno);
+    if (diasScheduleObj?.[diaSemana]) {
+      const sch = diasScheduleObj[diaSemana];
+      computed.push({
+        id: null, fecha, hora_inicio: sch.hora_inicio || '—', hora_fin: sch.hora_fin || '—',
+        estado: 'programada', avisado: false, confirmado: false, motivo_cancelacion: null,
+        matricula_id: m.id, estudiante_id: m.estudiante_id, estudiante_nombre: m.estudiantes?.nombre,
+        tutor_id: m.tutor_id, tutor_nombre: m.tutores?.nombre,
+        curso_nombre: curso?.nombre, curso_tipo_pago: curso?.tipo_pago ?? null,
+        turno: sch.turno || null, duracion_horas: calcDuracionHoras(sch.hora_inicio, sch.hora_fin), _source: 'computed',
+      });
+    } else if (diasTurnoObj?.[diaSemana]) {
+      computed.push({
+        id: null, fecha, hora_inicio: '—', hora_fin: '—',
+        estado: 'programada', avisado: false, confirmado: false, motivo_cancelacion: null,
+        matricula_id: m.id, estudiante_id: m.estudiante_id, estudiante_nombre: m.estudiantes?.nombre,
+        tutor_id: m.tutor_id, tutor_nombre: m.tutores?.nombre,
+        curso_nombre: curso?.nombre, curso_tipo_pago: curso?.tipo_pago ?? null,
+        turno: diasTurnoObj[diaSemana] || null, duracion_horas: null, _source: 'computed',
+      });
+    }
+  }
+
+  const seenMatriculas = new Set();
+  const merged = [];
+  for (const s of computed) {
+    if (!s.matricula_id) continue;
+    const persisted = clasesByMatricula.get(s.matricula_id);
+    merged.push(persisted ? { ...s, ...persisted, _source: 'merged' } : s);
+    seenMatriculas.add(s.matricula_id);
+  }
+  for (const c of clases) {
+    if (c.matricula_id && seenMatriculas.has(c.matricula_id)) continue;
+    merged.push(c);
+  }
+
+  const keyHora = (h) => { const s = String(h || '').trim(); if (!s || s === '—') return '99:99:99'; return s.length === 5 ? `${s}:00` : s; };
+  return merged.sort((a, b) => keyHora(a.hora_inicio).localeCompare(keyHora(b.hora_inicio)));
+}
+
+export async function getSesionesBloqueadas(fecha) {
+  const { data, error } = await supabase.from('sesiones_clases')
+    .select('matricula_id,estado').eq('fecha', fecha).in('estado', ['dada', 'cancelada']);
+  if (error) throw error;
+  return new Set((data ?? []).map(r => r.matricula_id));
+}
+
+export async function getResumenTutores(fecha) {
+  const { data: tutores, error: tErr } = await supabase.from('tutores').select('id,nombre').eq('estado', true);
+  if (tErr) throw tErr;
+  const resumen = await Promise.all((tutores ?? []).map(async (tutor) => {
+    const { data: clases, error: cErr } = await supabase.from('clases')
+      .select(`id,matriculas!inner(tutor_id,cursos(nombre),estudiantes(nombre))`)
+      .eq('matriculas.tutor_id', tutor.id).eq('fecha', fecha);
+    if (cErr) throw cErr;
+    const cursosUnicos = [...new Set((clases ?? []).map(c => c.matriculas?.cursos?.nombre).filter(Boolean))];
+    const estUnicos = [...new Set((clases ?? []).map(c => c.matriculas?.estudiantes?.nombre).filter(Boolean))];
+    return { id: tutor.id, nombre: tutor.nombre, total_clases: (clases ?? []).length, cursos: cursosUnicos.join(', '), estudiantes: estUnicos.join(', ') };
+  }));
+  return resumen.sort((a, b) => b.total_clases - a.total_clases);
+}
+
+export async function getResumenTutoresEstudiantes() {
+  const [{ data: matriculas, error: mErr }, { data: tutores, error: tErr }] = await Promise.all([
+    supabase.from('matriculas').select('tutor_id,estudiante_id').eq('estado', true),
+    supabase.from('tutores').select('id,nombre').eq('estado', true),
+  ]);
+  if (mErr) throw mErr;
+  if (tErr) throw tErr;
+  const mapa = new Map();
+  for (const m of matriculas ?? []) {
+    if (!mapa.has(m.tutor_id)) mapa.set(m.tutor_id, new Set());
+    mapa.get(m.tutor_id).add(m.estudiante_id);
+  }
+  return (tutores ?? [])
+    .map(t => ({ tutor_id: t.id, tutor_nombre: t.nombre, total_estudiantes: mapa.get(t.id)?.size || 0 }))
+    .sort((a, b) => b.total_estudiantes - a.total_estudiantes);
+}
+
+export async function getResumenCursosGrupos() {
+  const [{ data: matriculas, error: mErr }, { data: cursos, error: cErr }] = await Promise.all([
+    supabase.from('matriculas').select('curso_id,estudiante_id,grupo_id,es_grupo,grupo_nombre').eq('estado', true),
+    supabase.from('cursos').select('id,nombre,grado_activo,grado_nombre,grado_color,tipo_clase,max_estudiantes').eq('estado', true),
+  ]);
+  if (mErr) throw mErr;
+  if (cErr) throw cErr;
+  return (cursos ?? []).map(curso => {
+    const mats = (matriculas ?? []).filter(m => m.curso_id === curso.id);
+    const estSet = new Set(mats.map(m => m.estudiante_id));
+    const grpSet = new Set(mats.filter(m => m.es_grupo).map(m => m.grupo_id));
+    return { curso_id: curso.id, curso_nombre: curso.nombre, grado_activo: curso.grado_activo, grado_nombre: curso.grado_nombre, grado_color: curso.grado_color, tipo_clase: curso.tipo_clase, max_estudiantes: curso.max_estudiantes, total_estudiantes: estSet.size, total_grupos: grpSet.size };
+  }).sort((a, b) => b.total_estudiantes - a.total_estudiantes);
+}
+
+export async function getDebugMatriculasCursos() {
+  const { data, error } = await supabase.from('matriculas')
+    .select(`id,estudiante_id,curso_id,estado,estudiantes:estudiante_id(nombre),cursos:curso_id(id,nombre,estado,dias_schedule)`)
+    .eq('estado', true);
+  if (error) throw error;
+  return (data ?? []).map(m => ({
+    matricula_id: m.id, estudiante: m.estudiantes?.nombre,
+    curso_id: m.curso_id, curso_nombre: m.cursos?.nombre,
+    curso_estado: m.cursos?.estado ? 'ACTIVO' : 'INACTIVO',
+    tiene_dias_schedule: !!m.cursos?.dias_schedule,
+  }));
+}
+
+export async function getEstadisticasGeneral() {
+  const [tutoresRes, estudiantesRes, cursosRes, matriculasRes, clasesRes] = await Promise.all([
+    supabase.from('tutores').select('id', { count: 'exact', head: true }).eq('estado', true),
+    supabase.from('estudiantes').select('id', { count: 'exact', head: true }).eq('estado', true),
+    supabase.from('cursos').select('id', { count: 'exact', head: true }).eq('estado', true),
+    supabase.from('matriculas').select('id', { count: 'exact', head: true }).eq('estado', true),
+    supabase.from('clases').select('id', { count: 'exact', head: true }),
+  ]);
+
+  let dinero_ingresado_total = 0;
+  try {
+    const { data: ingresos, error: iErr } = await supabase
+      .from('movimientos_dinero').select('tipo,monto,estado').like('tipo', 'ingreso_%');
+    if (!iErr) {
+      dinero_ingresado_total = (ingresos ?? []).reduce((sum, r) => {
+        const est = String(r?.estado ?? 'completado');
+        if (est !== 'completado' && est !== 'verificado') return sum;
+        const tipo = String(r?.tipo || '');
+        if (tipo === 'ingreso_estudiante') return sum;
+        return sum + (Number(r?.monto) || 0);
+      }, 0);
+    }
+  } catch { /* ignore */ }
+
+  return {
+    tutores: tutoresRes.count || 0,
+    estudiantes: estudiantesRes.count || 0,
+    cursos: cursosRes.count || 0,
+    matriculas: matriculasRes.count || 0,
+    clases_totales: clasesRes.count || 0,
+    dinero_ingresado_total,
+    ingresos_pendientes: dinero_ingresado_total,
+  };
+}

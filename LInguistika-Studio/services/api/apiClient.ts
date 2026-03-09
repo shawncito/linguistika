@@ -106,7 +106,7 @@ export const TokenManager = {
 export const API_BASE_URL =
   (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('api') : null) ||
   (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_API_URL : null) ||
-  'http://localhost:5000/api';
+  'http://localhost:5000/api/v1';
 
 // ── Axios instance ────────────────────────────────────────────────────────────
 
