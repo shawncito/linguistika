@@ -1,6 +1,9 @@
 // Dashboard con calendario interactivo mejorado
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { api } from '../services/api';
+import { dashboardService } from '../services/api/dashboardService';
+import { matriculasService } from '../services/api/matriculasService';
+import { tutoresService } from '../services/api/tutoresService';
+import { estudiantesService } from '../services/api/estudiantesService';
 import { Matricula, Curso, Tutor, Estudiante, ResumenTutorEstudiantes, ResumenCursoGrupos } from '../types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Input, Button, Dialog } from '../components/UI';
 import { formatCRC } from '../lib/format';
@@ -510,7 +513,7 @@ const Dashboard: React.FC = () => {
     try {
       const fecha = sesion.fecha || new Date().toISOString().split('T')[0];
       setUiNotice({ type: 'info', message: 'Actualizando estado de la sesión…' });
-      await api.dashboard.actualizarEstadoSesion(sesion.matricula_id, fecha, { avisado, confirmado });
+      await dashboardService.actualizarEstadoSesion(sesion.matricula_id, fecha, { avisado, confirmado });
 
       const patchSession = (s: SesionDelDia) => {
         if (s.matricula_id !== sesion.matricula_id) return s;
@@ -562,7 +565,7 @@ const Dashboard: React.FC = () => {
 
   const cargarDetalleMatricula = async (matriculaId: number) => {
     try {
-      const all = await api.matriculas.getAll();
+      const all = await matriculasService.getAll();
       const m = all.find((x) => x.id === matriculaId);
       if (!m) {
         setDetalleMatricula(null);
@@ -626,7 +629,7 @@ const Dashboard: React.FC = () => {
 
   const cargarAlumnosTutor = async (tutorId: number, nombre: string) => {
     try {
-      const all = await api.matriculas.getAll();
+      const all = await matriculasService.getAll();
       const filtradas = all.filter((m) => m.tutor_id === tutorId && m.estado !== 0);
       const uniq = new Map<number, string>();
       filtradas.forEach((m) => {
@@ -653,7 +656,7 @@ const Dashboard: React.FC = () => {
       // El fallback local debe usarse solo si el backend falla.
       let desdeServidor: any[] | null = null;
       try {
-        desdeServidor = await api.dashboard.getAgenda(fecha);
+        desdeServidor = await dashboardService.getAgenda(fecha);
       } catch (e) {
         desdeServidor = null;
       }
@@ -685,7 +688,7 @@ const Dashboard: React.FC = () => {
       // Calcular el día de la semana para la fecha seleccionada
       const diaSemana = getDiaSemana(fecha);
       // Obtener SOLO matrículas activas (estado = true). Soporta grupos (estudiante_id puede ser null).
-      const matriculas = (await api.matriculas.getAll()).filter((m: any) => {
+      const matriculas = (await matriculasService.getAll()).filter((m: any) => {
         const isActiva = !!m?.estado;
         const hasCursoTutor = m?.curso_id != null && m?.tutor_id != null;
         const isIndividual = m?.estudiante_id != null;
@@ -761,8 +764,8 @@ const Dashboard: React.FC = () => {
     setLoading(true);
     try {
       const [tutoresAll, estudiantesAll] = await Promise.all([
-        api.tutores.getAll().catch(() => []),
-        api.estudiantes.getAll().catch(() => []),
+        tutoresService.getAll().catch(() => []),
+        estudiantesService.getAll().catch(() => []),
       ]);
       const tMap: Record<number, Tutor> = {};
       const eMap: Record<number, Estudiante> = {};
@@ -771,7 +774,7 @@ const Dashboard: React.FC = () => {
       setTutoresMapa(tMap);
       setEstudiantesMapa(eMap);
 
-      const statsData = await api.dashboard.getStats().catch(() => ({
+      const statsData = await dashboardService.getStats().catch(() => ({
         tutores_activos: 0,
         estudiantes_activos: 0,
         cursos_activos: 0,
@@ -783,7 +786,7 @@ const Dashboard: React.FC = () => {
 
       // Métricas financieras (solo admin/contador)
       try {
-        const m = await api.dashboard.getMetricas({ mes: metricMes });
+        const m = await dashboardService.getMetricas({ mes: metricMes });
         setMetricas(m as any);
         setMetricasDenied(false);
       } catch (e: any) {
@@ -807,7 +810,7 @@ const Dashboard: React.FC = () => {
       
       // Obtener todas las matrículas activas una sola vez
       // Incluir grupos: estudiante_id puede ser null pero estudiante_ids debe tener elementos
-      const matriculas = (await api.matriculas.getAll()).filter((m: any) => {
+      const matriculas = (await matriculasService.getAll()).filter((m: any) => {
         const isActiva = !!m?.estado;
         const hasCursoTutor = m?.curso_id != null && m?.tutor_id != null;
         const isIndividual = m?.estudiante_id != null;
@@ -888,7 +891,7 @@ const Dashboard: React.FC = () => {
       const fechaInicioMes = `${year}-${String(month + 1).padStart(2, '0')}-01`;
       const fechaFinMes = `${year}-${String(month + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
       try {
-        const estadosRango = await api.dashboard.obtenerEstadosClasesRango({
+        const estadosRango = await dashboardService.obtenerEstadosClasesRango({
           fecha_inicio: fechaInicioMes,
           fecha_fin: fechaFinMes,
         });
@@ -928,8 +931,8 @@ const Dashboard: React.FC = () => {
 
       // Resúmenes
       const [rt, rc] = await Promise.all([
-        api.dashboard.getResumenTutoresEstudiantes().catch(() => []),
-        api.dashboard.getResumenCursosGrupos().catch(() => [])
+        dashboardService.getResumenTutoresEstudiantes().catch(() => []),
+        dashboardService.getResumenCursosGrupos().catch(() => [])
       ]);
       setResumenTutores(rt);
       setResumenCursos(rc);
@@ -985,7 +988,7 @@ const Dashboard: React.FC = () => {
       // IMPORTANTE: usar la fecha "hoy" en zona Costa Rica para que coincida con la agenda.
       // El hoyStr basado en UTC puede caer en el día anterior/siguiente cerca de medianoche.
       const fechaToUse = sesion?.fecha || hoy || hoyStr;
-      const result = await api.dashboard.completarSesion(sesion.matricula_id, fechaToUse);
+      const result = await dashboardService.completarSesion(sesion.matricula_id, fechaToUse);
 
       // Remover de la lista de hoy inmediatamente (experiencia UX)
       setSesionesHoy(prev => prev.filter((s) => getSesionKey(s) !== sesionKey));
@@ -1006,7 +1009,7 @@ const Dashboard: React.FC = () => {
         return next;
       });
     }
-  }, [api.dashboard, fetchData, getSesionKey, hoy]);
+  }, [fetchData, getSesionKey, hoy]);
 
   const StatCard = ({ id, title, value, icon, accentColor, description }: any) => {
     const isOpen = statInfoOpen === id;
@@ -1162,7 +1165,7 @@ const Dashboard: React.FC = () => {
                   }
                   setConfirmCancelarHoy(null);
                   try {
-                    await api.dashboard.cancelarSesionDia(sesion.matricula_id, fechaToUse, motivo);
+                    await dashboardService.cancelarSesionDia(sesion.matricula_id, fechaToUse, motivo);
                     setUiNotice({ type: 'success', message: 'Clase cancelada (solo por hoy).' });
                     await fetchData();
                   } catch (e: any) {

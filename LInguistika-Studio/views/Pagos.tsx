@@ -1,6 +1,9 @@
 ﻿
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { api } from '../services/api';
+import { pagosService } from '../services/api/pagosService';
+import { tutoresService } from '../services/api/tutoresService';
+import { estudiantesService } from '../services/api/estudiantesService';
+import { bulkService } from '../services/api/bulkService';
 import { supabaseClient } from '../lib/supabaseClient';
 import { usePersistentState } from '../lib/usePersistentState';
 import { Pago, Tutor, Estudiante, EstadoPago } from '../types';
@@ -181,8 +184,8 @@ const Pagos: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     const [p, t] = await Promise.all([
-      api.pagos.getAll(),
-      api.tutores.getAll()
+      pagosService.getAll(),
+      tutoresService.getAll()
     ]);
     setPagos(p);
     setTutores(t);
@@ -191,7 +194,7 @@ const Pagos: React.FC = () => {
 
   const loadEstudiantes = async () => {
     try {
-      const e = await api.estudiantes.getAll();
+      const e = await estudiantesService.getAll();
       setEstudiantes(e);
     } catch {
       setEstudiantes([]);
@@ -201,7 +204,7 @@ const Pagos: React.FC = () => {
   const loadGrupos = async () => {
     setLoadingGrupos(true);
     try {
-      const res = await api.bulk.listGrupos();
+      const res = await bulkService.listGrupos();
       setGrupos(Array.isArray(res) ? res : []);
     } catch {
       setGrupos([]);
@@ -222,7 +225,7 @@ const Pagos: React.FC = () => {
     setIngresoPendientesLoading(true);
     setIngresoPendientesError('');
     try {
-      const res = await api.pagos.getPendientesSesiones({
+      const res = await pagosService.getPendientesSesiones({
         estudiante_id: id,
         limit: 200,
       });
@@ -247,7 +250,7 @@ const Pagos: React.FC = () => {
   const loadPendientesPorTutor = async () => {
     setLoadingPendientesPorTutor(true);
     try {
-      const res = await api.pagos.getPendientesResumenTutores();
+      const res = await pagosService.getPendientesResumenTutores();
       setPendientesPorTutor((res?.tutores || []) as any);
     } catch (err: any) {
       console.error(err);
@@ -260,7 +263,7 @@ const Pagos: React.FC = () => {
   const loadPendientesPorEstudiante = async () => {
     setLoadingPendientesPorEstudiante(true);
     try {
-      const res = await api.pagos.getPendientesResumenEstudiantes();
+      const res = await pagosService.getPendientesResumenEstudiantes();
       setPendientesPorEstudiante((res?.estudiantes || []) as any);
     } catch (err: any) {
       console.error(err);
@@ -276,7 +279,7 @@ const Pagos: React.FC = () => {
     setDetalleTutor(null);
     setLoadingDetalleTutor(true);
     try {
-      const res = await api.pagos.getPendientesDetalleTutor({ tutor_id });
+      const res = await pagosService.getPendientesDetalleTutor({ tutor_id });
       setDetalleTutor(res);
     } catch (err: any) {
       console.error(err);
@@ -291,7 +294,7 @@ const Pagos: React.FC = () => {
     setDetalleEstudiante(null);
     setLoadingDetalleEstudiante(true);
     try {
-      const res = await api.pagos.getPendientesDetalleEstudiante({ estudiante_id });
+      const res = await pagosService.getPendientesDetalleEstudiante({ estudiante_id });
       setDetalleEstudiante(res);
     } catch (err: any) {
       console.error(err);
@@ -356,7 +359,7 @@ const Pagos: React.FC = () => {
       return alert('Por favor complete todos los datos obligatorios.');
     }
 
-    await api.pagos.create(formData);
+    await pagosService.create(formData);
     setFormData({ tutor_id: 0, monto: 0, descripcion: '', estado: EstadoPago.PAGADO });
     alert('Liquidación registrada con éxito.');
     loadData();
@@ -383,7 +386,7 @@ const Pagos: React.FC = () => {
 
     setLoadingIngreso(true);
     try {
-      const result = await api.pagos.liquidarIngresoEstudiante({
+      const result = await pagosService.liquidarIngresoEstudiante({
         estudiante_id: ingresoForm.estudiante_id,
         movimiento_ids: ingresoSeleccion,
         metodo: ingresoForm.metodo,
@@ -403,16 +406,16 @@ const Pagos: React.FC = () => {
         const realMovementId = Number.isFinite(manualId) && manualId > 0 ? manualId : (ids.length > 0 ? ids[0] : null);
 
         if (realMovementId) {
-          const uploadRes = await api.pagos.uploadComprobanteMovimiento(realMovementId, ingresoFile);
+          const uploadRes = await pagosService.uploadComprobanteMovimiento(realMovementId, ingresoFile);
           const url = String(uploadRes?.comprobante_url || '').trim();
 
           if (url) {
             if (ids.length > 0) {
-              await api.pagos.aplicarComprobanteUrlBulk({ ids, comprobante_url: url });
+              await pagosService.aplicarComprobanteUrlBulk({ ids, comprobante_url: url });
             }
 
             const pagadorNombre = selectedEstudiante?.nombre || `Estudiante #${ingresoForm.estudiante_id}`;
-            await api.pagos.createComprobanteIngreso({
+            await pagosService.createComprobanteIngreso({
               numero_comprobante: String(ingresoForm.referencia || '').trim(),
               monto: Number((result as any)?.total_monto) || 0,
               fecha_comprobante: ingresoForm.fecha_comprobante,
@@ -463,7 +466,7 @@ const Pagos: React.FC = () => {
     }
     setLoadingPendientes(true);
     try {
-      const resumen = await api.pagos.getPendientesResumen({
+      const resumen = await pagosService.getPendientesResumen({
         tutor_id: formData.tutor_id,
         ...(periodoInicio ? { fecha_inicio: periodoInicio } : {}),
         ...(periodoFin ? { fecha_fin: periodoFin } : {}),
@@ -486,7 +489,7 @@ const Pagos: React.FC = () => {
       const desc = formData.descripcion?.trim() ||
         (periodoInicio || periodoFin ? `Liquidacion ${periodoInicio || '...'} a ${periodoFin || '...'}` : 'Liquidacion de pendientes');
 
-      await api.pagos.liquidarPendientes({
+      await pagosService.liquidarPendientes({
         tutor_id: formData.tutor_id,
         ...(periodoInicio ? { fecha_inicio: periodoInicio } : {}),
         ...(periodoFin ? { fecha_fin: periodoFin } : {}),
@@ -515,7 +518,7 @@ const Pagos: React.FC = () => {
           ? `Liquidacion ${periodoInicio || '...'} a ${periodoFin || '...'}`
           : `Liquidacion pendientes - ${selectedTutorDetalle.tutor_nombre}`);
 
-      await api.pagos.liquidarPendientes({
+      await pagosService.liquidarPendientes({
         tutor_id: selectedTutorDetalle.tutor_id,
         ...(periodoInicio ? { fecha_inicio: periodoInicio } : {}),
         ...(periodoFin ? { fecha_fin: periodoFin } : {}),
@@ -694,7 +697,7 @@ const Pagos: React.FC = () => {
     setSesionPickerError('');
     try {
       const q = (opts?.q ?? sesionPickerQuery)?.trim() || undefined;
-      const res = await api.pagos.getPendientesSesiones({
+      const res = await pagosService.getPendientesSesiones({
         q,
         tutor_id: manualForm.tutor_id ? manualForm.tutor_id : undefined,
         estudiante_id: manualForm.estudiante_id ? manualForm.estudiante_id : undefined,
@@ -721,7 +724,7 @@ const Pagos: React.FC = () => {
 
     setSavingManual(true);
     try {
-      const creado = await api.pagos.createMovimientoManual({
+      const creado = await pagosService.createMovimientoManual({
         direccion: manualForm.direccion,
         monto: Number(manualForm.monto),
         fecha: manualForm.fecha,
@@ -738,7 +741,7 @@ const Pagos: React.FC = () => {
       // Conciliación: si es un ingreso manual y viene sesion_id, marcar el esperado como pagado.
       if (manualForm.direccion === 'entrada' && manualForm.sesion_id && manualForm.sesion_id > 0) {
         try {
-          await api.pagos.liquidarIngresoSesion({
+          await pagosService.liquidarIngresoSesion({
             sesion_id: manualForm.sesion_id,
             metodo: manualForm.metodo,
             referencia: manualForm.referencia?.trim() || undefined,
@@ -753,7 +756,7 @@ const Pagos: React.FC = () => {
       }
 
       if (manualFile && creado?.id) {
-        await api.pagos.uploadComprobanteMovimiento(creado.id, manualFile);
+        await pagosService.uploadComprobanteMovimiento(creado.id, manualFile);
       }
 
       const continuar = window.confirm('Movimiento registrado.\n\n¿Desea continuar con la iteración?');
@@ -800,8 +803,8 @@ const Pagos: React.FC = () => {
     setLoadingLibro(true);
     try {
       const [real, esperado] = await Promise.all([
-        api.pagos.getLibroDiario({ fecha: libroFecha }),
-        api.pagos.getLibroDiario({ fecha: libroFecha, incluir_pendientes: 1 }),
+        pagosService.getLibroDiario({ fecha: libroFecha }),
+        pagosService.getLibroDiario({ fecha: libroFecha, incluir_pendientes: 1 }),
       ]);
       setLibro(real);
       setLibroEsperado(esperado);
@@ -833,8 +836,8 @@ const Pagos: React.FC = () => {
       const { start, end } = getMonthRange(libroMesAnio, libroMesMes);
       const tutor_id = libroMesTutorId > 0 ? libroMesTutorId : undefined;
       const [real, esperado] = await Promise.all([
-        api.pagos.getLibroDiario({ fecha_inicio: start, fecha_fin: end, tutor_id }),
-        api.pagos.getLibroDiario({ fecha_inicio: start, fecha_fin: end, tutor_id, incluir_pendientes: 1 }),
+        pagosService.getLibroDiario({ fecha_inicio: start, fecha_fin: end, tutor_id }),
+        pagosService.getLibroDiario({ fecha_inicio: start, fecha_fin: end, tutor_id, incluir_pendientes: 1 }),
       ]);
       setLibroMes(real);
       setLibroMesEsperado(esperado);
@@ -850,7 +853,7 @@ const Pagos: React.FC = () => {
     setLoadingBolsaTotal(true);
     try {
       const hoy = toISODateLocal(new Date());
-      const res = await api.pagos.getLibroDiario({ fecha_inicio: '2000-01-01', fecha_fin: hoy, only_totals: 1 });
+      const res = await pagosService.getLibroDiario({ fecha_inicio: '2000-01-01', fecha_fin: hoy, only_totals: 1 });
       setBolsaTotal(res);
     } catch (e: any) {
       setBolsaTotal({ error: e?.response?.data?.error || e?.message || 'Error calculando total en bolsa' });
@@ -885,7 +888,7 @@ const Pagos: React.FC = () => {
 
       const results = await Promise.all(
         ranges.map(async (r) => {
-          const res = await api.pagos.getLibroDiario({ fecha_inicio: r.start, fecha_fin: r.end, only_totals: 1 });
+          const res = await pagosService.getLibroDiario({ fecha_inicio: r.start, fecha_fin: r.end, only_totals: 1 });
           const total_debe = Number(res?.total_debe) || 0;
           const total_haber = Number(res?.total_haber) || 0;
           const neto = total_debe - total_haber;

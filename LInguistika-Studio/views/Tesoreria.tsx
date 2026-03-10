@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 // Cargar obligaciones automáticamente al seleccionar encargado
 // (esto debe ir después de la declaración de los hooks de estado)
-import { api } from '../services/api';
+import { tesoreriaService } from '../services/api/tesoreriaService';
+import { pagosService } from '../services/api/pagosService';
+import { bulkService } from '../services/api/bulkService';
 import { Button, Card, Badge, Input, Label, Select, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Dialog } from '../components/UI';
 import { formatCRC } from '../lib/format';
 
@@ -267,7 +269,7 @@ const Tesoreria: React.FC = () => {
   const loadEncargados = async () => {
     setLoadingEnc(true);
     try {
-      const res = await api.tesoreria.getEncargadosResumen();
+      const res = await tesoreriaService.getEncargadosResumen();
       const rows = (res?.encargados || []) as EncargadoResumenItem[];
       setEncargados(rows);
       setSelectedEncargadoId((prev) => {
@@ -285,7 +287,7 @@ const Tesoreria: React.FC = () => {
   const loadGrupos = async () => {
     setLoadingGrupos(true);
     try {
-      const res = await api.bulk.listGrupos();
+      const res = await bulkService.listGrupos();
       setGrupos(Array.isArray(res) ? res : []);
     } catch {
       setGrupos([]);
@@ -297,7 +299,7 @@ const Tesoreria: React.FC = () => {
   const loadPendientesPorEstudiante = async () => {
     setLoadingPendientesPorEstudiante(true);
     try {
-      const res = await api.pagos.getPendientesResumenEstudiantes();
+      const res = await pagosService.getPendientesResumenEstudiantes();
       setPendientesPorEstudiante((res?.estudiantes || []) as any[]);
     } catch {
       setPendientesPorEstudiante([]);
@@ -311,7 +313,7 @@ const Tesoreria: React.FC = () => {
     setDetalleEstudiante(null);
     setLoadingDetalleEstudiante(true);
     try {
-      const res = await api.pagos.getPendientesDetalleEstudiante({ estudiante_id });
+      const res = await pagosService.getPendientesDetalleEstudiante({ estudiante_id });
       setDetalleEstudiante(res);
     } catch (err: any) {
       setDetalleEstudiante({ error: err?.response?.data?.error || err?.message || 'Error cargando detalle' });
@@ -325,7 +327,7 @@ const Tesoreria: React.FC = () => {
     setDetalleEstudiante(null);
     setLoadingDetalleEstudiante(true);
     try {
-      const res = await api.pagos.getPendientesDetalleEstudiante({ estudiante_bulk_id });
+      const res = await pagosService.getPendientesDetalleEstudiante({ estudiante_bulk_id });
       setDetalleEstudiante(res);
     } catch (err: any) {
       setDetalleEstudiante({ error: err?.response?.data?.error || err?.message || 'Error cargando detalle' });
@@ -345,7 +347,7 @@ const Tesoreria: React.FC = () => {
     setGrupoCobroSaving(true);
     try {
       // Obtener datos frescos del grupo para asegurar que tenemos los costos correctos
-      const grupoData = await api.bulk.getGrupo(String(grupo.id));
+      const grupoData = await bulkService.getGrupo(String(grupo.id));
       const costoCurso = Number(grupoData?.grupo?.costo_curso) || 0;
       const pagoTutor = Number(grupoData?.grupo?.pago_tutor) || 0;
       
@@ -383,7 +385,7 @@ const Tesoreria: React.FC = () => {
     setGrupoCobroResult(null);
 
     try {
-      const result = await api.tesoreria.registrarCobroGrupal(grupoCobroTarget.id, {});
+      const result = await tesoreriaService.registrarCobroGrupal(grupoCobroTarget.id, {});
 
       setGrupoCobroResult(result);
       
@@ -408,7 +410,7 @@ const Tesoreria: React.FC = () => {
   const loadTutores = async () => {
     setLoadingTut(true);
     try {
-      const res = await api.tesoreria.getTutoresResumen();
+      const res = await tesoreriaService.getTutoresResumen();
       const rows = (res?.tutores || []) as TutorResumenItem[];
       setTutores(rows);
       setSelectedTutorId((prev) => {
@@ -426,7 +428,7 @@ const Tesoreria: React.FC = () => {
   const loadBolsa = async () => {
     setLoadingBolsa(true);
     try {
-      const res = await api.tesoreria.getBolsa();
+      const res = await tesoreriaService.getBolsa();
       console.debug('TESORERIA: getBolsa response', res);
       // Normalizar la forma de la respuesta: algunos endpoints devuelven { bolsa: { ... } }
       // y otros devuelven los campos en la raíz { bolsa_real, debe_real, haber_real }.
@@ -460,7 +462,7 @@ const Tesoreria: React.FC = () => {
   const loadTotalesRapidos = async () => {
     setLoadingTotales(true);
     try {
-      const res = await api.tesoreria.getResumen();
+      const res = await tesoreriaService.getResumen();
       setTotalesRapidos({
         deudaPendiente: res?.deudaPendiente || 0,
         saldoAFavor: res?.saldoAFavor || 0,
@@ -480,7 +482,7 @@ const Tesoreria: React.FC = () => {
   const loadDiario = async () => {
     setLoadingDiario(true);
     try {
-      const res = await api.tesoreria.getDiario({
+      const res = await tesoreriaService.getDiario({
         fecha_inicio: diarioInicio || undefined,
         fecha_fin: diarioFin || undefined,
         incluir_pendientes: diarioInclPend ? 1 : 0,
@@ -500,7 +502,7 @@ const Tesoreria: React.FC = () => {
     }
     setLoadingHistEnc(true);
     try {
-      const res = await api.tesoreria.getDiario({
+      const res = await tesoreriaService.getDiario({
         encargado_id: encargadoId,
         incluir_pendientes: 1,
         order: 'desc',
@@ -521,7 +523,7 @@ const Tesoreria: React.FC = () => {
     }
     setLoadingHistTut(true);
     try {
-      const res = await api.tesoreria.getDiario({
+      const res = await tesoreriaService.getDiario({
         tutor_id: tutorId,
         incluir_pendientes: 1,
         order: 'desc',
@@ -542,7 +544,7 @@ const Tesoreria: React.FC = () => {
     setAppsPago(null);
     setApps([]);
     try {
-      const res = await api.tesoreria.getPagoAplicaciones(pagoId);
+      const res = await tesoreriaService.getPagoAplicaciones(pagoId);
       setAppsPago(res?.pago ?? null);
       setApps((res?.aplicaciones ?? []) as PagoAplicacionItem[]);
     } catch {
@@ -575,7 +577,7 @@ const Tesoreria: React.FC = () => {
     setCuentaId(null);
     setCuentaMovs([]);
     try {
-      const res = await api.tesoreria.getCuentaMovimientosEncargado(encargadoId, {
+      const res = await tesoreriaService.getCuentaMovimientosEncargado(encargadoId, {
         fecha_inicio: diarioInicio || undefined,
         fecha_fin: diarioFin || undefined,
         incluir_pendientes: 1,
@@ -602,7 +604,7 @@ const Tesoreria: React.FC = () => {
     setCuentaId(null);
     setCuentaMovs([]);
     try {
-      const res = await api.tesoreria.getCuentaMovimientosTutor(tutorId, {
+      const res = await tesoreriaService.getCuentaMovimientosTutor(tutorId, {
         fecha_inicio: diarioInicio || undefined,
         fecha_fin: diarioFin || undefined,
         incluir_pendientes: 1,
@@ -620,7 +622,7 @@ const Tesoreria: React.FC = () => {
 
   const exportDiarioXlsx = async () => {
     try {
-      const blob = await api.tesoreria.exportDiarioXlsx({
+      const blob = await tesoreriaService.exportDiarioXlsx({
         fecha_inicio: diarioInicio || undefined,
         fecha_fin: diarioFin || undefined,
         incluir_pendientes: diarioInclPend ? 1 : 0,
@@ -638,7 +640,7 @@ const Tesoreria: React.FC = () => {
       return;
     }
     try {
-      const blob = await api.tesoreria.exportCuentaXlsx(cuentaId, {
+      const blob = await tesoreriaService.exportCuentaXlsx(cuentaId, {
         fecha_inicio: diarioInicio || undefined,
         fecha_fin: diarioFin || undefined,
         incluir_pendientes: 1,
@@ -653,7 +655,7 @@ const Tesoreria: React.FC = () => {
   const loadEsperado = async () => {
     setLoadingEsperado(true);
     try {
-      const res = await api.tesoreria.getEsperadoDiario({
+      const res = await tesoreriaService.getEsperadoDiario({
         fecha_inicio: diarioInicio || undefined,
         fecha_fin: diarioFin || undefined,
       });
@@ -690,7 +692,7 @@ const Tesoreria: React.FC = () => {
     setEncObligacionesLoading(true);
     void (async () => {
       try {
-        const res = await api.tesoreria.getObligacionesEncargado(id);
+        const res = await tesoreriaService.getObligacionesEncargado(id);
         setEncObligaciones((res?.obligaciones || []) as ObligacionPendienteItem[]);
       } catch {
         setEncObligaciones([]);
@@ -712,7 +714,7 @@ const Tesoreria: React.FC = () => {
     setEncObligacionesLoading(true);
     void (async () => {
       try {
-        const res = await api.tesoreria.getObligacionesEncargado(encargadoId);
+        const res = await tesoreriaService.getObligacionesEncargado(encargadoId);
         setEncObligaciones((res?.obligaciones || []) as ObligacionPendienteItem[]);
       } catch {
         setEncObligaciones([]);
@@ -729,7 +731,7 @@ const Tesoreria: React.FC = () => {
     setTutorObligacionesLoading(true);
     void (async () => {
       try {
-        const res = await api.tesoreria.getObligacionesTutor(tutorId);
+        const res = await tesoreriaService.getObligacionesTutor(tutorId);
         setTutorObligaciones((res?.obligaciones || []) as ObligacionPendienteItem[]);
       } catch {
         setTutorObligaciones([]);
@@ -757,7 +759,7 @@ const Tesoreria: React.FC = () => {
     setGrupoDetalleLoading(true);
     void (async () => {
       try {
-        const res = await api.bulk.getGrupo(String(grupoPagoId));
+        const res = await bulkService.getGrupo(String(grupoPagoId));
         setGrupoDetalle(res);
       } catch {
         setGrupoDetalle(null);
@@ -833,7 +835,7 @@ const Tesoreria: React.FC = () => {
     setPagoSaving(true);
     setPagoResult(null);
     try {
-      const result = await api.tesoreria.registrarPagoEncargado(pagoTarget.encargado_id, {
+      const result = await tesoreriaService.registrarPagoEncargado(pagoTarget.encargado_id, {
         monto: pagoForm.monto,
         fecha_pago: pagoForm.fecha_pago,
         metodo: pagoForm.metodo,
@@ -847,7 +849,7 @@ const Tesoreria: React.FC = () => {
 
       // Si es efectivo, podemos completar sin evidencia
       if (pagoId && metodo === 'efectivo') {
-        await api.tesoreria.updatePago(pagoId, {
+        await tesoreriaService.updatePago(pagoId, {
           metodo: pagoForm.metodo,
           referencia: pagoForm.referencia || undefined,
           detalle: pagoForm.detalle || undefined,
@@ -857,8 +859,8 @@ const Tesoreria: React.FC = () => {
 
       // Si hay archivo, lo subimos y luego marcamos completado
       if (pagoFile && pagoId) {
-        await api.tesoreria.uploadComprobantePago(pagoId, pagoFile);
-        await api.tesoreria.updatePago(pagoId, {
+        await tesoreriaService.uploadComprobantePago(pagoId, pagoFile);
+        await tesoreriaService.updatePago(pagoId, {
           metodo: pagoForm.metodo,
           numero_comprobante: pagoForm.numero_comprobante || undefined,
           fecha_comprobante: pagoForm.fecha_comprobante || undefined,
@@ -875,7 +877,7 @@ const Tesoreria: React.FC = () => {
 
       // Refrescar obligaciones pendientes (para que las ya cubiertas no sigan saliendo como pendientes)
       try {
-        const res = await api.tesoreria.getObligacionesEncargado(pagoTarget.encargado_id);
+        const res = await tesoreriaService.getObligacionesEncargado(pagoTarget.encargado_id);
         setEncObligaciones((res?.obligaciones || []) as ObligacionPendienteItem[]);
       } catch {
         // noop
@@ -920,7 +922,7 @@ const Tesoreria: React.FC = () => {
     setTutorPagoSaving(true);
     setTutorPagoResult(null);
     try {
-      const result = await api.tesoreria.registrarPagoTutor(tutorPagoTarget.tutor_id, {
+      const result = await tesoreriaService.registrarPagoTutor(tutorPagoTarget.tutor_id, {
         monto: tutorPagoForm.monto,
         fecha_pago: tutorPagoForm.fecha_pago,
         metodo: tutorPagoForm.metodo,
@@ -936,7 +938,7 @@ const Tesoreria: React.FC = () => {
 
       // Si es efectivo, podemos completar sin evidencia
       if (pagoId && metodo === 'efectivo') {
-        await api.tesoreria.updatePago(pagoId, {
+        await tesoreriaService.updatePago(pagoId, {
           metodo: tutorPagoForm.metodo,
           referencia: tutorPagoForm.referencia || undefined,
           detalle: tutorPagoForm.detalle || undefined,
@@ -945,8 +947,8 @@ const Tesoreria: React.FC = () => {
       }
 
       if (tutorPagoFile && pagoId) {
-        await api.tesoreria.uploadComprobantePago(pagoId, tutorPagoFile);
-        await api.tesoreria.updatePago(pagoId, {
+        await tesoreriaService.uploadComprobantePago(pagoId, tutorPagoFile);
+        await tesoreriaService.updatePago(pagoId, {
           metodo: tutorPagoForm.metodo,
           numero_comprobante: tutorPagoForm.numero_comprobante || undefined,
           fecha_comprobante: tutorPagoForm.fecha_comprobante || undefined,
@@ -963,7 +965,7 @@ const Tesoreria: React.FC = () => {
 
       // Refrescar pendientes y limpiar selección/detalles
       try {
-        const res = await api.tesoreria.getObligacionesTutor(tutorPagoTarget.tutor_id);
+        const res = await tesoreriaService.getObligacionesTutor(tutorPagoTarget.tutor_id);
         setTutorObligaciones((res?.obligaciones || []) as ObligacionPendienteItem[]);
       } catch {
         // noop
