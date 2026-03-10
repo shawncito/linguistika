@@ -335,6 +335,165 @@ export async function getPendientesResumenEstudiantes() {
   };
 }
 
+// ─────────── PENDIENTES SESIONES ──────────────────────────────────────────────
+
+export async function getPendientesSesiones({ q, tutor_id, estudiante_id, fecha_inicio, fecha_fin, limit }) {
+  let query = supabase.from('movimientos_dinero')
+    .select(`id,tutor_id,curso_id,matricula_id,sesion_id,fecha_pago,monto,estado,tipo,notas,
+             tutor:tutor_id(nombre),curso:curso_id(nombre),
+             matricula:matricula_id(id,estudiante_id,estudiante:estudiante_id(nombre)),
+             sesion:sesion_id(id,fecha,hora_inicio,hora_fin)`)
+    .eq('tipo', 'ingreso_estudiante')
+    .eq('estado', 'pendiente')
+    .order('fecha_pago', { ascending: false });
+  if (tutor_id) query = query.eq('tutor_id', String(tutor_id));
+  if (estudiante_id) query = query.eq('matricula.estudiante_id', String(estudiante_id));
+  if (fecha_inicio) query = query.gte('fecha_pago', fecha_inicio);
+  if (fecha_fin) query = query.lte('fecha_pago', fecha_fin);
+  if (limit) query = query.limit(Number(limit));
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  let rows = data ?? [];
+
+  // If filtering by estudiante_id, Supabase inner filter on matricula.estudiante_id
+  // may still return rows with null matricula — filter them out
+  if (estudiante_id) {
+    rows = rows.filter(r => r.matricula && String(r.matricula.estudiante_id) === String(estudiante_id));
+  }
+
+  // Optional text search
+  if (q) {
+    const lower = q.toLowerCase();
+    rows = rows.filter(r => {
+      const texts = [r.curso?.nombre, r.tutor?.nombre, r.matricula?.estudiante?.nombre, String(r.id)].filter(Boolean);
+      return texts.some(t => String(t).toLowerCase().includes(lower));
+    });
+  }
+
+  return rows;
+}
+
+// ─────────── DETALLE ESTUDIANTE ──────────────────────────────────────────────
+
+export async function getPendientesDetalleEstudiante({ estudiante_id, estudiante_bulk_id, fecha_inicio, fecha_fin }) {
+  // Get all matriculas for this student to find movimientos
+  let matriculaIds = [];
+
+  if (estudiante_id) {
+    const { data: mats, error: mErr } = await supabase.from('matriculas')
+      .select('id').eq('estudiante_id', String(estudiante_id));
+    if (mErr) throw mErr;
+    matriculaIds = (mats || []).map(m => m.id);
+  } else if (estudiante_bulk_id) {
+    // Bulk student: find through estudiantes_en_grupo → matricula_grupo → matriculas
+    const { data: links } = await supabase.from('estudiantes_en_grupo')
+      .select('matricula_grupo_id').eq('estudiante_bulk_id', String(estudiante_bulk_id));
+    const grupoIds = (links || []).map(l => l.matricula_grupo_id).filter(Boolean);
+    if (grupoIds.length > 0) {
+      const { data: mats } = await supabase.from('matriculas')
+        .select('id').in('grupo_id', grupoIds);
+      matriculaIds = (mats || []).map(m => m.id);
+    }
+  }
+
+  if (matriculaIds.length === 0) return [];
+
+  let query = supabase.from('movimientos_dinero')
+    .select(`id,tutor_id,curso_id,matricula_id,sesion_id,fecha_pago,monto,estado,tipo,
+             curso:curso_id(nombre),
+             sesion:sesion_id(id,fecha,hora_inicio,hora_fin)`)
+    .in('matricula_id', matriculaIds)
+    .eq('tipo', 'ingreso_estudiante')
+    .eq('estado', 'pendiente')
+    .order('fecha_pago', { ascending: false });
+  if (fecha_inicio) query = query.gte('fecha_pago', fecha_inicio);
+  if (fecha_fin) query = query.lte('fecha_pago', fecha_fin);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
+// ─────────── LIQUIDAR PENDIENTES TUTOR ───────────────────────────────────────
+
+export async function liquidarPendientesTutor({ tutor_id, fecha_inicio, fecha_fin, pago_id }) {
+  let query = supabase.from('movimientos_dinero')
+    .select('id')
+    .eq('tutor_id', String(tutor_id))
+    .eq('tipo', 'pago_tutor_pendiente')
+    .eq('estado', 'pendiente');
+  if (fecha_inicio) query = query.gte('fecha_pago', fecha_inicio);
+  if (fecha_fin) query = query.lte('fecha_pago', fecha_fin);
+
+  const { data: movs, error: selErr } = await query;
+  if (selErr) throw selErr;
+  const ids = (movs || []).map(m => m.id);
+  if (ids.length === 0) return { updated: 0, ids: [] };
+
+  const updateFields = { estado: 'completado', updated_at: new Date().toISOString() };
+  if (pago_id) updateFields.pago_id = pago_id;
+
+  const { error: updErr } = await supabase.from('movimientos_dinero')
+    .update(updateFields).in('id', ids);
+  if (updErr) throw updErr;
+  return { updated: ids.length, ids };
+}
+
+// ─────────── LIQUIDAR INGRESO SESION ─────────────────────────────────────────
+
+export async function liquidarIngresoSesion({ sesion_id, metodo, referencia, fecha_comprobante }) {
+  const { data: movs, error: sErr } = await supabase.from('movimientos_dinero')
+    .select('id,monto')
+    .eq('sesion_id', String(sesion_id))
+    .eq('tipo', 'ingreso_estudiante')
+    .eq('estado', 'pendiente');
+  if (sErr) throw sErr;
+  if (!movs || movs.length === 0) return { updated: 0, ids: [] };
+
+  const ids = movs.map(m => m.id);
+  const notasParts = ['LIQUIDADO_SESION', metodo ? `METODO:${metodo}` : null, referencia ? `REF:${referencia}` : null].filter(Boolean).join(' | ');
+  const { error: updErr } = await supabase.from('movimientos_dinero')
+    .update({
+      estado: 'completado',
+      factura_numero: referencia || null,
+      fecha_comprobante: fecha_comprobante || null,
+      notas: notasParts,
+      updated_at: new Date().toISOString(),
+    }).in('id', ids);
+  if (updErr) throw updErr;
+  return { updated: ids.length, ids, total_monto: movs.reduce((a, m) => a + (Number(m.monto) || 0), 0) };
+}
+
+// ─────────── LIQUIDAR INGRESO ESTUDIANTE ─────────────────────────────────────
+
+export async function liquidarIngresoEstudiante({ movimiento_ids, metodo, referencia, fecha_comprobante }) {
+  if (!movimiento_ids || movimiento_ids.length === 0) return { updated: 0, ids: [], total_monto: 0 };
+
+  const { data: movs, error: sErr } = await supabase.from('movimientos_dinero')
+    .select('id,monto')
+    .in('id', movimiento_ids)
+    .eq('tipo', 'ingreso_estudiante')
+    .eq('estado', 'pendiente');
+  if (sErr) throw sErr;
+
+  const ids = (movs || []).map(m => m.id);
+  if (ids.length === 0) return { updated: 0, ids: [], total_monto: 0 };
+
+  const notasParts = ['LIQUIDADO_ESTUDIANTE', metodo ? `METODO:${metodo}` : null, referencia ? `REF:${referencia}` : null].filter(Boolean).join(' | ');
+  const { error: updErr } = await supabase.from('movimientos_dinero')
+    .update({
+      estado: 'completado',
+      factura_numero: referencia || null,
+      fecha_comprobante: fecha_comprobante || null,
+      notas: notasParts,
+      updated_at: new Date().toISOString(),
+    }).in('id', ids);
+  if (updErr) throw updErr;
+  return { updated: ids.length, ids, total_monto: movs.reduce((a, m) => a + (Number(m.monto) || 0), 0) };
+}
+
 // ─────────── BULK COMPROBANTE ─────────────────────────────────────────────────
 
 export async function findMovimientosByIds(ids) {

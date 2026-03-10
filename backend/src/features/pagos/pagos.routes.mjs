@@ -39,9 +39,16 @@ router.get('/pendientes/resumen', ctrl.getPendientesResumen);
 router.get('/pendientes/resumen-tutores', ctrl.getPendientesResumenTutores);
 router.get('/pendientes/resumen-estudiantes', ctrl.getPendientesResumenEstudiantes);
 router.get('/pendientes/detalle-tutor', ctrl.getPendientesDetalleTutor);
+router.get('/pendientes/detalle-estudiante', ctrl.getPendientesDetalleEstudiante);
+router.get('/pendientes/sesiones', ctrl.getPendientesSesiones);
 router.get('/:id', ctrl.getById);
 router.post('/', ctrl.create);
 router.put('/:id', ctrl.update);
+
+// Liquidaciones
+router.post('/liquidar', ctrl.liquidarPendientes);
+router.post('/ingresos/liquidar-sesion', ctrl.liquidarIngresoSesion);
+router.post('/ingresos/liquidar-estudiante', ctrl.liquidarIngresoEstudiante);
 
 // Comprobantes
 router.post('/comprobantes-ingreso', ctrl.createComprobanteIngreso);

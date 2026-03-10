@@ -61,3 +61,23 @@ export async function uploadMovimientoComprobante(req, res, next) {
 export async function bulkComprobante(req, res, next) {
   try { res.json(await service.bulkComprobante(req.body?.ids, req.body?.comprobante_url)); } catch (err) { next(err); }
 }
+
+export async function getPendientesSesiones(req, res, next) {
+  try { res.json(await service.getPendientesSesiones(req.query)); } catch (err) { next(err); }
+}
+
+export async function getPendientesDetalleEstudiante(req, res, next) {
+  try { res.json(await service.getPendientesDetalleEstudiante(req.query)); } catch (err) { next(err); }
+}
+
+export async function liquidarPendientes(req, res, next) {
+  try { res.status(201).json(await service.liquidarPendientes(req.body)); } catch (err) { next(err); }
+}
+
+export async function liquidarIngresoSesion(req, res, next) {
+  try { res.json(await service.liquidarIngresoSesion(req.body)); } catch (err) { next(err); }
+}
+
+export async function liquidarIngresoEstudiante(req, res, next) {
+  try { res.json(await service.liquidarIngresoEstudiante(req.body)); } catch (err) { next(err); }
+}

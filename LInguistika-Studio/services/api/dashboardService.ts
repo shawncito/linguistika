@@ -81,11 +81,6 @@ export const dashboardService = {
     return res.data as any;
   },
 
-  cancelarPermanente: async (matriculaId: number): Promise<any> => {
-    const res = await httpClient.post(`/dashboard/sesion/${matriculaId}/cancelar-permanente`);
-    return res.data as any;
-  },
-
   actualizarEstadoSesion: async (
     matriculaId: number,
     fecha: string,
@@ -96,11 +91,6 @@ export const dashboardService = {
       datos
     );
     return res.data as any;
-  },
-
-  obtenerEstadosClases: async (fecha: string): Promise<any[]> => {
-    const res = await httpClient.get<any[]>(`/dashboard/estados-clases/${fecha}`);
-    return res.data as any[];
   },
 
   obtenerEstadosClasesRango: async (params: {

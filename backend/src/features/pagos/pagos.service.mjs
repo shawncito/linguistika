@@ -201,6 +201,134 @@ export async function uploadMovimientoComprobante(id, publicUrl) {
   return { id, comprobante_url: publicUrl };
 }
 
+// ─────────── PENDIENTES SESIONES ──────────────────────────────────────────────
+
+export async function getPendientesSesiones({ q, tutor_id, estudiante_id, fecha_inicio, fecha_fin, limit }) {
+  if (fecha_inicio && !isValidISODate(String(fecha_inicio))) throw new AppError('fecha_inicio debe ser YYYY-MM-DD', 400);
+  if (fecha_fin && !isValidISODate(String(fecha_fin))) throw new AppError('fecha_fin debe ser YYYY-MM-DD', 400);
+
+  const rows = await repo.getPendientesSesiones({
+    q: q ? String(q).trim() : null,
+    tutor_id: toIntOrNull(tutor_id),
+    estudiante_id: toIntOrNull(estudiante_id),
+    fecha_inicio: fecha_inicio || null,
+    fecha_fin: fecha_fin || null,
+    limit: toIntOrNull(limit) || 200,
+  });
+
+  return {
+    items: rows.map(r => ({
+      movimiento_id: r.id,
+      sesion_id: r.sesion_id,
+      tutor_id: r.tutor_id,
+      curso_id: r.curso_id,
+      curso_nombre: r.curso?.nombre || null,
+      tutor_nombre: r.tutor?.nombre || null,
+      estudiante_id: r.matricula?.estudiante_id || null,
+      estudiante_nombre: r.matricula?.estudiante?.nombre || null,
+      fecha_sesion: r.sesion?.fecha || null,
+      fecha_pago: r.fecha_pago,
+      hora_inicio: r.sesion?.hora_inicio || null,
+      hora_fin: r.sesion?.hora_fin || null,
+      monto: Number(r.monto) || 0,
+    })),
+  };
+}
+
+// ─────────── DETALLE ESTUDIANTE ──────────────────────────────────────────────
+
+export async function getPendientesDetalleEstudiante({ estudiante_id, estudiante_bulk_id, fecha_inicio, fecha_fin }) {
+  const estId = toIntOrNull(estudiante_id);
+  const bulkId = toIntOrNull(estudiante_bulk_id);
+  if (!estId && !bulkId) throw new AppError('Se requiere estudiante_id o estudiante_bulk_id', 400);
+  if (fecha_inicio && !isValidISODate(String(fecha_inicio))) throw new AppError('fecha_inicio debe ser YYYY-MM-DD', 400);
+  if (fecha_fin && !isValidISODate(String(fecha_fin))) throw new AppError('fecha_fin debe ser YYYY-MM-DD', 400);
+
+  const movimientos = await repo.getPendientesDetalleEstudiante({
+    estudiante_id: estId,
+    estudiante_bulk_id: bulkId,
+    fecha_inicio: fecha_inicio || null,
+    fecha_fin: fecha_fin || null,
+  });
+
+  return {
+    estudiante_id: estId || null,
+    estudiante_bulk_id: bulkId || null,
+    cantidad_movimientos: movimientos.length,
+    total_monto: movimientos.reduce((a, m) => a + (Number(m.monto) || 0), 0),
+    movimientos,
+  };
+}
+
+// ─────────── LIQUIDAR PENDIENTES TUTOR ───────────────────────────────────────
+
+export async function liquidarPendientes({ tutor_id, fecha_inicio, fecha_fin, descripcion, estado }) {
+  const tid = toIntOrNull(tutor_id);
+  if (!tid) throw new AppError('tutor_id requerido', 400);
+  if (fecha_inicio && !isValidISODate(String(fecha_inicio))) throw new AppError('fecha_inicio debe ser YYYY-MM-DD', 400);
+  if (fecha_fin && !isValidISODate(String(fecha_fin))) throw new AppError('fecha_fin debe ser YYYY-MM-DD', 400);
+
+  // Create a pago record first
+  const pago = await repo.createPago({
+    tutor_id: tid,
+    monto: 0, // will be updated
+    descripcion: descripcion || 'Liquidación de pendientes',
+    estado: estado || 'pagado',
+    periodo_inicio: fecha_inicio || null,
+    periodo_fin: fecha_fin || null,
+  });
+
+  // Mark all matching pending movimientos as completed
+  const result = await repo.liquidarPendientesTutor({
+    tutor_id: tid,
+    fecha_inicio: fecha_inicio || null,
+    fecha_fin: fecha_fin || null,
+    pago_id: pago.id,
+  });
+
+  return { pago_id: pago.id, movimientos_actualizados: result.updated, movimiento_ids: result.ids };
+}
+
+// ─────────── LIQUIDAR INGRESO SESION ─────────────────────────────────────────
+
+export async function liquidarIngresoSesion({ sesion_id, metodo, referencia, fecha_comprobante }) {
+  const sid = toIntOrNull(sesion_id);
+  if (!sid) throw new AppError('sesion_id requerido', 400);
+
+  const result = await repo.liquidarIngresoSesion({
+    sesion_id: sid,
+    metodo: metodo ? String(metodo).trim() : null,
+    referencia: referencia ? String(referencia).trim() : null,
+    fecha_comprobante: fecha_comprobante && isValidISODate(String(fecha_comprobante)) ? fecha_comprobante : null,
+  });
+
+  if (result.updated === 0) throw new AppError('No se encontraron movimientos pendientes para esta sesión', 404);
+  return result;
+}
+
+// ─────────── LIQUIDAR INGRESO ESTUDIANTE ─────────────────────────────────────
+
+export async function liquidarIngresoEstudiante({ estudiante_id, movimiento_ids, fecha_inicio, fecha_fin, metodo, referencia, fecha_comprobante }) {
+  const estId = toIntOrNull(estudiante_id);
+  if (!estId) throw new AppError('estudiante_id requerido', 400);
+  if (!metodo) throw new AppError('metodo requerido', 400);
+  if (!movimiento_ids || !Array.isArray(movimiento_ids) || movimiento_ids.length === 0) {
+    throw new AppError('movimiento_ids requerido (array no vacío)', 400);
+  }
+
+  const ids = movimiento_ids.map(v => toIntOrNull(v)).filter(n => Number.isFinite(n) && n > 0);
+  if (ids.length === 0) throw new AppError('movimiento_ids debe contener IDs válidos', 400);
+
+  const result = await repo.liquidarIngresoEstudiante({
+    movimiento_ids: ids,
+    metodo: String(metodo).trim(),
+    referencia: referencia ? String(referencia).trim() : null,
+    fecha_comprobante: fecha_comprobante && isValidISODate(String(fecha_comprobante)) ? fecha_comprobante : null,
+  });
+
+  return { movimiento_ids: result.ids, total_monto: result.total_monto, updated: result.updated };
+}
+
 export async function bulkComprobante(ids, comprobanteUrl) {
   if (!comprobanteUrl) throw new AppError('comprobante_url requerido', 400);
   if (!ids || ids.length === 0) throw new AppError('ids requerido (array)', 400);

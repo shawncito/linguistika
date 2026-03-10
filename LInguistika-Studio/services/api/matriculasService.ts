@@ -28,13 +28,4 @@ export const matriculasService = {
   delete: async (id: number): Promise<void> => {
     await httpClient.delete(`/matriculas/${id}`);
   },
-  validateTutorCourse: async (
-    tutor_id: number,
-    curso_id: number
-  ): Promise<{ compatible: boolean; issues: string[] }> => {
-    const res = await httpClient.get<{ compatible: boolean; issues: string[] }>(
-      `/matriculas/validate/tutor-course/${tutor_id}/${curso_id}`
-    );
-    return res.data;
-  },
 };
