@@ -25,7 +25,7 @@ DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE estudiantes_bulk;   EX
 CREATE OR REPLACE FUNCTION sync_curso_tutor_to_matriculas()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF NEW.tutor_id IS DISTINCT FROM OLD.tutor_id THEN
+  IF NEW.tutor_id IS NOT NULL AND NEW.tutor_id IS DISTINCT FROM OLD.tutor_id THEN
     UPDATE matriculas
        SET tutor_id = NEW.tutor_id
      WHERE curso_id = NEW.id
@@ -49,12 +49,13 @@ CREATE TRIGGER trg_sync_curso_tutor
 
 -- ── 3. Backfill: Fix existing matriculas with stale tutor_id ──
 -- Set matricula.tutor_id = curso.tutor_id for all active matriculas
--- where the tutor_id doesn't match.
+-- where the tutor_id doesn't match. Skip courses without a tutor.
 UPDATE matriculas m
    SET tutor_id = c.tutor_id
   FROM cursos c
  WHERE m.curso_id = c.id
    AND m.estado = true
+   AND c.tutor_id IS NOT NULL
    AND m.tutor_id IS DISTINCT FROM c.tutor_id;
 
 UPDATE matriculas_grupo mg
@@ -62,4 +63,5 @@ UPDATE matriculas_grupo mg
   FROM cursos c
  WHERE mg.curso_id = c.id
    AND mg.estado = 'activa'
+   AND c.tutor_id IS NOT NULL
    AND mg.tutor_id IS DISTINCT FROM c.tutor_id;
