@@ -152,7 +152,7 @@ export async function getDiario({ singleDate, mes, start, end, includePendientes
 export async function getMovimientosEncargado({ encargadoId, ...rest }) {
   const db = supabaseAdmin ?? supabase;
   const encargadoIdNum = parseInt(String(encargadoId), 10);
-  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas').select('id').eq('encargado_id', encargadoIdNum).maybeSingle();
+  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('encargado_id', encargadoIdNum).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este encargado.', 404);
   return getDiario({ ...rest, cuentaId: cuenta.id });
@@ -161,7 +161,7 @@ export async function getMovimientosEncargado({ encargadoId, ...rest }) {
 export async function getMovimientosTutor({ tutorId, ...rest }) {
   const db = supabaseAdmin ?? supabase;
   const tutorIdNum = parseInt(String(tutorId), 10);
-  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas').select('id').eq('tutor_id', tutorIdNum).maybeSingle();
+  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('tutor_id', tutorIdNum).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este tutor.', 404);
   return getDiario({ ...rest, cuentaId: cuenta.id });
@@ -271,7 +271,7 @@ export async function getEsperadoDiario() {
 
 export async function getObligacionesEncargado(encargadoId) {
   const db = supabaseAdmin ?? supabase;
-  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas').select('id').eq('encargado_id', parseInt(String(encargadoId), 10)).maybeSingle();
+  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('encargado_id', parseInt(String(encargadoId), 10)).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este encargado.', 404);
   const { data, error } = await db.from('tesoreria_obligaciones').select('*').eq('cuenta_id', cuenta.id).order('fecha_vencimiento', { ascending: true });
@@ -281,7 +281,7 @@ export async function getObligacionesEncargado(encargadoId) {
 
 export async function getObligacionesTutor(tutorId) {
   const db = supabaseAdmin ?? supabase;
-  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas').select('id').eq('tutor_id', parseInt(String(tutorId), 10)).maybeSingle();
+  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('tutor_id', parseInt(String(tutorId), 10)).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este tutor.', 404);
   const { data, error } = await db.from('tesoreria_obligaciones').select('*').eq('cuenta_id', cuenta.id).order('fecha_vencimiento', { ascending: true });

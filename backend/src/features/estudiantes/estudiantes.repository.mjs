@@ -119,7 +119,7 @@ export async function deleteEncargadoAccount(encargadoId) {
   const admin = supabaseAdmin;
   if (!admin) return;
   // Eliminar cuentas tesorería del encargado
-  await admin.from('tesoreria_cuentas_encargados').delete().eq('encargado_id', encargadoId);
+  await admin.from('tesoreria_cuentas_corrientes').delete().eq('encargado_id', encargadoId);
   await admin.from('encargados').delete().eq('id', encargadoId);
 }
 
