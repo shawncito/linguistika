@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { api } from '../services/api';
 import { supabaseClient } from '../lib/supabaseClient';
 import { usePersistentState } from '../lib/usePersistentState';
+import { useMatriculas } from '../hooks';
+import { estudiantesService } from '../services/api/estudiantesService';
+import { cursosService } from '../services/api/cursosService';
+import { tutoresService } from '../services/api/tutoresService';
+import { bulkService } from '../services/api/bulkService';
 import { Matricula, Tutor, Curso, Estudiante } from '../types';
 import { Button, Card, CardHeader, CardTitle, CardDescription, CardContent, Select, Label, Badge, Input, Dialog } from '../components/UI';
 import { Plus, Edit, XCircle, AlertCircle, Calendar, User, BookOpen, GraduationCap, CheckCircle, AlertTriangle, X } from 'lucide-react';
@@ -48,7 +52,7 @@ const getBulkGrupoStudents = (bulkGrupoDetalle: any): any[] => {
 };
 
 const Matriculas: React.FC = () => {
-  const [matriculas, setMatriculas] = useState<Matricula[]>([]);
+  const { matriculas, loading, createMatricula, updateMatricula, deleteMatricula, createFromBulkGrupo, refresh } = useMatriculas();
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [cursos, setCursos] = useState<Curso[]>([]);
   const [tutores, setTutores] = useState<Tutor[]>([]);
@@ -58,7 +62,6 @@ const Matriculas: React.FC = () => {
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [bulkConfirmLoading, setBulkConfirmLoading] = useState(false);
   const [bulkConfirmPayload, setBulkConfirmPayload] = useState<{ bulkId: string; grupoNombre: string | null } | null>(null);
-  const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [viewMode, setViewMode] = usePersistentState<'tabla' | 'tarjetas'>('ui:matriculas:viewMode', 'tarjetas', {
     version: 1,
@@ -96,25 +99,21 @@ const Matriculas: React.FC = () => {
     bulk_grupo_id: '' as string,
   });
 
-  const loadData = async () => {
-    setLoading(true);
-    const [m, e, c, t, bg] = await Promise.all([
-      api.matriculas.getAll(),
-      api.estudiantes.getAll(),
-      api.cursos.getAll(),
-      api.tutores.getAll(),
-      api.bulk.listGrupos().catch(() => []),
+  const loadCatalogos = async () => {
+    const [e, c, t, bg] = await Promise.all([
+      estudiantesService.getAll(),
+      cursosService.getAll(),
+      tutoresService.getAll(),
+      bulkService.listGrupos().catch(() => [] as any[]),
     ]);
-    setMatriculas(m);
     setEstudiantes(e);
     setCursos(c);
     setTutores(t);
     setBulkGrupos(bg as any);
-    setLoading(false);
   };
 
   useEffect(() => {
-    loadData();
+    loadCatalogos();
   }, []);
 
   // Cargar detalle del grupo importado seleccionado (para previsualización)
@@ -128,8 +127,7 @@ const Matriculas: React.FC = () => {
 
     let cancelled = false;
     setBulkGrupoDetalleLoading(true);
-    api.bulk
-      .getGrupo(id)
+    bulkService.getGrupo(id)
       .then((data) => {
         if (cancelled) return;
         setBulkGrupoDetalle(data);
@@ -153,10 +151,10 @@ const Matriculas: React.FC = () => {
     if (!supabaseClient) return;
     const channel = supabaseClient
       .channel('realtime-matriculas')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'matriculas' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'estudiantes' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cursos' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tutores' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matriculas' }, () => refresh())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'estudiantes' }, () => loadCatalogos())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cursos' }, () => loadCatalogos())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tutores' }, () => loadCatalogos())
       .subscribe();
 
     return () => {
@@ -197,9 +195,8 @@ const Matriculas: React.FC = () => {
 
       try {
         setBulkConfirmLoading(true);
-        await api.matriculas.createFromBulkGrupo(formData.bulk_grupo_id, formData.grupo_nombre || null);
+        await createFromBulkGrupo(formData.bulk_grupo_id, formData.grupo_nombre || null);
         resetForm();
-        loadData();
         return;
       } catch (error) {
         setErrors({ submit: getErrorMessage(error) });
@@ -266,10 +263,9 @@ const Matriculas: React.FC = () => {
         es_grupo: false,
         grupo_nombre: null,
       };
-      if (editingId) await api.matriculas.update(editingId, payload);
-      else await api.matriculas.create(payload);
+      if (editingId) await updateMatricula(editingId, payload);
+      else await createMatricula(payload);
       resetForm();
-      loadData();
     } catch (error) {
       setErrors({ submit: getErrorMessage(error) });
     }
@@ -293,8 +289,7 @@ const Matriculas: React.FC = () => {
   const handleCancel = async (id: number) => {
     if (window.confirm('¿Confirmas que deseas cancelar esta matrícula?')) {
       try {
-        await api.matriculas.delete(id);
-        loadData();
+        await deleteMatricula(id);
       } catch (error) {
         alert('Error al cancelar la matrícula');
       }
@@ -1243,9 +1238,8 @@ const Matriculas: React.FC = () => {
                         if (!bulkConfirmPayload?.bulkId) return;
                         try {
                           setBulkConfirmLoading(true);
-                          await api.matriculas.createFromBulkGrupo(bulkConfirmPayload.bulkId, bulkConfirmPayload.grupoNombre ?? null);
+                          await createFromBulkGrupo(bulkConfirmPayload.bulkId, bulkConfirmPayload.grupoNombre ?? null);
                           resetForm();
-                          loadData();
                         } catch (error) {
                           setErrors({ submit: getErrorMessage(error) });
                         } finally {

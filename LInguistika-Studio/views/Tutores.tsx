@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
-import { api } from "../services/api";
-import { supabaseClient } from "../lib/supabaseClient";
 import { usePersistentState } from "../lib/usePersistentState";
+import { useTutores } from "../hooks";
+import { tutoresService } from "../services/api/tutoresService";
 import { Tutor } from "../types";
 import {
   Button, Card, CardHeader, CardTitle, CardDescription, CardContent,
@@ -49,8 +49,7 @@ const tutorChipStyle = (color?: string | null) => {
 };
 
 const Tutores: React.FC = () => {
-  const [tutores, setTutores] = useState<Tutor[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { tutores, loading, createTutor, updateTutor, deleteTutor } = useTutores();
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formData, setFormData] = useState({
@@ -122,17 +121,6 @@ const Tutores: React.FC = () => {
     }
   );
 
-  const loadData = async () => {
-    setLoading(true);
-    const data = await api.tutores.getAll();
-    setTutores(data);
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    loadData();
-  }, []);
-
   const location = useLocation();
 
   // Open detail if URL has ?open=<id> (works with HashRouter via location.search)
@@ -142,7 +130,7 @@ const Tutores: React.FC = () => {
     if (openId) {
       const id = Number(openId);
       if (!Number.isNaN(id)) {
-        api.tutores.getById(id)
+        tutoresService.getById(id)
           .then((t) => {
             if (t) {
               setSelectedTutor(t);
@@ -288,14 +276,13 @@ const Tutores: React.FC = () => {
       };
 
       if (editingId) {
-        await api.tutores.update(editingId, dataToSubmit);
+        await updateTutor(editingId, dataToSubmit);
       } else {
-        await api.tutores.create(dataToSubmit);
+        await createTutor(dataToSubmit);
       }
 
       setShowModal(false);
       resetForm();
-      loadData();
     } catch (error) {
       setErrors({ submit: getErrorMessage(error) });
     }
@@ -340,15 +327,13 @@ const Tutores: React.FC = () => {
 
   const handleDelete = async (id: number) => {
     if (window.confirm("Estas seguro de eliminar este tutor?")) {
-      await api.tutores.delete(id);
-      loadData();
+      await deleteTutor(id);
     }
   };
 
   const toggleEstado = async (tutor: Tutor) => {
     const nuevoEstado = tutor.estado === 1 ? 0 : 1;
-    await api.tutores.update(tutor.id, { estado: nuevoEstado });
-    setTutores(prev => prev.map(t => t.id === tutor.id ? { ...t, estado: nuevoEstado } : t));
+    await updateTutor(tutor.id, { estado: nuevoEstado });
   };
 
   if (loading) {

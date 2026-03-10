@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { api } from '../services/api';
-import { supabaseClient } from '../lib/supabaseClient';
 import { usePersistentState } from '../lib/usePersistentState';
+import { supabaseClient } from '../lib/supabaseClient';
+import { useCursos } from '../hooks';
+import { bulkService } from '../services/api/bulkService';
 import { Curso, Tutor } from '../types';
 import { 
   Button, Card, CardHeader, CardTitle, CardDescription, CardContent,
@@ -84,9 +85,7 @@ const formatCurso409 = (error: any): Record<string, string> => {
 };
 
 const Cursos: React.FC = () => {
-  const [cursos, setCursos] = useState<Curso[]>([]);
-  const [tutores, setTutores] = useState<Tutor[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { cursos, tutores, loading, createCurso, updateCurso, deleteCurso, refresh } = useCursos();
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -185,21 +184,6 @@ const Cursos: React.FC = () => {
       return 0;
     }
   };
-
-  const loadData = async () => {
-    setLoading(true);
-    const [cursosData, tutoresData] = await Promise.all([
-      api.cursos.getAll(),
-      api.tutores.getAll()
-    ]);
-    setCursos(cursosData);
-    setTutores(tutoresData);
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    loadData();
-  }, []);
 
   const cursosFiltrados = useMemo(() => {
     const filtered = cursos.filter(c => {
@@ -356,8 +340,8 @@ const Cursos: React.FC = () => {
     if (!supabaseClient) return;
     const channel = supabaseClient
       .channel('realtime-cursos')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cursos' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tutores' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cursos' }, () => refresh())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tutores' }, () => refresh())
       .subscribe();
 
     return () => {
@@ -431,14 +415,13 @@ const Cursos: React.FC = () => {
       };
 
       if (editingId) {
-        await api.cursos.update(editingId, dataToSubmit);
+        await updateCurso(editingId, dataToSubmit);
       } else {
-        await api.cursos.create(dataToSubmit);
+        await createCurso(dataToSubmit);
       }
 
       setShowModal(false);
       resetForm();
-      loadData();
     } catch (error: any) {
       if (error?.response?.status === 409) {
         setErrors(formatCurso409(error));
@@ -450,7 +433,7 @@ const Cursos: React.FC = () => {
 
   const downloadCursosTemplate = async () => {
     try {
-      const blob = await api.bulk.downloadTemplate('cursos_bulk');
+      const blob = await bulkService.downloadTemplate('cursos_bulk');
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -472,10 +455,10 @@ const Cursos: React.FC = () => {
     setBulkUploading(true);
     setBulkResult(null);
     try {
-      const res = await api.bulk.uploadExcel(bulkFile);
+      const res = await bulkService.uploadExcel(bulkFile);
       setBulkResult(res);
       if (res?.created > 0) {
-        loadData();
+        refresh();
       }
     } catch (e: any) {
       setBulkResult({ ok: false, failures: [{ rowNumber: 0, nombre: null, error: getErrorMessage(e) }] });
@@ -537,8 +520,7 @@ const Cursos: React.FC = () => {
   const handleDelete = async (id: number) => {
     if (window.confirm('¿Estás seguro de eliminar este curso?')) {
       try {
-        await api.cursos.delete(id);
-        loadData();
+        await deleteCurso(id);
       } catch (e: any) {
         const data = e?.response?.data;
         const blockers = data?.blockers;
@@ -560,8 +542,7 @@ const Cursos: React.FC = () => {
           const confirmMsg = `${msg}\n\n¿Deseas eliminar automáticamente esas dependencias (grupos/matrículas) y luego borrar el curso? Esto es PERMANENTE.`;
           if (window.confirm(confirmMsg)) {
             try {
-              await api.cursos.deleteCascade(id);
-              loadData();
+              await deleteCurso(id, true);
               return;
             } catch (e2: any) {
               const data2 = e2?.response?.data;
@@ -578,8 +559,7 @@ const Cursos: React.FC = () => {
 
   const toggleEstado = async (curso: Curso) => {
     const nuevoEstado = curso.estado === 1 ? 0 : 1;
-    await api.cursos.update(curso.id, { estado: nuevoEstado });
-    setCursos(prev => prev.map(c => c.id === curso.id ? { ...c, estado: nuevoEstado } : c));
+    await updateCurso(curso.id, { estado: nuevoEstado });
   };
 
   if (loading) return (

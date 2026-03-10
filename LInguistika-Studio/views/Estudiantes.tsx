@@ -1,8 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
-import { api } from '../services/api';
 import { supabaseClient } from '../lib/supabaseClient';
 import { usePersistentState } from '../lib/usePersistentState';
+import { useEstudiantes } from '../hooks';
+import { estudiantesService } from '../services/api/estudiantesService';
+import { bulkService } from '../services/api/bulkService';
+import { cursosService } from '../services/api/cursosService';
+import { tutoresService } from '../services/api/tutoresService';
 import { Estudiante } from '../types';
 import { Button, Card, CardHeader, CardTitle, CardDescription, CardContent, Input, Label, Select, Badge, Dialog, Table, TableHead, TableHeader, TableRow, TableCell, TableBody } from '../components/UI';
 import { PhoneInput } from '../components/PhoneInput';
@@ -99,10 +103,9 @@ type UnifiedStudent = {
 };
 
 const Estudiantes: React.FC = () => {
-  const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
+  const { estudiantes, loading, createEstudiante, updateEstudiante, deleteEstudiante, refresh } = useEstudiantes();
   const [bulkEstudiantes, setBulkEstudiantes] = useState<BulkEstudiante[]>([]);
   const [bulkGrupos, setBulkGrupos] = useState<BulkGrupo[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -218,22 +221,18 @@ const Estudiantes: React.FC = () => {
   const [bulkPreview, setBulkPreview] = useState<any | null>(null);
   const [bulkPreviewErr, setBulkPreviewErr] = useState<string | null>(null);
 
-  const loadData = async () => {
-    setLoading(true);
-    const [data, bulkData, gruposData] = await Promise.all([
-      api.estudiantes.getAll(),
-      api.bulk.listEstudiantesBulk(),
-      api.bulk.listGrupos(),
+  const loadBulkData = useCallback(async () => {
+    const [bulkData, gruposData] = await Promise.all([
+      bulkService.listEstudiantesBulk(),
+      bulkService.listGrupos(),
     ]);
-    setEstudiantes(data);
     setBulkEstudiantes(bulkData as any);
     setBulkGrupos(gruposData as any);
-    setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    loadBulkData();
+  }, [loadBulkData]);
 
   // Open detail if URL has ?open=<id>
   const location = useLocation();
@@ -243,7 +242,7 @@ const Estudiantes: React.FC = () => {
     if (openId) {
       const id = Number(openId);
       if (!Number.isNaN(id)) {
-        api.estudiantes.getById(id)
+        estudiantesService.getById(id)
           .then((e) => {
             if (e) {
               setSelectedEstudiante({
@@ -270,7 +269,7 @@ const Estudiantes: React.FC = () => {
     setBulkMsg(null);
     setBulkBusy(true);
     try {
-      const blob = await api.bulk.downloadTemplate(bulkTipo);
+      const blob = await bulkService.downloadTemplate(bulkTipo);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -300,7 +299,7 @@ const Estudiantes: React.FC = () => {
     setBulkPreview(null);
     setBulkPreviewBusy(true);
     try {
-      const prev = await api.bulk.previewExcel(bulkFile);
+      const prev = await bulkService.previewExcel(bulkFile);
       setBulkPreview(prev);
       setBulkPreviewOpen(true);
     } catch (e: any) {
@@ -317,7 +316,7 @@ const Estudiantes: React.FC = () => {
     setBulkResult(null);
     setBulkBusy(true);
     try {
-      const res = await api.bulk.uploadExcel(bulkFile);
+      const res = await bulkService.uploadExcel(bulkFile);
       const inserted = res?.inserted ?? res?.inserted_estudiantes_bulk ?? 0;
       const createdGrupos = res?.created_grupos ?? 0;
       const linked = res?.linked ?? 0;
@@ -336,7 +335,7 @@ const Estudiantes: React.FC = () => {
       setBulkPreviewOpen(false);
       setBulkFile(null);
 
-      const [bulkData, gruposData] = await Promise.all([api.bulk.listEstudiantesBulk(), api.bulk.listGrupos()]);
+      const [bulkData, gruposData] = await Promise.all([bulkService.listEstudiantesBulk(), bulkService.listGrupos()]);
       setBulkEstudiantes(bulkData as any);
       setBulkGrupos(gruposData as any);
     } catch (e: any) {
@@ -364,7 +363,7 @@ const Estudiantes: React.FC = () => {
     if (!bulkEditing) return;
     setBulkEditErr(null);
     try {
-      await api.bulk.updateEstudianteBulk(bulkEditing.id, {
+      await bulkService.updateEstudianteBulk(bulkEditing.id, {
         nombre: bulkForm.nombre,
         nombre_encargado: bulkForm.nombre_encargado || null,
         email_encargado: bulkForm.email_encargado || null,
@@ -372,7 +371,7 @@ const Estudiantes: React.FC = () => {
         requiere_perfil_completo: !!bulkForm.requiere_perfil_completo,
         estado: !!bulkForm.estado,
       });
-      const bulkData = await api.bulk.listEstudiantesBulk();
+      const bulkData = await bulkService.listEstudiantesBulk();
       setBulkEstudiantes(bulkData as any);
       setBulkEditOpen(false);
     } catch (e: any) {
@@ -382,20 +381,20 @@ const Estudiantes: React.FC = () => {
 
   const deleteBulk = async (id: number) => {
     if (!window.confirm('¿Eliminar este estudiante? (Se quitará de cualquier grupo)')) return;
-    await api.bulk.deleteEstudianteBulk(id);
-    const bulkData = await api.bulk.listEstudiantesBulk();
+    await bulkService.deleteEstudianteBulk(id);
+    const bulkData = await bulkService.listEstudiantesBulk();
     setBulkEstudiantes(bulkData as any);
   };
 
   const toggleBulkEstado = async (s: BulkEstudiante) => {
     const nuevo = !(s.estado === true || s.estado === 1);
-    await api.bulk.updateEstudianteBulk(s.id, { estado: nuevo });
+    await bulkService.updateEstudianteBulk(s.id, { estado: nuevo });
     setBulkEstudiantes((prev) => prev.map((x) => (x.id === s.id ? { ...x, estado: nuevo } : x)));
   };
 
   const ensureCatalogos = async () => {
     if (cursosCatalog.length && tutoresCatalog.length) return;
-    const [cursos, tutores] = await Promise.all([api.cursos.getAll(), api.tutores.getAll()]);
+    const [cursos, tutores] = await Promise.all([cursosService.getAll(), tutoresService.getAll()]);
     setCursosCatalog(cursos as any);
     setTutoresCatalog(tutores as any);
   };
@@ -411,14 +410,14 @@ const Estudiantes: React.FC = () => {
         return;
       }
       const cant = grupoForm.cantidad_estudiantes_esperados.trim() ? parseInt(grupoForm.cantidad_estudiantes_esperados, 10) : null;
-      await api.bulk.createGrupo({
+      await bulkService.createGrupo({
         curso_id: cursoId,
         tutor_id: tutorId,
         nombre_grupo: grupoForm.nombre_grupo.trim() || null,
         cantidad_estudiantes_esperados: Number.isFinite(cant as any) ? (cant as any) : null,
         turno: grupoForm.turno.trim() || null,
       });
-      const gruposData = await api.bulk.listGrupos();
+      const gruposData = await bulkService.listGrupos();
       setBulkGrupos(gruposData as any);
       setGrupoCreateMsg('Grupo creado.');
       setGrupoForm({ nombre_grupo: '', curso_id: '', tutor_id: '', turno: '', cantidad_estudiantes_esperados: '' });
@@ -436,25 +435,27 @@ const Estudiantes: React.FC = () => {
     const channel = supabaseClient
       .channel('realtime-estudiantes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'estudiantes' }, () => {
-        loadData();
+        refresh();
+        loadBulkData();
       })
       .subscribe();
 
     return () => {
       supabaseClient.removeChannel(channel);
     };
-  }, []);
+  }, [loadBulkData, refresh]);
 
   // Recargar datos cuando la pestaña se vuelve visible
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        loadData();
+        refresh();
+        loadBulkData();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+  }, [loadBulkData, refresh]);
 
   const validateEmail = (email: string): boolean => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -489,7 +490,7 @@ const Estudiantes: React.FC = () => {
 
     try {
       if (!editingId && formData.grupo_id) {
-        const created = await api.bulk.createEstudianteBulk({
+        const created = await bulkService.createEstudianteBulk({
           nombre: formData.nombre.trim(),
           nombre_encargado: formData.nombre_encargado.trim() || null,
           email_encargado: formData.email_encargado.trim() || null,
@@ -497,11 +498,11 @@ const Estudiantes: React.FC = () => {
           requiere_perfil_completo: false,
           estado: true,
         });
-        await api.bulk.assignEstudiantesToGrupo(String(formData.grupo_id), [created.id]);
+        await bulkService.assignEstudiantesToGrupo(String(formData.grupo_id), [created.id]);
 
         setShowModal(false);
         resetForm();
-        await loadData();
+        await Promise.all([refresh(), loadBulkData()]);
         setBandeja('grupos');
         return;
       }
@@ -520,14 +521,13 @@ const Estudiantes: React.FC = () => {
       };
 
       if (editingId) {
-        await api.estudiantes.update(editingId, dataToSubmit);
+        await updateEstudiante(editingId, dataToSubmit);
       } else {
-        await api.estudiantes.create(dataToSubmit);
+        await createEstudiante(dataToSubmit);
       }
 
       setShowModal(false);
       resetForm();
-      loadData();
     } catch (error) {
       setErrors({ submit: getErrorMessage(error) });
     }
@@ -565,15 +565,13 @@ const Estudiantes: React.FC = () => {
 
   const handleDelete = async (id: number) => {
     if (window.confirm('¿Estás seguro de eliminar este estudiante?')) {
-      await api.estudiantes.delete(id);
-      loadData();
+      await deleteEstudiante(id);
     }
   };
 
   const toggleEstado = async (est: Estudiante) => {
     const nuevoEstado = est.estado === 1 ? 0 : 1;
-    await api.estudiantes.update(est.id, { estado: nuevoEstado });
-    setEstudiantes(prev => prev.map(e => e.id === est.id ? { ...e, estado: nuevoEstado } : e));
+    await updateEstudiante(est.id, { estado: nuevoEstado });
   };
 
   const getGradoColor = (grado?: string | null) => {
@@ -743,15 +741,14 @@ const Estudiantes: React.FC = () => {
   const addSelectedToGrupo = async () => {
     if (!grupoAdminId || (grupoSelectedToAdd.length === 0 && grupoSelectedToAddNormales.length === 0)) return;
     try {
-      await api.bulk.assignEstudiantesToGrupo(String(grupoAdminId), grupoSelectedToAdd, grupoSelectedToAddNormales);
-      const [gruposData, bulkData, normalData] = await Promise.all([
-        api.bulk.listGrupos(),
-        api.bulk.listEstudiantesBulk(),
-        api.estudiantes.getAll(),
+      await bulkService.assignEstudiantesToGrupo(String(grupoAdminId), grupoSelectedToAdd, grupoSelectedToAddNormales);
+      const [gruposData, bulkData] = await Promise.all([
+        bulkService.listGrupos(),
+        bulkService.listEstudiantesBulk(),
       ]);
       setBulkGrupos(gruposData as any);
       setBulkEstudiantes(bulkData as any);
-      setEstudiantes(normalData as any);
+      refresh();
       setGrupoSelectedToAdd([]);
       setGrupoSelectedToAddNormales([]);
     } catch (e: any) {
@@ -761,8 +758,8 @@ const Estudiantes: React.FC = () => {
 
   const removeFromGrupo = async (estudianteBulkId: number) => {
     try {
-      await api.bulk.unassignEstudiantes([estudianteBulkId], []);
-      const [gruposData, bulkData] = await Promise.all([api.bulk.listGrupos(), api.bulk.listEstudiantesBulk()]);
+      await bulkService.unassignEstudiantes([estudianteBulkId], []);
+      const [gruposData, bulkData] = await Promise.all([bulkService.listGrupos(), bulkService.listEstudiantesBulk()]);
       setBulkGrupos(gruposData as any);
       setBulkEstudiantes(bulkData as any);
     } catch (e: any) {
@@ -772,10 +769,10 @@ const Estudiantes: React.FC = () => {
 
   const removeFromGrupoNormal = async (estudianteId: number) => {
     try {
-      await api.bulk.unassignEstudiantes([], [estudianteId]);
-      const [gruposData, normalData] = await Promise.all([api.bulk.listGrupos(), api.estudiantes.getAll()]);
+      await bulkService.unassignEstudiantes([], [estudianteId]);
+      const [gruposData] = await Promise.all([bulkService.listGrupos()]);
       setBulkGrupos(gruposData as any);
-      setEstudiantes(normalData as any);
+      refresh();
     } catch (e: any) {
       window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo quitar del grupo');
     }
@@ -785,15 +782,14 @@ const Estudiantes: React.FC = () => {
     if (!grupoAdminId) return;
     if (!window.confirm('¿Eliminar este grupo? Se desasignarán estudiantes y se quitará el vínculo en finanzas (si aplica).')) return;
     try {
-      await api.bulk.deleteGrupo(String(grupoAdminId));
-      const [gruposData, bulkData, normalData] = await Promise.all([
-        api.bulk.listGrupos(),
-        api.bulk.listEstudiantesBulk(),
-        api.estudiantes.getAll(),
+      await bulkService.deleteGrupo(String(grupoAdminId));
+      const [gruposData, bulkData] = await Promise.all([
+        bulkService.listGrupos(),
+        bulkService.listEstudiantesBulk(),
       ]);
       setBulkGrupos(gruposData as any);
       setBulkEstudiantes(bulkData as any);
-      setEstudiantes(normalData as any);
+      refresh();
       setGrupoAdminOpen(false);
       setGrupoAdminId(null);
     } catch (e: any) {
