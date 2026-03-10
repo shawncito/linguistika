@@ -1,13 +1,16 @@
 import { supabase, supabaseAdmin } from '../../shared/config/supabaseClient.mjs';
 import { AppError } from '../../shared/errors/AppError.mjs';
 
+// DB stores estado as boolean; frontend expects 0/1
+const normalizeCurso = (c) => c ? { ...c, estado: c.estado ? 1 : 0 } : c;
+
 export async function findAll() {
   const { data, error } = await supabase
     .from('cursos')
     .select('*, tutores(nombre, color)')
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []).map(normalizeCurso);
 }
 
 export async function findById(id) {
@@ -18,7 +21,7 @@ export async function findById(id) {
     .maybeSingle();
   if (error) throw error;
   if (!data) throw new AppError('Curso no encontrado', 404);
-  return data;
+  return normalizeCurso(data);
 }
 
 export async function findByName(nombre) {
@@ -51,12 +54,13 @@ export async function create(payload) {
     hora_fin: payload.hora_fin,
     capacidad_maxima: payload.capacidad_maxima || null,
     activo_para_matricula: payload.activo_para_matricula !== false,
+    estado: true,
     created_by: payload.userId,
   };
 
   const { data, error } = await supabase.from('cursos').insert(row).select().single();
   if (error) throw error;
-  return data;
+  return normalizeCurso(data);
 }
 
 export async function update(id, payload) {
@@ -65,6 +69,7 @@ export async function update(id, payload) {
   for (const f of fields) {
     if (payload[f] !== undefined) updateData[f] = payload[f];
   }
+  if (payload.estado !== undefined) updateData.estado = payload.estado === 1 || payload.estado === true;
 
   const { data, error } = await supabase
     .from('cursos')
@@ -73,7 +78,7 @@ export async function update(id, payload) {
     .select()
     .single();
   if (error) throw error;
-  return data;
+  return normalizeCurso(data);
 }
 
 // Verificadores para DELETE

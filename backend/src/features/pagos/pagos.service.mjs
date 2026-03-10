@@ -43,6 +43,10 @@ export async function getPendientesResumenTutores() {
   return { tutores };
 }
 
+export async function getPendientesResumenEstudiantes() {
+  return repo.getPendientesResumenEstudiantes();
+}
+
 export async function getPendientesDetalleTutor({ tutor_id, fecha_inicio, fecha_fin }) {
   if (!tutor_id) throw new AppError('Query param requerido: tutor_id', 400);
   if (fecha_inicio && !isValidISODate(String(fecha_inicio))) throw new AppError('fecha_inicio debe ser YYYY-MM-DD', 400);

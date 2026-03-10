@@ -213,6 +213,128 @@ export async function insertMovimientoDinero(row) {
   return data;
 }
 
+// ─────────── RESUMEN ESTUDIANTES ──────────────────────────────────────────────
+
+export async function getPendientesResumenEstudiantes() {
+  const [estRes, bulkRes, linksRes] = await Promise.all([
+    supabase.from('estudiantes').select('id, nombre, matricula_grupo_id, encargado_id').order('nombre'),
+    supabase.from('estudiantes_bulk').select('id, nombre').order('nombre'),
+    supabase.from('estudiantes_en_grupo').select('estudiante_bulk_id, matricula_grupo_id'),
+  ]);
+  if (estRes.error) throw estRes.error;
+  if (bulkRes.error) throw bulkRes.error;
+  if (linksRes.error) throw linksRes.error;
+
+  const estudiantes = estRes.data ?? [];
+  const estudiantesBulk = bulkRes.data ?? [];
+  const bulkToGrupo = new Map((linksRes.data ?? []).map(l => [Number(l.estudiante_bulk_id), l.matricula_grupo_id ?? null]));
+
+  const groupMembers = new Map();
+  const studentToGrupo = new Map();
+  for (const e of estudiantes) {
+    const gid = e.matricula_grupo_id ?? null;
+    studentToGrupo.set(Number(e.id), gid ?? null);
+    if (!gid) continue;
+    if (!groupMembers.has(gid)) groupMembers.set(gid, { normales: new Set(), bulk: new Set() });
+    groupMembers.get(gid).normales.add(Number(e.id));
+  }
+  for (const [bulkId, gid] of bulkToGrupo.entries()) {
+    if (!gid) continue;
+    if (!groupMembers.has(gid)) groupMembers.set(gid, { normales: new Set(), bulk: new Set() });
+    groupMembers.get(gid).bulk.add(Number(bulkId));
+  }
+
+  const encargadoIds = Array.from(new Set(
+    estudiantes.map(e => Number(e?.encargado_id)).filter(id => Number.isFinite(id) && id > 0)
+  ));
+
+  let saldoMap = new Map();
+  let encargadoMap = new Map();
+  if (encargadoIds.length) {
+    const [saldoRes, encRes] = await Promise.all([
+      supabase.from('tesoreria_saldos_encargados_v1').select('encargado_id, saldo_a_favor').in('encargado_id', encargadoIds),
+      supabase.from('encargados').select('id, nombre').in('id', encargadoIds),
+    ]);
+    if (!saldoRes.error) saldoMap = new Map((saldoRes.data ?? []).map(s => [Number(s.encargado_id), Number(s.saldo_a_favor) || 0]));
+    if (!encRes.error) encargadoMap = new Map((encRes.data ?? []).map(r => [Number(r.id), r?.nombre || null]));
+  }
+
+  const { data: movs, error: movsError } = await supabase
+    .from('movimientos_dinero')
+    .select('monto, origen, curso:curso_id (tipo_pago), matricula:matricula_id (estudiante_id, estudiante_ids, grupo_id)')
+    .eq('tipo', 'ingreso_estudiante')
+    .eq('estado', 'pendiente');
+  if (movsError) throw movsError;
+
+  const totalsByEst = new Map();
+  const totalsByBulk = new Map();
+  const normalIds = new Set(estudiantes.map(e => Number(e.id)));
+  const bulkIds = new Set(estudiantesBulk.map(e => Number(e.id)));
+
+  for (const m of movs ?? []) {
+    const directId = m?.matricula?.estudiante_id;
+    const groupIds = Array.isArray(m?.matricula?.estudiante_ids) ? m.matricula.estudiante_ids : [];
+    const ids = (directId ? [directId] : groupIds).filter(id => Number.isFinite(Number(id)) && Number(id) > 0);
+    const grupoId = m?.matricula?.grupo_id ?? null;
+
+    if (grupoId) {
+      const group = groupMembers.get(grupoId);
+      if (group) {
+        for (const id of group.normales) totalsByEst.set(id, (totalsByEst.get(id) || 0) + (Number(m.monto) || 0));
+        for (const id of group.bulk) totalsByBulk.set(id, (totalsByBulk.get(id) || 0) + (Number(m.monto) || 0));
+        continue;
+      }
+    }
+
+    if (!directId && groupIds.length > 0) {
+      const groupIdsFromStudents = Array.from(new Set(
+        groupIds.map(id => studentToGrupo.get(Number(id))).filter(gid => Number.isFinite(Number(gid)) && Number(gid) > 0)
+      ));
+      if (groupIdsFromStudents.length === 1) {
+        const group = groupMembers.get(groupIdsFromStudents[0]);
+        if (group) {
+          for (const id of group.normales) totalsByEst.set(id, (totalsByEst.get(id) || 0) + (Number(m.monto) || 0));
+          for (const id of group.bulk) totalsByBulk.set(id, (totalsByBulk.get(id) || 0) + (Number(m.monto) || 0));
+          continue;
+        }
+      }
+    }
+
+    if (ids.length > 0) {
+      for (const id of ids) {
+        const estId = Number(id);
+        if (normalIds.has(estId)) { totalsByEst.set(estId, (totalsByEst.get(estId) || 0) + (Number(m.monto) || 0)); continue; }
+        if (bulkIds.has(estId)) { totalsByBulk.set(estId, (totalsByBulk.get(estId) || 0) + (Number(m.monto) || 0)); }
+      }
+    }
+  }
+
+  return {
+    estudiantes: [
+      ...estudiantes.map(e => ({
+        estudiante_id: e.id,
+        estudiante_bulk_id: null,
+        estudiante_nombre: e.nombre,
+        matricula_grupo_id: e.matricula_grupo_id ?? null,
+        encargado_id: e.encargado_id ?? null,
+        encargado_nombre: e.encargado_id ? (encargadoMap.get(Number(e.encargado_id)) || null) : null,
+        saldo_a_favor: e.encargado_id ? (saldoMap.get(Number(e.encargado_id)) || 0) : 0,
+        total_pendiente: totalsByEst.get(Number(e.id)) || 0,
+      })),
+      ...estudiantesBulk.map(e => ({
+        estudiante_id: null,
+        estudiante_bulk_id: e.id,
+        estudiante_nombre: e.nombre,
+        matricula_grupo_id: bulkToGrupo.get(Number(e.id)) ?? null,
+        encargado_id: null,
+        encargado_nombre: null,
+        saldo_a_favor: 0,
+        total_pendiente: totalsByBulk.get(Number(e.id)) || 0,
+      })),
+    ],
+  };
+}
+
 // ─────────── BULK COMPROBANTE ─────────────────────────────────────────────────
 
 export async function findMovimientosByIds(ids) {

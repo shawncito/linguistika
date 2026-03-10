@@ -28,6 +28,10 @@ export async function getPendientesResumenTutores(_req, res, next) {
   try { res.json(await service.getPendientesResumenTutores()); } catch (err) { next(err); }
 }
 
+export async function getPendientesResumenEstudiantes(_req, res, next) {
+  try { res.json(await service.getPendientesResumenEstudiantes()); } catch (err) { next(err); }
+}
+
 export async function getPendientesDetalleTutor(req, res, next) {
   try { res.json(await service.getPendientesDetalleTutor(req.query)); } catch (err) { next(err); }
 }

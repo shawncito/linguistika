@@ -37,6 +37,7 @@ router.get('/', ctrl.getAll);
 router.get('/libro-diario', ctrl.getLibroDiario);
 router.get('/pendientes/resumen', ctrl.getPendientesResumen);
 router.get('/pendientes/resumen-tutores', ctrl.getPendientesResumenTutores);
+router.get('/pendientes/resumen-estudiantes', ctrl.getPendientesResumenEstudiantes);
 router.get('/pendientes/detalle-tutor', ctrl.getPendientesDetalleTutor);
 router.get('/:id', ctrl.getById);
 router.post('/', ctrl.create);

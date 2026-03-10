@@ -209,25 +209,38 @@ export async function getPagoAplicaciones(pagoId) {
 
 export async function getResumen() {
   const db = supabaseAdmin ?? supabase;
-  const [{ data: enc, error: encErr }, { data: tut, error: tutErr }] = await Promise.all([
-    db.from('tesoreria_cuentas').select('saldo_actual, tipo_cuenta').eq('tipo_cuenta', 'encargado'),
-    db.from('tesoreria_cuentas').select('saldo_actual, tipo_cuenta').eq('tipo_cuenta', 'tutor'),
+  const [encRes, tutRes, cgRes] = await Promise.all([
+    db.from('tesoreria_saldos_encargados_v1').select('deuda_pendiente, saldo_a_favor'),
+    db.from('tesoreria_saldos_tutores_v1').select('por_pagar'),
+    db.from('movimientos_dinero').select('monto').eq('estado', 'pendiente').eq('tipo', 'ingreso').eq('origen', 'cobro_grupal'),
   ]);
-  if (encErr) throw encErr;
-  if (tutErr) throw tutErr;
-  const deudaPendiente = (enc ?? []).reduce((acc, c) => acc + (parseFloat(String(c.saldo_actual ?? '0')) || 0), 0);
-  const porPagarTutores = (tut ?? []).reduce((acc, c) => acc + (parseFloat(String(c.saldo_actual ?? '0')) || 0), 0);
-  return { deudaPendiente: Math.round(deudaPendiente * 100) / 100, saldoAFavor: 0, porPagarTutores: Math.round(porPagarTutores * 100) / 100 };
+  if (encRes.error) throw encRes.error;
+  if (tutRes.error) throw tutRes.error;
+  if (cgRes.error) throw cgRes.error;
+  const deudaPendiente = (encRes.data ?? []).reduce((acc, x) => acc + (Number(x?.deuda_pendiente) || 0), 0);
+  const deudaCobroGrupal = (cgRes.data ?? []).reduce((acc, x) => acc + (Number(x?.monto) || 0), 0);
+  const saldoAFavor = (encRes.data ?? []).reduce((acc, x) => acc + (Number(x?.saldo_a_favor) || 0), 0);
+  const porPagarTutores = (tutRes.data ?? []).reduce((acc, x) => acc + (Number(x?.por_pagar) || 0), 0);
+  return { deudaPendiente: deudaPendiente + deudaCobroGrupal, saldoAFavor, porPagarTutores };
 }
 
 /* ─── Bolsa ──────────────────────────────────────────────────────────────── */
 
 export async function getBolsa() {
   const db = supabaseAdmin ?? supabase;
-  const { data, error } = await db.from('tesoreria_pagos').select('debe_real, haber_real, bolsa_real').eq('estado', 'confirmado').limit(1).maybeSingle();
+  const { data: pagos, error } = await db.from('tesoreria_pagos')
+    .select('direccion, monto, estado')
+    .in('estado', ['completado', 'verificado']);
   if (error) throw error;
-  if (!data) return { debe_real: 0, haber_real: 0, bolsa_real: 0 };
-  return { debe_real: parseFloat(String(data.debe_real ?? '0')) || 0, haber_real: parseFloat(String(data.haber_real ?? '0')) || 0, bolsa_real: parseFloat(String(data.bolsa_real ?? '0')) || 0 };
+  let debe_real = 0;
+  let haber_real = 0;
+  for (const p of pagos ?? []) {
+    const monto = Number(p.monto) || 0;
+    if (p.direccion === 'entrada') haber_real += monto;
+    else if (p.direccion === 'salida') debe_real += monto;
+  }
+  const bolsa_real = haber_real - debe_real;
+  return { debe_real, haber_real, bolsa_real, movimientos_count: pagos?.length || 0 };
 }
 
 /* ─── Porcentaje encargados ──────────────────────────────────────────────── */
