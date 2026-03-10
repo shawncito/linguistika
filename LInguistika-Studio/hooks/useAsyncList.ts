@@ -37,20 +37,30 @@ export function useAsyncList<T>(
   const fetchFnRef = useRef(fetchFn);
   fetchFnRef.current = fetchFn;
   const hasLoaded = useRef(false);
+  const pendingRef = useRef<Promise<T[]> | null>(null);
 
   const refresh = useCallback(async () => {
+    // Deduplicate: if a fetch is already in-flight, reuse it
+    if (pendingRef.current) {
+      await pendingRef.current;
+      return;
+    }
     // Only show loading spinner on first load, not on realtime refreshes
     setState(prev => ({
       ...prev,
       loading: !hasLoaded.current,
       error: null,
     }));
+    const promise = fetchFnRef.current();
+    pendingRef.current = promise;
     try {
-      const data = await fetchFnRef.current();
+      const data = await promise;
       hasLoaded.current = true;
       setState({ data, loading: false, error: null });
     } catch (err) {
       setState(prev => ({ ...prev, loading: false, error: extractMessage(err) }));
+    } finally {
+      pendingRef.current = null;
     }
   }, []);
 

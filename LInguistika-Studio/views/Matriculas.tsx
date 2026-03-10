@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { supabaseClient } from '../lib/supabaseClient';
 import { usePersistentState } from '../lib/usePersistentState';
-import { useMatriculas } from '../hooks';
+import { useMatriculas, useRealtimeSubscription } from '../hooks';
 import { estudiantesService } from '../services/api/estudiantesService';
 import { cursosService } from '../services/api/cursosService';
 import { tutoresService } from '../services/api/tutoresService';
@@ -146,21 +145,8 @@ const Matriculas: React.FC = () => {
     };
   }, [showModal, formData.es_grupo, formData.grupo_origen, formData.bulk_grupo_id]);
 
-  // Suscripción en tiempo real a matrículas y entidades relacionadas
-  useEffect(() => {
-    if (!supabaseClient) return;
-    const channel = supabaseClient
-      .channel('realtime-matriculas')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'matriculas' }, () => refresh())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'estudiantes' }, () => loadCatalogos())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cursos' }, () => loadCatalogos())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tutores' }, () => loadCatalogos())
-      .subscribe();
-
-    return () => {
-      supabaseClient.removeChannel(channel);
-    };
-  }, []);
+  // Suscripción en tiempo real a matrículas y catálogos
+  useRealtimeSubscription(['estudiantes', 'cursos', 'tutores'], loadCatalogos);
 
   const handleSelectChange = (field: string, value: any) => {
     const newFormData = { ...formData, [field]: parseInt(value) } as any;

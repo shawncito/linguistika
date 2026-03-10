@@ -85,14 +85,28 @@ const Empleados: React.FC = () => {
   };
 
   useEffect(() => {
-    cargarMe();
+    // Cargar perfil y empleados en paralelo
+    const init = async () => {
+      setLoadingMe(true);
+      try {
+        const [meRes, empRes] = await Promise.all([
+          api.auth.me().catch(() => ({ user: null })),
+          api.admin.listarEmpleados().catch(() => []),
+        ]);
+        setMe(meRes.user);
+        const isAdmin = (meRes.user?.rol ?? meRes.user?.user?.rol) === 'admin';
+        if (isAdmin) {
+          setEmpleados(empRes as EmpleadoRow[]);
+        }
+      } catch (e: any) {
+        setError(e?.response?.data?.error || 'No se pudo cargar datos');
+      } finally {
+        setLoadingMe(false);
+        setLoadingList(false);
+      }
+    };
+    init();
   }, []);
-
-  useEffect(() => {
-    if (esAdmin) {
-      cargarEmpleados();
-    }
-  }, [esAdmin]);
 
   // Suscripción realtime
   useRealtimeSubscription('usuarios', cargarEmpleados, esAdmin);

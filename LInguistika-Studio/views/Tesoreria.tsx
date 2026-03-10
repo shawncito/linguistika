@@ -669,12 +669,58 @@ const Tesoreria: React.FC = () => {
   };
 
   useEffect(() => {
-    loadEncargados();
-    loadBolsa();
-    loadTutores();
-    void loadTotalesRapidos();
-    void loadGrupos();
-    void loadPendientesPorEstudiante();
+    // Cargar todo en paralelo en vez de 6 llamadas separadas
+    const init = async () => {
+      const [encRes, bolsaRes, tutRes, totRes, grpRes, peRes] = await Promise.all([
+        tesoreriaService.getEncargadosResumen().catch(() => ({ encargados: [] })),
+        tesoreriaService.getBolsa().catch(() => null),
+        tesoreriaService.getTutoresResumen().catch(() => ({ tutores: [] })),
+        tesoreriaService.getResumen().catch(() => ({})),
+        bulkService.listGrupos().catch(() => []),
+        pagosService.getPendientesResumenEstudiantes().catch(() => ({ estudiantes: [] })),
+      ]);
+
+      // Encargados
+      const encRows = (encRes?.encargados || []) as EncargadoResumenItem[];
+      setEncargados(encRows);
+      setSelectedEncargadoId(encRows.length ? encRows[0].encargado_id : null);
+      setLoadingEnc(false);
+
+      // Bolsa
+      const root = bolsaRes || {};
+      let normalized: BolsaInfo | null = null;
+      if (root?.bolsa) {
+        const b = root.bolsa;
+        normalized = { bolsa_real: Number(b?.bolsa_real) || 0, debe_real: Number(b?.debe_real) || 0, haber_real: Number(b?.haber_real) || 0 };
+      } else if (typeof root?.bolsa_real !== 'undefined' || typeof root?.debe_real !== 'undefined') {
+        normalized = { bolsa_real: Number(root?.bolsa_real) || 0, debe_real: Number(root?.debe_real) || 0, haber_real: Number(root?.haber_real) || 0 };
+      }
+      setBolsa(normalized);
+      setLoadingBolsa(false);
+
+      // Tutores
+      const tutRows = (tutRes?.tutores || []) as TutorResumenItem[];
+      setTutores(tutRows);
+      setSelectedTutorId(tutRows.length ? tutRows[0].tutor_id : null);
+      setLoadingTut(false);
+
+      // Totales rápidos
+      setTotalesRapidos({
+        deudaPendiente: totRes?.deudaPendiente || 0,
+        saldoAFavor: totRes?.saldoAFavor || 0,
+        porPagarTutores: totRes?.porPagarTutores || 0,
+      });
+      setLoadingTotales(false);
+
+      // Grupos
+      setGrupos(Array.isArray(grpRes) ? grpRes : []);
+      setLoadingGrupos(false);
+
+      // Pendientes por estudiante
+      setPendientesPorEstudiante((peRes?.estudiantes || []) as any[]);
+      setLoadingPendientesPorEstudiante(false);
+    };
+    init();
   }, []);
 
   // Suscripción realtime — actualiza automáticamente al cambiar datos de tesorería

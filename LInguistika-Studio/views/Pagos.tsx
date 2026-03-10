@@ -327,11 +327,30 @@ const Pagos: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
-    loadPendientesPorTutor();
-    loadPendientesPorEstudiante();
-    loadEstudiantes();
-    loadGrupos();
+    // Cargar todo en paralelo en vez de 5 llamadas secuenciales
+    const init = async () => {
+      if (!pagosLoaded.current) setLoading(true);
+      try {
+        const [p, t, e, g, pt, pe] = await Promise.all([
+          pagosService.getAll().catch(() => []),
+          tutoresService.getAll().catch(() => []),
+          estudiantesService.getAll().catch(() => []),
+          bulkService.listGrupos().catch(() => []),
+          pagosService.getPendientesResumenTutores().catch(() => ({ tutores: [] })),
+          pagosService.getPendientesResumenEstudiantes().catch(() => ({ estudiantes: [] })),
+        ]);
+        setPagos(p);
+        setTutores(t);
+        setEstudiantes(e as Estudiante[]);
+        setGrupos(Array.isArray(g) ? g : []);
+        setPendientesPorTutor((pt?.tutores || []) as any);
+        setPendientesPorEstudiante((pe?.estudiantes || []) as any);
+      } finally {
+        pagosLoaded.current = true;
+        setLoading(false);
+      }
+    };
+    init();
   }, []);
 
   useEffect(() => {
