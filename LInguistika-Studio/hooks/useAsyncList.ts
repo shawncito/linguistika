@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRealtimeSubscription } from './useRealtimeSubscription';
 
 export interface AsyncListState<T> {
   data: T[];
@@ -18,13 +19,14 @@ function extractMessage(error: unknown): string {
 /**
  * Hook genérico para cargar y gestionar una lista de recursos desde la API.
  * Encapsula: fetch inicial, loading, error, y refresco manual.
+ * Opcionalmente se suscribe a cambios en tiempo real de Supabase.
  *
  * @example
- * const { data: cursos, loading, error, refresh } = useAsyncList(cursosService.getAll);
+ * const { data: cursos, loading, error, refresh } = useAsyncList(cursosService.getAll, { realtimeTable: 'cursos' });
  */
 export function useAsyncList<T>(
   fetchFn: () => Promise<T[]>,
-  { immediate = true }: { immediate?: boolean } = {}
+  { immediate = true, realtimeTable }: { immediate?: boolean; realtimeTable?: string | string[] } = {}
 ) {
   const [state, setState] = useState<AsyncListState<T>>({
     data: [],
@@ -34,11 +36,18 @@ export function useAsyncList<T>(
 
   const fetchFnRef = useRef(fetchFn);
   fetchFnRef.current = fetchFn;
+  const hasLoaded = useRef(false);
 
   const refresh = useCallback(async () => {
-    setState(prev => ({ ...prev, loading: true, error: null }));
+    // Only show loading spinner on first load, not on realtime refreshes
+    setState(prev => ({
+      ...prev,
+      loading: !hasLoaded.current,
+      error: null,
+    }));
     try {
       const data = await fetchFnRef.current();
+      hasLoaded.current = true;
       setState({ data, loading: false, error: null });
     } catch (err) {
       setState(prev => ({ ...prev, loading: false, error: extractMessage(err) }));
@@ -50,6 +59,13 @@ export function useAsyncList<T>(
       refresh();
     }
   }, [immediate, refresh]);
+
+  // Realtime subscription — silently refreshes on DB changes
+  useRealtimeSubscription(
+    realtimeTable || [],
+    refresh,
+    !!realtimeTable,
+  );
 
   return { ...state, refresh };
 }

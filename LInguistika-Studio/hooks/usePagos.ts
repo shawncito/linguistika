@@ -19,7 +19,7 @@ function extractMessage(error: unknown): string {
  * const { pagos, loading, createPago, getPendientesResumenTutores } = usePagos();
  */
 export function usePagos() {
-  const { data: pagos, loading, error, refresh } = useAsyncList<Pago>(pagosService.getAll);
+  const { data: pagos, loading, error, refresh } = useAsyncList<Pago>(pagosService.getAll, { realtimeTable: ['pagos', 'movimientos_dinero'] });
 
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);

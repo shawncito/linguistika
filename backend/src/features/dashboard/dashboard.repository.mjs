@@ -227,22 +227,98 @@ export async function getMetricas({ mes, tutor_id }) {
   const lastDay = new Date(Number(year), month, 0).getDate();
   const fecha_fin = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-  let q = supabase.from('movimientos_dinero')
+  // ── Real: movimientos completados/verificados del mes ──
+  let qReal = supabase.from('movimientos_dinero')
     .select('tipo,monto,estado,tutor_id')
     .gte('fecha_pago', fecha_inicio).lte('fecha_pago', fecha_fin)
     .or('estado.is.null,estado.in.(completado,verificado)');
-  if (tutor_id) q = q.eq('tutor_id', String(tutor_id));
-  const { data, error } = await q;
-  if (error) throw error;
+  if (tutor_id) qReal = qReal.eq('tutor_id', String(tutor_id));
+  const { data: realData, error: realError } = await qReal;
+  if (realError) throw realError;
 
-  let ingresos = 0, pagos_tutores = 0;
-  for (const m of data ?? []) {
+  let realIngresos = 0, realPagosTutores = 0;
+  for (const m of realData ?? []) {
     const monto = Number(m.monto) || 0;
     const tipo = String(m.tipo || '');
-    if (tipo === 'ingreso_estudiante' || tipo.startsWith('ingreso_')) ingresos += monto;
-    else if (tipo === 'pago_tutor_pendiente' || tipo === 'pago_tutor' || tipo.startsWith('pago_') || tipo.startsWith('egreso_')) pagos_tutores += monto;
+    if (tipo === 'ingreso_estudiante' || tipo.startsWith('ingreso_')) realIngresos += monto;
+    else if (tipo === 'pago_tutor_pendiente' || tipo === 'pago_tutor' || tipo.startsWith('pago_') || tipo.startsWith('egreso_')) realPagosTutores += monto;
   }
-  return { mes, fecha_inicio, fecha_fin, ingresos, pagos_tutores, neto: ingresos - pagos_tutores, movimientos: (data ?? []).length };
+
+  // ── Esperado: movimientos pendientes del mes ──
+  let qEsp = supabase.from('movimientos_dinero')
+    .select('tipo,monto,estado,tutor_id')
+    .gte('fecha_pago', fecha_inicio).lte('fecha_pago', fecha_fin)
+    .eq('estado', 'pendiente');
+  if (tutor_id) qEsp = qEsp.eq('tutor_id', String(tutor_id));
+  const { data: espData, error: espError } = await qEsp;
+  if (espError) throw espError;
+
+  let espIngresos = 0, espPagosTutores = 0;
+  for (const m of espData ?? []) {
+    const monto = Number(m.monto) || 0;
+    const tipo = String(m.tipo || '');
+    if (tipo === 'ingreso_estudiante' || tipo.startsWith('ingreso_')) espIngresos += monto;
+    else if (tipo === 'pago_tutor_pendiente' || tipo === 'pago_tutor' || tipo.startsWith('pago_') || tipo.startsWith('egreso_')) espPagosTutores += monto;
+  }
+
+  // ── Tesorería real (complementario): from tesoreria_pagos ──
+  try {
+    const { data: tesPagos } = await supabase.from('tesoreria_pagos')
+      .select('direccion,monto,estado,fecha_pago')
+      .gte('fecha_pago', fecha_inicio).lte('fecha_pago', fecha_fin)
+      .in('estado', ['completado', 'verificado']);
+    if (tesPagos && tesPagos.length > 0) {
+      let tesIngr = 0, tesEgr = 0;
+      for (const p of tesPagos) {
+        const monto = Number(p.monto) || 0;
+        if (p.direccion === 'entrada') tesIngr += monto;
+        else if (p.direccion === 'salida') tesEgr += monto;
+      }
+      // If tesoreria has data, prefer it for 'real'
+      if (tesIngr > 0 || tesEgr > 0) {
+        realIngresos = Math.max(realIngresos, tesIngr);
+        realPagosTutores = Math.max(realPagosTutores, tesEgr);
+      }
+    }
+  } catch { /* tesoreria_pagos may not exist yet */ }
+
+  // ── Tesorería esperado (complementario): from tesoreria_obligaciones ──
+  try {
+    const { data: tesObl } = await supabase.from('tesoreria_obligaciones')
+      .select('tipo,monto,estado,fecha_devengo')
+      .gte('fecha_devengo', fecha_inicio).lte('fecha_devengo', fecha_fin)
+      .eq('estado', 'pendiente');
+    if (tesObl && tesObl.length > 0) {
+      let oblIngr = 0, oblEgr = 0;
+      for (const o of tesObl) {
+        const monto = Number(o.monto) || 0;
+        const tipo = String(o.tipo || '');
+        if (tipo === 'cobro' || tipo === 'cobro_sesion' || tipo.startsWith('cobro')) oblIngr += monto;
+        else if (tipo === 'pago' || tipo === 'pago_tutor' || tipo.startsWith('pago')) oblEgr += monto;
+      }
+      if (oblIngr > 0 || oblEgr > 0) {
+        espIngresos = Math.max(espIngresos, oblIngr);
+        espPagosTutores = Math.max(espPagosTutores, oblEgr);
+      }
+    }
+  } catch { /* tesoreria_obligaciones may not exist yet */ }
+
+  const realNeto = realIngresos - realPagosTutores;
+  const espNeto = espIngresos - espPagosTutores;
+
+  return {
+    mes, fecha_inicio, fecha_fin,
+    fuente: 'movimientos_dinero + tesoreria',
+    // Backwards compat
+    ingresos: realIngresos + espIngresos,
+    pagos_tutores: realPagosTutores + espPagosTutores,
+    neto: (realIngresos + espIngresos) - (realPagosTutores + espPagosTutores),
+    movimientos: (realData ?? []).length + (espData ?? []).length,
+    // Structured
+    real: { ingresos: realIngresos, pagos_tutores: realPagosTutores, neto: realNeto, movimientos: (realData ?? []).length },
+    esperado: { ingresos: espIngresos, pagos_tutores: espPagosTutores, neto: espNeto, movimientos: (espData ?? []).length },
+    diferencial: { neto: espNeto - realNeto },
+  };
 }
 
 export async function completarSesion(matricula_id, fecha) {

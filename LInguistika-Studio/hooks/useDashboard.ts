@@ -1,9 +1,11 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { dashboardService } from '../services/api/dashboardService';
+import { useRealtimeSubscription } from './useRealtimeSubscription';
 import type { Clase, Stats } from '../types';
 
 /**
  * Gestiona datos del dashboard: estadísticas generales, agenda del día y resúmenes.
+ * Se suscribe a cambios en tiempo real para actualizar automáticamente.
  *
  * @example
  * const { stats, agenda, loadingStats, loadingAgenda, refreshStats, refreshAgenda } = useDashboard(fecha);
@@ -17,11 +19,15 @@ export function useDashboard(fechaInicial?: string) {
   const [loadingAgenda, setLoadingAgenda] = useState(false);
   const [agendaError, setAgendaError] = useState<string | null>(null);
 
+  const statsLoaded = useRef(false);
+  const agendaLoaded = useRef(false);
+
   const refreshStats = useCallback(async () => {
-    setLoadingStats(true);
+    setLoadingStats(!statsLoaded.current);
     setStatsError(null);
     try {
       const data = await dashboardService.getStats();
+      statsLoaded.current = true;
       setStats(data);
     } catch (err) {
       setStatsError(extractMessage(err));
@@ -31,10 +37,11 @@ export function useDashboard(fechaInicial?: string) {
   }, []);
 
   const refreshAgenda = useCallback(async (fecha: string) => {
-    setLoadingAgenda(true);
+    setLoadingAgenda(!agendaLoaded.current);
     setAgendaError(null);
     try {
       const data = await dashboardService.getAgenda(fecha);
+      agendaLoaded.current = true;
       setAgenda(data);
     } catch (err) {
       setAgendaError(extractMessage(err));
@@ -42,6 +49,12 @@ export function useDashboard(fechaInicial?: string) {
       setLoadingAgenda(false);
     }
   }, []);
+
+  // Suscripción realtime — actualiza stats y agenda automáticamente
+  useRealtimeSubscription(
+    ['matriculas', 'sesiones_clases', 'clases', 'cursos', 'estudiantes', 'tutores', 'movimientos_dinero'],
+    refreshStats,
+  );
 
   const completarSesion = useCallback(async (matriculaId: number, fecha: string) => {
     return dashboardService.completarSesion(matriculaId, fecha);

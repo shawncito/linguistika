@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 // Cargar obligaciones automáticamente al seleccionar encargado
 // (esto debe ir después de la declaración de los hooks de estado)
 import { tesoreriaService } from '../services/api/tesoreriaService';
 import { pagosService } from '../services/api/pagosService';
 import { bulkService } from '../services/api/bulkService';
+import { useRealtimeSubscription } from '../hooks/useRealtimeSubscription';
 import { Button, Card, Badge, Input, Label, Select, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Dialog } from '../components/UI';
 import { formatCRC } from '../lib/format';
 
@@ -675,6 +676,18 @@ const Tesoreria: React.FC = () => {
     void loadGrupos();
     void loadPendientesPorEstudiante();
   }, []);
+
+  // Suscripción realtime — actualiza automáticamente al cambiar datos de tesorería
+  const reloadTesoreria = useCallback(() => {
+    loadEncargados();
+    loadBolsa();
+    loadTutores();
+    void loadTotalesRapidos();
+  }, []);
+  useRealtimeSubscription(
+    ['tesoreria_pagos', 'tesoreria_obligaciones', 'movimientos_dinero', 'pagos'],
+    reloadTesoreria,
+  );
 
   useEffect(() => {
     loadHistorialEncargado(selectedEncargadoId);

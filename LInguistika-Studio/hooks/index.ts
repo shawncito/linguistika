@@ -5,6 +5,7 @@ export { useApiRequest } from './useApiRequest';
 export type { RequestState } from './useApiRequest';
 export { useAsyncList } from './useAsyncList';
 export type { AsyncListState } from './useAsyncList';
+export { useRealtimeSubscription } from './useRealtimeSubscription';
 export { useToast } from './useToast';
 export type { Toast, ToastType } from './useToast';
 export { useConfirm } from './useConfirm';

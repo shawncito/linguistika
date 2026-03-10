@@ -19,7 +19,7 @@ function extractMessage(error: unknown): string {
  * const { estudiantes, loading, createEstudiante, updateEstudiante, deleteEstudiante } = useEstudiantes();
  */
 export function useEstudiantes() {
-  const { data: estudiantes, loading, error, refresh } = useAsyncList<Estudiante>(estudiantesService.getAll);
+  const { data: estudiantes, loading, error, refresh } = useAsyncList<Estudiante>(estudiantesService.getAll, { realtimeTable: 'estudiantes' });
 
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);

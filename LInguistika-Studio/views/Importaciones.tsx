@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../services/api';
+import { useRealtimeSubscription } from '../hooks/useRealtimeSubscription';
 import {
   Badge,
   Button,
@@ -87,6 +88,9 @@ const Importaciones: React.FC = () => {
   useEffect(() => {
     load();
   }, []);
+
+  // Suscripción realtime
+  useRealtimeSubscription(['matriculas_grupo', 'estudiantes_bulk'], load);
 
   const openGrupo = async (id: string) => {
     setDetailOpen(true);

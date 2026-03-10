@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../services/api';
+import { useRealtimeSubscription } from '../hooks/useRealtimeSubscription';
 import {
   Badge,
   Button,
@@ -92,6 +93,9 @@ const Empleados: React.FC = () => {
       cargarEmpleados();
     }
   }, [esAdmin]);
+
+  // Suscripción realtime
+  useRealtimeSubscription('usuarios', cargarEmpleados, esAdmin);
 
   const onCrear = async (e: React.FormEvent) => {
     e.preventDefault();

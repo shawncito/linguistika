@@ -1,9 +1,10 @@
 // Dashboard con calendario interactivo mejorado
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { dashboardService } from '../services/api/dashboardService';
 import { matriculasService } from '../services/api/matriculasService';
 import { tutoresService } from '../services/api/tutoresService';
 import { estudiantesService } from '../services/api/estudiantesService';
+import { useRealtimeSubscription } from '../hooks/useRealtimeSubscription';
 import { Matricula, Curso, Tutor, Estudiante, ResumenTutorEstudiantes, ResumenCursoGrupos } from '../types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Input, Button, Dialog } from '../components/UI';
 import { formatCRC } from '../lib/format';
@@ -77,6 +78,7 @@ const Dashboard: React.FC = () => {
   const [tutoresMapa, setTutoresMapa] = useState<Record<number, Tutor>>({});
   const [estudiantesMapa, setEstudiantesMapa] = useState<Record<number, Estudiante>>({});
   const [loading, setLoading] = useState(true);
+  const dashboardLoaded = React.useRef(false);
   const [resumenTutores, setResumenTutores] = useState<ResumenTutorEstudiantes[]>([]);
   const [resumenCursos, setResumenCursos] = useState<ResumenCursoGrupos[]>([]);
   const [sesionesDelMes, setSesionesDelMes] = useState<Record<string, SesionDelDia[]>>({});
@@ -761,7 +763,8 @@ const Dashboard: React.FC = () => {
   };
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
+    // Solo mostrar loading en la primera carga, no en actualizaciones realtime
+    if (!dashboardLoaded.current) setLoading(true);
     try {
       const [tutoresAll, estudiantesAll] = await Promise.all([
         tutoresService.getAll().catch(() => []),
@@ -939,6 +942,7 @@ const Dashboard: React.FC = () => {
     } catch (err) {
       console.error('Error en dashboard:', err);
     } finally {
+      dashboardLoaded.current = true;
       setLoading(false);
     }
   }, [selectedDate, hoy, metricMes]);
@@ -971,14 +975,13 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30000); // Actualizar cada 30 segundos
-    const onFocus = () => fetchData();
-    window.addEventListener('focus', onFocus);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('focus', onFocus);
-    };
   }, [fetchData]);
+
+  // Suscripción realtime — actualiza automáticamente al cambiar datos relevantes
+  useRealtimeSubscription(
+    ['matriculas', 'sesiones_clases', 'clases', 'cursos', 'estudiantes', 'tutores', 'movimientos_dinero', 'tesoreria_pagos'],
+    fetchData,
+  );
 
   const marcarSesionComoDada = useCallback(async (sesion: SesionDelDia) => {
     const sesionKey = getSesionKey(sesion);

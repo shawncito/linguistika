@@ -33,7 +33,7 @@ export function useHorasTrabajo(params?: { fecha?: string; tutor_id?: number; es
     params?.estado,
   ]);
 
-  const { data: horasTrabajo, loading, error, refresh } = useAsyncList<HorasTrabajo>(fetchFn);
+  const { data: horasTrabajo, loading, error, refresh } = useAsyncList<HorasTrabajo>(fetchFn, { realtimeTable: 'horas_trabajo' });
 
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);

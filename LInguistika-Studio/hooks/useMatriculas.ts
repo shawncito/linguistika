@@ -19,7 +19,7 @@ function extractMessage(error: unknown): string {
  * const { matriculas, loading, createMatricula, deleteMatricula, validateTutorCourse } = useMatriculas();
  */
 export function useMatriculas() {
-  const { data: matriculas, loading, error, refresh } = useAsyncList<Matricula>(matriculasService.getAll);
+  const { data: matriculas, loading, error, refresh } = useAsyncList<Matricula>(matriculasService.getAll, { realtimeTable: ['matriculas', 'matriculas_grupo'] });
 
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);

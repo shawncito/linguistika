@@ -1,9 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { tesoreriaService } from '../services/api/tesoreriaService';
+import { useRealtimeSubscription } from './useRealtimeSubscription';
 
 /**
  * Gestiona el estado de tesorería: resúmenes, movimientos diarios y pagos a encargados/tutores.
- * Expone los datos más usados con `refresh` manual.
+ * Se suscribe a cambios en tiempo real para actualizar automáticamente.
  *
  * @example
  * const { resumen, loadingResumen, refreshResumen, registrarPagoEncargado } = useTesoreria();
@@ -16,11 +17,14 @@ export function useTesoreria() {
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
 
+  const hasLoaded = useRef(false);
+
   const refreshResumen = useCallback(async () => {
-    setLoadingResumen(true);
+    setLoadingResumen(!hasLoaded.current);
     setResumenError(null);
     try {
       const data = await tesoreriaService.getResumen();
+      hasLoaded.current = true;
       setResumen(data);
     } catch (err) {
       setResumenError(extractMessage(err));
@@ -28,6 +32,15 @@ export function useTesoreria() {
       setLoadingResumen(false);
     }
   }, []);
+
+  // Cargar resumen al montar
+  useEffect(() => { refreshResumen(); }, [refreshResumen]);
+
+  // Suscripción realtime — actualiza automáticamente al cambiar datos de tesorería
+  useRealtimeSubscription(
+    ['tesoreria_pagos', 'tesoreria_obligaciones', 'movimientos_dinero'],
+    refreshResumen,
+  );
 
   const getDiario = useCallback(async (params: Parameters<typeof tesoreriaService.getDiario>[0]) => {
     return tesoreriaService.getDiario(params);

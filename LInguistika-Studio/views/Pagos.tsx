@@ -1,10 +1,10 @@
 ﻿
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { pagosService } from '../services/api/pagosService';
 import { tutoresService } from '../services/api/tutoresService';
 import { estudiantesService } from '../services/api/estudiantesService';
 import { bulkService } from '../services/api/bulkService';
-import { supabaseClient } from '../lib/supabaseClient';
+import { useRealtimeSubscription } from '../hooks/useRealtimeSubscription';
 import { usePersistentState } from '../lib/usePersistentState';
 import { Pago, Tutor, Estudiante, EstadoPago } from '../types';
 import { Button, Card, Badge, Input, Label, Select, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Dialog } from '../components/UI';
@@ -181,14 +181,17 @@ const Pagos: React.FC = () => {
     return () => clearTimeout(t);
   }, [manualFocusMonto]);
 
+  const pagosLoaded = useRef(false);
+
   const loadData = async () => {
-    setLoading(true);
+    if (!pagosLoaded.current) setLoading(true);
     const [p, t] = await Promise.all([
       pagosService.getAll(),
       tutoresService.getAll()
     ]);
     setPagos(p);
     setTutores(t);
+    pagosLoaded.current = true;
     setLoading(false);
   };
 
@@ -339,19 +342,11 @@ const Pagos: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ingresoForm.estudiante_id, ingresoTab]);
 
-  // Suscripción en tiempo real a pagos y tutores
-  useEffect(() => {
-    if (!supabaseClient) return;
-    const channel = supabaseClient
-      .channel('realtime-pagos')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pagos' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tutores' }, () => loadData())
-      .subscribe();
-
-    return () => {
-      supabaseClient.removeChannel(channel);
-    };
-  }, []);
+  // Suscripción realtime — actualiza automáticamente pagos, tutores, movimientos y estudiantes
+  useRealtimeSubscription(
+    ['pagos', 'tutores', 'movimientos_dinero', 'estudiantes'],
+    loadData,
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

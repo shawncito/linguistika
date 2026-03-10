@@ -26,13 +26,13 @@ export function useCursos() {
     loading,
     error,
     refresh,
-  } = useAsyncList<Curso>(cursosService.getAll);
+  } = useAsyncList<Curso>(cursosService.getAll, { realtimeTable: 'cursos' });
 
   const {
     data: tutores,
     loading: loadingTutores,
     refresh: refreshTutores,
-  } = useAsyncList<Tutor>(tutoresService.getAll);
+  } = useAsyncList<Tutor>(tutoresService.getAll, { realtimeTable: 'tutores' });
 
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
