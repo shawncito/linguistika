@@ -4,27 +4,27 @@ import { httpClient } from './apiClient';
 export const tesoreriaService = {
   getResumen: async (): Promise<any> => {
     const res = await httpClient.get('/tesoreria/resumen');
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getEncargadosResumen: async (): Promise<any> => {
     const res = await httpClient.get('/tesoreria/encargados/resumen');
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getEncargadosPorcentaje: async (): Promise<any> => {
     const res = await httpClient.get('/tesoreria/encargados/porcentaje');
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getTutoresResumen: async (): Promise<any> => {
     const res = await httpClient.get('/tesoreria/tutores/resumen');
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getBolsa: async (): Promise<any> => {
     const res = await httpClient.get('/tesoreria/bolsa');
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getEsperadoDiario: async (params: { fecha_inicio?: string; fecha_fin?: string }): Promise<any> => {
     const res = await httpClient.get('/tesoreria/esperado/diario', { params });
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getDiario: async (params: {
     fecha?: string;
@@ -38,7 +38,7 @@ export const tesoreriaService = {
     limit?: number;
   }): Promise<any> => {
     const res = await httpClient.get('/tesoreria/diario', { params });
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   registrarPagoEncargado: async (
     encargadoId: number,
@@ -54,7 +54,7 @@ export const tesoreriaService = {
     }
   ): Promise<any> => {
     const res = await httpClient.post(`/tesoreria/encargados/${encargadoId}/pagos`, data);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   registrarPagoTutor: async (
     tutorId: number,
@@ -73,31 +73,31 @@ export const tesoreriaService = {
     }
   ): Promise<any> => {
     const res = await httpClient.post(`/tesoreria/tutores/${tutorId}/pagos`, data);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   registrarCobroGrupal: async (grupoId: number, data?: { detalle?: string }): Promise<any> => {
     const res = await httpClient.post(`/tesoreria/grupos/${grupoId}/cobro`, data || {});
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getObligacionesEncargado: async (
     encargadoId: number | string,
     params?: { estado?: 'pendiente' | 'todas' }
   ): Promise<any> => {
     const res = await httpClient.get(`/tesoreria/encargados/${encargadoId}/obligaciones`, { params });
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getObligacionesTutor: async (
     tutorId: number | string,
     params?: { estado?: 'pendiente' | 'todas' }
   ): Promise<any> => {
     const res = await httpClient.get(`/tesoreria/tutores/${tutorId}/obligaciones`, { params });
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   uploadComprobantePago: async (pagoId: number | string, file: File): Promise<any> => {
     const form = new FormData();
     form.append('file', file);
     const res = await httpClient.post(`/tesoreria/pagos/${pagoId}/comprobante`, form);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   updatePago: async (
     pagoId: number | string,
@@ -111,11 +111,11 @@ export const tesoreriaService = {
     }
   ): Promise<any> => {
     const res = await httpClient.patch(`/tesoreria/pagos/${pagoId}`, data);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getPagoAplicaciones: async (pagoId: number | string): Promise<any> => {
     const res = await httpClient.get(`/tesoreria/pagos/${pagoId}/aplicaciones`);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getCuentaMovimientosEncargado: async (
     encargadoId: number | string,
@@ -125,7 +125,7 @@ export const tesoreriaService = {
       `/tesoreria/cuentas/encargado/${encargadoId}/movimientos`,
       { params }
     );
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   getCuentaMovimientosTutor: async (
     tutorId: number | string,
@@ -135,7 +135,7 @@ export const tesoreriaService = {
       `/tesoreria/cuentas/tutor/${tutorId}/movimientos`,
       { params }
     );
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   exportDiarioXlsx: async (params: {
     fecha?: string;
@@ -172,7 +172,7 @@ export const tesoreriaService = {
   },
   getCierres: async (): Promise<any> => {
     const res = await httpClient.get('/tesoreria/cierres');
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   crearCierre: async (data: {
     mes: string;
@@ -181,7 +181,7 @@ export const tesoreriaService = {
     password?: string;
   }): Promise<any> => {
     const res = await httpClient.post('/tesoreria/cierres', data);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
   ajustarCierre: async (data: {
     mes?: string;
@@ -191,6 +191,6 @@ export const tesoreriaService = {
     modo?: 'reset' | 'clear';
   }): Promise<any> => {
     const res = await httpClient.post('/tesoreria/cierres/ajustar', data);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 };

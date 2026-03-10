@@ -25,17 +25,17 @@ export const bulkService = {
 
   listGrupos: async (): Promise<any[]> => {
     const res = await httpClient.get('/bulk/grupos');
-    return res.data as any[];
+    return (res.data?.data ?? res.data) as any[];
   },
 
   getGrupo: async (id: string): Promise<any> => {
     const res = await httpClient.get(`/bulk/grupos/${id}`);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 
   listEstudiantesBulk: async (): Promise<any[]> => {
     const res = await httpClient.get('/bulk/estudiantes');
-    return res.data as any[];
+    return (res.data?.data ?? res.data) as any[];
   },
 
   createEstudianteBulk: async (data: {
@@ -49,7 +49,7 @@ export const bulkService = {
     estado?: boolean;
   }): Promise<any> => {
     const res = await httpClient.post('/bulk/estudiantes', data);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 
   createGrupo: async (data: {
@@ -64,27 +64,27 @@ export const bulkService = {
     estado?: string | null;
   }): Promise<any> => {
     const res = await httpClient.post('/bulk/grupos', data);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 
   updateGrupo: async (id: string, data: any): Promise<any> => {
     const res = await httpClient.put(`/bulk/grupos/${id}`, data);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 
   deleteGrupo: async (id: string): Promise<{ ok: boolean; id: string }> => {
     const res = await httpClient.delete(`/bulk/grupos/${id}`);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 
   updateEstudianteBulk: async (id: number, data: any): Promise<any> => {
     const res = await httpClient.put(`/bulk/estudiantes/${id}`, data);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 
   deleteEstudianteBulk: async (id: number): Promise<any> => {
     const res = await httpClient.delete(`/bulk/estudiantes/${id}`);
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 
   assignEstudiantesToGrupo: async (
@@ -96,7 +96,7 @@ export const bulkService = {
       estudiante_bulk_ids: estudianteBulkIds,
       estudiante_ids: estudianteIds,
     });
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 
   unassignEstudiantes: async (
@@ -107,6 +107,6 @@ export const bulkService = {
       estudiante_bulk_ids: estudianteBulkIds,
       estudiante_ids: estudianteIds,
     });
-    return res.data as any;
+    return (res.data?.data ?? res.data) as any;
   },
 };
