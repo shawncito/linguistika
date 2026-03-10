@@ -110,20 +110,19 @@ export async function writeXlsx({ res, filename, sheetName, columns, rows }) {
 
 export async function getResumenEncargados() {
   const db = supabaseAdmin ?? supabase;
-  // encargados con estudiantes activos
-  const { data: encWithEst, error: e1 } = await db.from('encargados').select('id, nombre, email, telefono, estudiantes!inner(id)').eq('estudiantes.estado', true);
-  if (e1 && !isMissingRelationError(e1)) throw e1;
-  // encargados con cuenta tesorería
-  const { data: encWithCuenta, error: e2 } = await db.from('encargados').select('id, nombre, email, telefono, tesoreria_cuentas!inner(id, saldo_actual)');
-  if (e2 && !isMissingRelationError(e2)) throw e2;
-  const seen = new Set();
-  const result = [];
-  for (const enc of [...(encWithEst ?? []), ...(encWithCuenta ?? [])]) {
-    if (seen.has(enc.id)) continue;
-    seen.add(enc.id);
-    result.push({ id: enc.id, nombre: enc.nombre, email: enc.email, telefono: enc.telefono });
-  }
-  return result;
+  const { data, error } = await db
+    .from('tesoreria_saldos_encargados_v1')
+    .select('*, encargados(id, nombre, email, telefono)');
+  if (error) throw error;
+  return (data ?? []).map(row => ({
+    cuenta_id: row.cuenta_id,
+    encargado_id: row.encargado_id,
+    deuda_pendiente: Number(row.deuda_pendiente) || 0,
+    saldo_a_favor: Number(row.saldo_a_favor) || 0,
+    balance_neto: (Number(row.deuda_pendiente) || 0) - (Number(row.saldo_a_favor) || 0),
+    estado: (Number(row.deuda_pendiente) || 0) > 0 ? 'deuda' : (Number(row.saldo_a_favor) || 0) > 0 ? 'saldo_favor' : 'al_dia',
+    encargados: row.encargados,
+  }));
 }
 
 /* ─── Resumen tutores ────────────────────────────────────────────────────── */

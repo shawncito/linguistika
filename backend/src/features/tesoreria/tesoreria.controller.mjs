@@ -29,14 +29,14 @@ function parseLibroParams(query) {
 export async function getResumenEncargados(req, res, next) {
   try {
     const data = await service.getResumenEncargados();
-    res.json({ ok: true, data });
+    res.json({ ok: true, data: { encargados: data } });
   } catch (err) { next(err); }
 }
 
 export async function getResumenTutores(req, res, next) {
   try {
     const data = await service.getResumenTutores();
-    res.json({ ok: true, data });
+    res.json({ ok: true, data: { tutores: data } });
   } catch (err) { next(err); }
 }
 
