@@ -648,172 +648,54 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  // Función para calcular sesiones del día: primero intenta backend, luego fallback local
-  // IMPORTANTE: Las sesiones SOLO salen de MATRÍCULAS ACTIVAS (estado=true)
-  // Si un curso existe pero no tiene matrículas, NO aparecerá en la agenda
-  const calcularSesionesDelDia = async (fecha: string, setSesiones: (sesiones: SesionDelDia[]) => void) => {
-    try {
-      // 1) Intentar obtener agenda desde backend (incluye fallback del servidor)
-      // IMPORTANTE: una lista vacía es un resultado válido (significa "no hay sesiones")
-      // El fallback local debe usarse solo si el backend falla.
-      let desdeServidor: any[] | null = null;
-      try {
-        desdeServidor = await dashboardService.getAgenda(fecha);
-      } catch (e) {
-        desdeServidor = null;
-      }
-
-      if (desdeServidor !== null) {
-        const sesiones = (desdeServidor || []).map((c: any) => ({
-          matricula_id: c.matricula_id ?? 0,
-          curso_nombre: c.curso_nombre ?? 'Curso',
-          estudiante_nombre: c.estudiante_nombre ?? 'Estudiante',
-          tutor_nombre: c.tutor_nombre ?? 'Tutor',
-          hora_inicio: c.hora_inicio ?? '—',
-          hora_fin: c.hora_fin ?? '—',
-          duracion_horas: c.duracion_horas ?? 0,
-          turno: c.turno ?? '—',
-          curso_tipo_pago: c.curso_tipo_pago ?? c.tipo_pago ?? null,
-          tutor_id: c.tutor_id,
-          estudiante_id: c.estudiante_id,
-          curso_id: c.curso_id,
-          avisado: Boolean(c.avisado),
-          confirmado: Boolean(c.confirmado),
-          fecha: c.fecha ?? fecha,
-        })) as SesionDelDia[];
-        sesiones.sort((a, b) => String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
-        setSesiones(sesiones);
-        return;
-      }
-
-      // 2) Fallback local desde matrículas y cursos
-      // Calcular el día de la semana para la fecha seleccionada
-      const diaSemana = getDiaSemana(fecha);
-      // Obtener SOLO matrículas activas (estado = true). Soporta grupos (estudiante_id puede ser null).
-      const matriculas = (await matriculasService.getAll()).filter((m: any) => {
-        const isActiva = !!m?.estado;
-        const hasCursoTutor = m?.curso_id != null && m?.tutor_id != null;
-        const isIndividual = m?.estudiante_id != null;
-        const isGrupo = !!m?.es_grupo && Array.isArray(m?.estudiante_ids) && m.estudiante_ids.length > 0;
-        return isActiva && hasCursoTutor && (isIndividual || isGrupo);
-      });
-      setMatriculasLista(matriculas);
-
-      const sesiones: SesionDelDia[] = [];
-      // Para cada matrícula activa, verificar si el curso tiene clase en el día solicitado
-      matriculas.forEach((matricula: any) => {
-        const isGrupo = Boolean((matricula as any)?.es_grupo);
-        const grupoNombre = String((matricula as any)?.grupo_nombre || '').trim();
-        const grupoCount = Array.isArray((matricula as any)?.estudiante_ids) ? (matricula as any).estudiante_ids.length : 0;
-        const estudianteNombre = !isGrupo
-          ? ((matricula as any)?.estudiante_nombre || `Alumno ${(matricula as any)?.estudiante_id}`)
-          : `Grupo: ${grupoNombre || 'Sin nombre'}${grupoCount ? ` (${grupoCount})` : ''}`;
-        const cursoLike = {
-          dias_schedule: (matricula as any)?.curso_dias_schedule,
-          dias_turno: (matricula as any)?.curso_dias_turno,
-        };
-        const sched = getCursoScheduleForDay(cursoLike, diaSemana);
-        // Verificar si el curso tiene horario definido (dias_schedule) para este día de la semana
-        if (sched?.kind === 'schedule' && sched.value) {
-          const schedule = sched.value as any;
-          sesiones.push({
-            matricula_id: matricula.id,
-            curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
-            estudiante_nombre: estudianteNombre,
-            tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
-            hora_inicio: schedule.hora_inicio || schedule.horaInicio || schedule.start || '—',
-            hora_fin: schedule.hora_fin || schedule.horaFin || schedule.end || '—',
-            duracion_horas: schedule.duracion_horas || 0,
-            turno: schedule.turno,
-            curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
-            tutor_id: (matricula as any)?.tutor_id,
-            estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
-            curso_id: (matricula as any)?.curso_id,
-            avisado: true,
-            confirmado: false,
-            fecha
-          });
-        } else if (sched?.kind === 'turno' && sched.value) {
-          const turno = sched.value as any;
-          sesiones.push({
-            matricula_id: matricula.id,
-            curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
-            estudiante_nombre: estudianteNombre,
-            tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
-            hora_inicio: '—',
-            hora_fin: '—',
-            duracion_horas: 0,
-            turno: turno,
-            curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
-            tutor_id: (matricula as any)?.tutor_id,
-            estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
-            curso_id: (matricula as any)?.curso_id,
-            avisado: true,
-            confirmado: false,
-            fecha
-          });
-        }
-      });
-      sesiones.sort((a, b) => String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
-      setSesiones(sesiones);
-    } catch (error) {
-      console.error('Error al calcular sesiones:', error);
-      setSesiones([]);
-    }
-  };
-
   const fetchData = useCallback(async () => {
     // Solo mostrar loading en la primera carga, no en actualizaciones realtime
     if (!dashboardLoaded.current) setLoading(true);
     try {
-      const [tutoresAll, estudiantesAll] = await Promise.all([
-        tutoresService.getAll().catch(() => []),
-        estudiantesService.getAll().catch(() => []),
+      // ── Lanzar TODAS las llamadas API en paralelo ──
+      const [tutoresAll, estudiantesAll, statsData, metricasResult, matriculasAll, estadosRangoResult, rt, rc] = await Promise.all([
+        tutoresService.getAll().catch(() => [] as Tutor[]),
+        estudiantesService.getAll().catch(() => [] as Estudiante[]),
+        dashboardService.getStats().catch(() => ({
+          tutores_activos: 0, estudiantes_activos: 0, cursos_activos: 0,
+          matriculas_activas: 0, total_clases: 0, ingresos_pendientes: 0,
+        })),
+        dashboardService.getMetricas({ mes: metricMes }).then(m => ({ data: m, denied: false })).catch((e: any) => ({
+          data: null, denied: e?.response?.status === 403,
+        })),
+        matriculasService.getAll().catch(() => [] as Matricula[]),
+        (() => {
+          const today = new Date(hoy + 'T00:00:00');
+          const y = today.getFullYear(), mo = today.getMonth();
+          const dim = new Date(y, mo + 1, 0).getDate();
+          const fi = `${y}-${String(mo + 1).padStart(2, '0')}-01`;
+          const ff = `${y}-${String(mo + 1).padStart(2, '0')}-${String(dim).padStart(2, '0')}`;
+          return dashboardService.obtenerEstadosClasesRango({ fecha_inicio: fi, fecha_fin: ff }).catch(() => []);
+        })(),
+        dashboardService.getResumenTutoresEstudiantes().catch(() => []),
+        dashboardService.getResumenCursosGrupos().catch(() => []),
       ]);
+
+      // ── Procesar tutores y estudiantes ──
       const tMap: Record<number, Tutor> = {};
       const eMap: Record<number, Estudiante> = {};
       tutoresAll.forEach((t) => { if (t?.id) tMap[t.id] = t; });
       estudiantesAll.forEach((e) => { if (e?.id) eMap[e.id] = e; });
       setTutoresMapa(tMap);
       setEstudiantesMapa(eMap);
-
-      const statsData = await dashboardService.getStats().catch(() => ({
-        tutores_activos: 0,
-        estudiantes_activos: 0,
-        cursos_activos: 0,
-        matriculas_activas: 0,
-        total_clases: 0,
-        ingresos_pendientes: 0
-      }));
       setStats(statsData);
 
-      // Métricas financieras (solo admin/contador)
-      try {
-        const m = await dashboardService.getMetricas({ mes: metricMes });
-        setMetricas(m as any);
-        setMetricasDenied(false);
-      } catch (e: any) {
-        const status = e?.response?.status;
-        if (status === 403) {
-          setMetricasDenied(true);
-        }
-        setMetricas(null);
-      }
-      
-      // Calcular sesiones de HOY (usando fecha Costa Rica)
-      if (hoy) {
-        await calcularSesionesDelDia(hoy, setSesionesHoy);
-      }
-      
-      // Calcular sesiones del mes completo - OPTIMIZADO
+      // ── Métricas ──
+      setMetricas(metricasResult.data as any);
+      setMetricasDenied(metricasResult.denied);
+
+      // ── Calcular sesiones del mes completo (incluye hoy) ──
       const today = new Date(hoy + 'T00:00:00');
       const year = today.getFullYear();
       const month = today.getMonth();
       const daysInMonth = new Date(year, month + 1, 0).getDate();
-      
-      // Obtener todas las matrículas activas una sola vez
-      // Incluir grupos: estudiante_id puede ser null pero estudiante_ids debe tener elementos
-      const matriculas = (await matriculasService.getAll()).filter((m: any) => {
+
+      const matriculas = matriculasAll.filter((m: any) => {
         const isActiva = !!m?.estado;
         const hasCursoTutor = m?.curso_id != null && m?.tutor_id != null;
         const isIndividual = m?.estudiante_id != null;
@@ -822,13 +704,12 @@ const Dashboard: React.FC = () => {
       });
 
       const sesionesmes: Record<string, SesionDelDia[]> = {};
-      
-      // Calcular para cada día sin await individual
+
       for (let day = 1; day <= daysInMonth; day++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         const diaSemana = getDiaSemana(dateStr);
         const sesiones: SesionDelDia[] = [];
-        
+
         matriculas.forEach((matricula: any) => {
           const isGrupo = Boolean((matricula as any)?.es_grupo);
           const grupoNombre = String((matricula as any)?.grupo_nombre || '').trim();
@@ -844,7 +725,6 @@ const Dashboard: React.FC = () => {
           const sched = getCursoScheduleForDay(cursoLike, diaSemana);
           if (sched?.kind === 'schedule' && sched.value) {
             const schedule = sched.value as any;
-            
             sesiones.push({
               matricula_id: matricula.id,
               curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
@@ -883,60 +763,46 @@ const Dashboard: React.FC = () => {
             });
           }
         });
-        
+
         if (sesiones.length > 0) {
           sesiones.sort((a, b) => String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
           sesionesmes[dateStr] = sesiones;
         }
       }
-      
-      // Cargar estados (avisado, confirmado, estado_sesion) en una sola llamada por rango
-      const fechaInicioMes = `${year}-${String(month + 1).padStart(2, '0')}-01`;
-      const fechaFinMes = `${year}-${String(month + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
-      try {
-        const estadosRango = await dashboardService.obtenerEstadosClasesRango({
-          fecha_inicio: fechaInicioMes,
-          fecha_fin: fechaFinMes,
-        });
 
-        const estadosMap = new Map<string, { avisado: boolean; confirmado: boolean; estado_sesion: 'dada' | 'cancelada' | null }>();
-        (estadosRango || []).forEach((e: any) => {
-          const key = `${String(e.fecha || '').slice(0, 10)}|${e.matricula_id}`;
-          if (!key.startsWith('|')) {
-            estadosMap.set(key, {
-              avisado: Boolean(e.avisado),
-              confirmado: Boolean(e.confirmado),
-              estado_sesion: (e.estado_sesion as 'dada' | 'cancelada' | null) || null,
-            });
-          }
-        });
-
-        for (const dateStr of Object.keys(sesionesmes)) {
-          sesionesmes[dateStr].forEach((sesion: SesionDelDia) => {
-            const key = `${dateStr}|${sesion.matricula_id}`;
-            const estado = estadosMap.get(key);
-            if (estado) {
-              sesion.avisado = estado.avisado;
-              sesion.confirmado = estado.confirmado;
-              sesion.estado_sesion = estado.estado_sesion;
-            }
+      // ── Aplicar estados de sesiones (ya cargados en paralelo) ──
+      const estadosMap = new Map<string, { avisado: boolean; confirmado: boolean; estado_sesion: 'dada' | 'cancelada' | null }>();
+      ((estadosRangoResult || []) as any[]).forEach((e: any) => {
+        const key = `${String(e.fecha || '').slice(0, 10)}|${e.matricula_id}`;
+        if (!key.startsWith('|')) {
+          estadosMap.set(key, {
+            avisado: Boolean(e.avisado),
+            confirmado: Boolean(e.confirmado),
+            estado_sesion: (e.estado_sesion as 'dada' | 'cancelada' | null) || null,
           });
         }
-      } catch (e) {
-        console.warn('No se pudieron cargar estados por rango:', e);
+      });
+
+      for (const dateStr of Object.keys(sesionesmes)) {
+        sesionesmes[dateStr].forEach((sesion: SesionDelDia) => {
+          const key = `${dateStr}|${sesion.matricula_id}`;
+          const estado = estadosMap.get(key);
+          if (estado) {
+            sesion.avisado = estado.avisado;
+            sesion.confirmado = estado.confirmado;
+            sesion.estado_sesion = estado.estado_sesion;
+          }
+        });
       }
-      
+
       setSesionesDelMes(sesionesmes);
-      // Sincronizar sesiones del día seleccionado con el cálculo mensual (incluye hoy)
+      // Sesiones de hoy extraídas del cálculo mensual (sin llamada extra)
+      setSesionesHoy(sesionesmes[hoy] || []);
       if (selectedDate) {
         setSesionesDelDia(sesionesmes[selectedDate] || []);
       }
 
-      // Resúmenes
-      const [rt, rc] = await Promise.all([
-        dashboardService.getResumenTutoresEstudiantes().catch(() => []),
-        dashboardService.getResumenCursosGrupos().catch(() => [])
-      ]);
+      // Resúmenes (ya cargados en paralelo)
       setResumenTutores(rt);
       setResumenCursos(rc);
     } catch (err) {
