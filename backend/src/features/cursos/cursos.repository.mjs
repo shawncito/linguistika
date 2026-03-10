@@ -78,6 +78,21 @@ export async function update(id, payload) {
     .select()
     .single();
   if (error) throw error;
+
+  // Propagar tutor_id a matrículas activas del curso (complementa el trigger DB)
+  if (payload.tutor_id !== undefined) {
+    await supabase
+      .from('matriculas')
+      .update({ tutor_id: payload.tutor_id })
+      .eq('curso_id', id)
+      .eq('estado', true);
+    await supabase
+      .from('matriculas_grupo')
+      .update({ tutor_id: payload.tutor_id })
+      .eq('curso_id', id)
+      .eq('estado', 'activa');
+  }
+
   return normalizeCurso(data);
 }
 
