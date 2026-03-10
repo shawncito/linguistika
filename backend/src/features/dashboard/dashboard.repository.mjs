@@ -172,6 +172,112 @@ export async function getDebugMatriculasCursos() {
   }));
 }
 
+export async function getEstadosClasesRango({ fecha_inicio, fecha_fin }) {
+  const [clasesRes, sesionesRes] = await Promise.all([
+    supabase.from('clases')
+      .select('fecha,matricula_id,avisado,confirmado,estado')
+      .gte('fecha', fecha_inicio).lte('fecha', fecha_fin)
+      .not('matricula_id', 'is', null),
+    supabase.from('sesiones_clases')
+      .select('fecha,matricula_id,estado')
+      .gte('fecha', fecha_inicio).lte('fecha', fecha_fin)
+      .not('matricula_id', 'is', null),
+  ]);
+  if (clasesRes.error) throw clasesRes.error;
+  if (sesionesRes.error) throw sesionesRes.error;
+
+  const sesionesMap = new Map();
+  for (const s of sesionesRes.data ?? []) {
+    if (!s.matricula_id || !s.fecha) continue;
+    const key = `${String(s.fecha).slice(0, 10)}|${s.matricula_id}`;
+    const est = s.estado === 'dada' ? 'dada' : s.estado === 'cancelada' ? 'cancelada' : null;
+    if (est) sesionesMap.set(key, est);
+  }
+
+  const result = [];
+  const clasesKeys = new Set();
+  for (const c of clasesRes.data ?? []) {
+    if (!c.matricula_id || !c.fecha) continue;
+    const fecha = String(c.fecha).slice(0, 10);
+    const key = `${fecha}|${c.matricula_id}`;
+    clasesKeys.add(key);
+    let estado_sesion = sesionesMap.get(key) ?? null;
+    if (!estado_sesion) {
+      if (c.estado === 'completada') estado_sesion = 'dada';
+      else if (c.estado === 'cancelada') estado_sesion = 'cancelada';
+    }
+    result.push({ fecha, matricula_id: c.matricula_id, avisado: Boolean(c.avisado), confirmado: Boolean(c.confirmado), estado_sesion });
+  }
+  for (const s of sesionesRes.data ?? []) {
+    if (!s.matricula_id || !s.fecha) continue;
+    const fecha = String(s.fecha).slice(0, 10);
+    const key = `${fecha}|${s.matricula_id}`;
+    if (clasesKeys.has(key)) continue;
+    const estado_sesion = s.estado === 'dada' ? 'dada' : s.estado === 'cancelada' ? 'cancelada' : null;
+    if (estado_sesion) result.push({ fecha, matricula_id: s.matricula_id, avisado: false, confirmado: false, estado_sesion });
+  }
+  return result;
+}
+
+export async function getMetricas({ mes, tutor_id }) {
+  const [year, monthStr] = String(mes || '').split('-');
+  const month = Number(monthStr);
+  if (!year || !month) throw new Error('mes debe tener formato YYYY-MM');
+  const fecha_inicio = `${year}-${String(month).padStart(2, '0')}-01`;
+  const lastDay = new Date(Number(year), month, 0).getDate();
+  const fecha_fin = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+  let q = supabase.from('movimientos_dinero')
+    .select('tipo,monto,estado,tutor_id')
+    .gte('fecha_pago', fecha_inicio).lte('fecha_pago', fecha_fin)
+    .or('estado.is.null,estado.in.(completado,verificado)');
+  if (tutor_id) q = q.eq('tutor_id', String(tutor_id));
+  const { data, error } = await q;
+  if (error) throw error;
+
+  let ingresos = 0, pagos_tutores = 0;
+  for (const m of data ?? []) {
+    const monto = Number(m.monto) || 0;
+    const tipo = String(m.tipo || '');
+    if (tipo === 'ingreso_estudiante' || tipo.startsWith('ingreso_')) ingresos += monto;
+    else if (tipo === 'pago_tutor_pendiente' || tipo === 'pago_tutor' || tipo.startsWith('pago_') || tipo.startsWith('egreso_')) pagos_tutores += monto;
+  }
+  return { mes, fecha_inicio, fecha_fin, ingresos, pagos_tutores, neto: ingresos - pagos_tutores, movimientos: (data ?? []).length };
+}
+
+export async function completarSesion(matricula_id, fecha) {
+  await supabase.from('sesiones_clases').delete().eq('matricula_id', matricula_id).eq('fecha', fecha);
+  const { error } = await supabase.from('sesiones_clases').insert({ matricula_id: Number(matricula_id), fecha, estado: 'dada' });
+  if (error) throw error;
+  // Update clases record if exists
+  await supabase.from('clases').update({ estado: 'completada' }).eq('matricula_id', matricula_id).eq('fecha', fecha);
+  return { message: 'Clase marcada como dada.', matricula_id, fecha };
+}
+
+export async function cancelarSesionDia(matricula_id, fecha, motivo) {
+  await supabase.from('sesiones_clases').delete().eq('matricula_id', matricula_id).eq('fecha', fecha);
+  const { error } = await supabase.from('sesiones_clases').insert({ matricula_id: Number(matricula_id), fecha, estado: 'cancelada' });
+  if (error) throw error;
+  if (motivo) await supabase.from('clases').update({ motivo_cancelacion: motivo, estado: 'cancelada' }).eq('matricula_id', matricula_id).eq('fecha', fecha);
+  return { message: 'Clase cancelada para este día.', matricula_id, fecha };
+}
+
+export async function actualizarEstadoSesion(matricula_id, fecha, { avisado, confirmado }) {
+  const updates = {};
+  if (avisado !== undefined) updates.avisado = Boolean(avisado);
+  if (confirmado !== undefined) updates.confirmado = Boolean(confirmado);
+  if (!Object.keys(updates).length) return { message: 'Sin cambios.', matricula_id, fecha };
+  const { data: existing } = await supabase.from('clases').select('id').eq('matricula_id', matricula_id).eq('fecha', fecha).maybeSingle();
+  if (existing?.id) {
+    const { error } = await supabase.from('clases').update(updates).eq('id', existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from('clases').insert({ matricula_id: Number(matricula_id), fecha, estado: 'programada', ...updates });
+    if (error) throw error;
+  }
+  return { message: 'Estado actualizado.', matricula_id, fecha, ...updates };
+}
+
 export async function getEstadisticasGeneral() {
   const [tutoresRes, estudiantesRes, cursosRes, matriculasRes, clasesRes] = await Promise.all([
     supabase.from('tutores').select('id', { count: 'exact', head: true }).eq('estado', true),

@@ -38,3 +38,25 @@ export function getDebugMatriculasCursos() {
 export function getEstadisticasGeneral(query) {
   return cached('dashboard:estadisticas-general', 20_000, shouldBypass(query), () => repo.getEstadisticasGeneral());
 }
+
+export function getEstadosClasesRango({ fecha_inicio, fecha_fin }) {
+  if (!fecha_inicio || !fecha_fin) throw new Error('Se requieren fecha_inicio y fecha_fin');
+  return repo.getEstadosClasesRango({ fecha_inicio, fecha_fin });
+}
+
+export function getMetricas({ mes, tutor_id } = {}) {
+  if (!mes) throw new Error('Se requiere mes en formato YYYY-MM');
+  return repo.getMetricas({ mes, tutor_id: tutor_id || null });
+}
+
+export function completarSesion(matricula_id, fecha) {
+  return repo.completarSesion(matricula_id, fecha);
+}
+
+export function cancelarSesionDia(matricula_id, fecha, motivo) {
+  return repo.cancelarSesionDia(matricula_id, fecha, motivo);
+}
+
+export function actualizarEstadoSesion(matricula_id, fecha, datos) {
+  return repo.actualizarEstadoSesion(matricula_id, fecha, datos);
+}

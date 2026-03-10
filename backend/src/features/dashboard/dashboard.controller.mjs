@@ -23,3 +23,26 @@ export async function getDebugMatriculasCursos(_req, res, next) {
 export async function getEstadisticasGeneral(req, res, next) {
   try { res.json(await service.getEstadisticasGeneral(req.query)); } catch (err) { next(err); }
 }
+
+export async function obtenerEstadosClasesRango(req, res, next) {
+  try { res.json(await service.getEstadosClasesRango(req.query)); } catch (err) { next(err); }
+}
+
+export async function getMetricas(req, res, next) {
+  try { res.json(await service.getMetricas(req.query)); } catch (err) { next(err); }
+}
+
+export async function completarSesion(req, res, next) {
+  try { res.json(await service.completarSesion(req.params.matriculaId, req.params.fecha)); } catch (err) { next(err); }
+}
+
+export async function cancelarSesionDia(req, res, next) {
+  try {
+    const { motivo_cancelacion } = req.body ?? {};
+    res.json(await service.cancelarSesionDia(req.params.matriculaId, req.params.fecha, motivo_cancelacion));
+  } catch (err) { next(err); }
+}
+
+export async function actualizarEstadoSesion(req, res, next) {
+  try { res.json(await service.actualizarEstadoSesion(req.params.matriculaId, req.params.fecha, req.body ?? {})); } catch (err) { next(err); }
+}

@@ -18,4 +18,15 @@ router.get('/estadisticas/general', ctrl.getEstadisticasGeneral);
 // Debug
 router.get('/debug/matriculas-cursos', ctrl.getDebugMatriculasCursos);
 
+// Métricas financieras del mes
+router.get('/metricas', ctrl.getMetricas);
+
+// Estados de clases por rango de fechas
+router.get('/estados-clases-rango', ctrl.obtenerEstadosClasesRango);
+
+// Gestión de sesiones individuales
+router.post('/sesion/:matriculaId/:fecha/completar', ctrl.completarSesion);
+router.post('/sesion/:matriculaId/:fecha/cancelar-dia', ctrl.cancelarSesionDia);
+router.patch('/sesion/:matriculaId/:fecha/estado', ctrl.actualizarEstadoSesion);
+
 export default router;
