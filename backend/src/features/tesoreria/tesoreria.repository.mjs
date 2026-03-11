@@ -110,11 +110,40 @@ export async function writeXlsx({ res, filename, sheetName, columns, rows }) {
 
 export async function getResumenEncargados() {
   const db = supabaseAdmin ?? supabase;
-  const { data, error } = await db
+
+  // 1. Encargados con saldos en tesorería (tienen cuenta corriente)
+  const { data: saldos, error: sErr } = await db
     .from('tesoreria_saldos_encargados_v1')
     .select('*, encargados(id, nombre, email, telefono)');
-  if (error) throw error;
-  return (data ?? []).map(row => ({
+  if (sErr) throw sErr;
+
+  // 2. Todos los encargados que tienen al menos un estudiante con matrícula activa
+  const { data: encActivos, error: eErr } = await db
+    .from('encargados')
+    .select('id, nombre, email, telefono, estudiantes!inner(id, matriculas!inner(id))')
+    .eq('estudiantes.matriculas.estado', true);
+  if (eErr) throw eErr;
+
+  // Merge: saldos indexados por encargado_id
+  const saldoMap = new Map();
+  for (const row of saldos ?? []) {
+    saldoMap.set(row.encargado_id, row);
+  }
+
+  // Agregar encargados activos que no están en saldos
+  for (const enc of encActivos ?? []) {
+    if (!saldoMap.has(enc.id)) {
+      saldoMap.set(enc.id, {
+        encargado_id: enc.id,
+        cuenta_id: null,
+        deuda_pendiente: 0,
+        saldo_a_favor: 0,
+        encargados: { id: enc.id, nombre: enc.nombre, email: enc.email, telefono: enc.telefono },
+      });
+    }
+  }
+
+  return [...saldoMap.values()].map(row => ({
     cuenta_id: row.cuenta_id,
     encargado_id: row.encargado_id,
     deuda_pendiente: Number(row.deuda_pendiente) || 0,
@@ -199,7 +228,7 @@ export async function getPagoAplicaciones(pagoId) {
   const { data: pago, error: pErr } = await db.from('tesoreria_pagos').select('*').eq('id', pagoId).maybeSingle();
   if (pErr) throw pErr;
   if (!pago) throw new AppError('Pago no encontrado.', 404);
-  const { data: aplicaciones, error: aErr } = await db.from('tesoreria_aplicaciones').select('*, tesoreria_obligaciones(id, descripcion, monto_original, fecha_vencimiento)').eq('pago_id', pagoId).order('created_at', { ascending: false });
+  const { data: aplicaciones, error: aErr } = await db.from('tesoreria_aplicaciones').select('*, tesoreria_obligaciones(id, detalle, monto, fecha_devengo)').eq('pago_id', pagoId).order('created_at', { ascending: false });
   if (aErr) throw aErr;
   return { pago, aplicaciones: aplicaciones ?? [] };
 }
@@ -273,7 +302,7 @@ export async function getObligacionesEncargado(encargadoId) {
   const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('encargado_id', parseInt(String(encargadoId), 10)).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este encargado.', 404);
-  const { data, error } = await db.from('tesoreria_obligaciones').select('*').eq('cuenta_id', cuenta.id).order('fecha_vencimiento', { ascending: true });
+  const { data, error } = await db.from('tesoreria_obligaciones').select('*').eq('cuenta_id', cuenta.id).order('fecha_devengo', { ascending: true });
   if (error) throw error;
   return data ?? [];
 }
@@ -283,7 +312,7 @@ export async function getObligacionesTutor(tutorId) {
   const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('tutor_id', parseInt(String(tutorId), 10)).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este tutor.', 404);
-  const { data, error } = await db.from('tesoreria_obligaciones').select('*').eq('cuenta_id', cuenta.id).order('fecha_vencimiento', { ascending: true });
+  const { data, error } = await db.from('tesoreria_obligaciones').select('*').eq('cuenta_id', cuenta.id).order('fecha_devengo', { ascending: true });
   if (error) throw error;
   return data ?? [];
 }
