@@ -13,7 +13,7 @@ import {
   ClipboardList, Clock, CreditCard,
   User as UserIcon, Calendar as CalendarIcon,
   TrendingUp, Award, ChevronRight, Activity, Star,
-  Plus, Minus
+  Plus, Minus, AlertTriangle
 } from 'lucide-react';
 
 interface Stats {
@@ -97,6 +97,8 @@ const Dashboard: React.FC = () => {
   const [uiNotice, setUiNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [confirmMarcarDada, setConfirmMarcarDada] = useState<{ sesion: SesionDelDia; sesionKey: string } | null>(null);
   const [confirmCancelarHoy, setConfirmCancelarHoy] = useState<{ sesion: SesionDelDia; sesionKey: string; motivo: string } | null>(null);
+  const [pendientesQuery, setPendientesQuery] = useState('');
+  const [pendientesExpanded, setPendientesExpanded] = useState(false);
 
   const [metricMes, setMetricMes] = useState<string>(crToday.slice(0, 7));
   const [metricas, setMetricas] = useState<MetricasFinancieras | null>(null);
@@ -146,6 +148,21 @@ const Dashboard: React.FC = () => {
   const totalSesionesMes = useMemo(() => {
     return Object.values(sesionesDelMes || {}).reduce((sum, list) => sum + (list?.length || 0), 0);
   }, [sesionesDelMes]);
+
+  // Sesiones de días pasados que NO fueron marcadas como dada ni cancelada
+  const sesionesPendientes = useMemo(() => {
+    const result: (SesionDelDia & { _fecha: string })[] = [];
+    for (const [dateStr, sesiones] of Object.entries(sesionesDelMes || {})) {
+      if (dateStr >= hoy) continue; // solo días pasados (antes de hoy)
+      for (const s of sesiones) {
+        if (!s.estado_sesion) {
+          result.push({ ...s, _fecha: dateStr, fecha: dateStr });
+        }
+      }
+    }
+    // Ordenar por fecha descendente (más reciente primero)
+    return result.sort((a, b) => b._fecha.localeCompare(a._fecha) || String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
+  }, [sesionesDelMes, hoy]);
 
   const getSesionKey = useCallback((s: SesionDelDia) => {
     return `${s.matricula_id}:${s.hora_inicio}:${s.hora_fin}:${s.curso_nombre}`;
@@ -1242,6 +1259,150 @@ const Dashboard: React.FC = () => {
             </CardContent>
           </Card>
         </section>
+
+        {/* Sesiones Pendientes de días pasados */}
+        {sesionesPendientes.length > 0 && (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-black text-white tracking-tight flex items-center gap-3">
+                <AlertTriangle className="w-6 h-6 text-amber-400" />
+                Sesiones Pendientes
+                <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 text-xs">{sesionesPendientes.length}</Badge>
+              </h2>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400">Días pasados sin marcar</span>
+                <div className="w-56 hidden md:block">
+                  <Input
+                    value={pendientesQuery}
+                    onChange={(e) => {
+                      setPendientesQuery(e.target.value);
+                      setPendientesExpanded(false);
+                    }}
+                    placeholder="Buscar curso/estudiante/tutor…"
+                    className="h-9"
+                  />
+                </div>
+              </div>
+            </div>
+            <Card className="border-amber-500/20 bg-[#0F2445]">
+              <CardContent className="pt-4">
+                {(() => {
+                  const q = normalizeSearch(pendientesQuery);
+                  const filtradas = !q
+                    ? sesionesPendientes
+                    : sesionesPendientes.filter((s) => {
+                        const haystack = normalizeSearch(
+                          [s.curso_nombre, s.estudiante_nombre, s.tutor_nombre, s._fecha].filter(Boolean).join(' ')
+                        );
+                        return haystack.includes(q);
+                      });
+
+                  const MAX_PREVIEW = 8;
+                  const total = filtradas.length;
+                  const mostrar = pendientesExpanded ? filtradas : filtradas.slice(0, MAX_PREVIEW);
+                  const hayMas = total > MAX_PREVIEW;
+
+                  if (total === 0) {
+                    return (
+                      <div className="flex flex-col items-center justify-center py-6">
+                        <Clock className="w-8 h-8 mb-2 text-slate-500" />
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest text-center">No hay resultados</p>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-[11px] text-amber-300/80 font-bold uppercase tracking-widest">
+                          {pendientesQuery ? `Resultados: ${total}` : `Total: ${total}`}
+                          {!pendientesExpanded && hayMas ? ` · Mostrando ${Math.min(MAX_PREVIEW, total)}` : ''}
+                        </div>
+                        {hayMas && (
+                          <Button
+                            size="sm"
+                            className="h-8 text-[11px] px-3 bg-white/10 border border-white/15 hover:bg-white/15"
+                            onClick={() => setPendientesExpanded((v) => !v)}
+                          >
+                            {pendientesExpanded ? 'Mostrar menos' : `Ver todas (${total})`}
+                          </Button>
+                        )}
+                      </div>
+
+                      <div
+                        className={`grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3 ${pendientesExpanded ? 'max-h-[560px] overflow-y-auto pr-1' : ''}`}
+                      >
+                        {mostrar.map((sesion, index) => {
+                          const sesionKey = `pending-${sesion.matricula_id}:${sesion._fecha}`;
+                          const isCompleting = !!completandoKeys[sesionKey];
+                          const fechaDisplay = new Date(sesion._fecha + 'T00:00:00').toLocaleDateString('es-CR', { weekday: 'short', day: 'numeric', month: 'short' });
+                          const hi = formatTimeAmPm(sesion.hora_inicio);
+                          const hf = formatTimeAmPm(sesion.hora_fin);
+                          const esMensual = (sesion.curso_tipo_pago || '').toLowerCase() === 'mensual';
+                          return (
+                            <div
+                              key={`pend-${sesion.matricula_id}-${sesion._fecha}-${index}`}
+                              className="rounded-2xl border border-amber-500/20 bg-amber-500/5 hover:bg-amber-500/10 transition-all group p-4 flex flex-col min-h-[150px]"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-sm font-black text-white group-hover:text-amber-300 transition-colors truncate">
+                                    {sesion.curso_nombre}
+                                  </p>
+                                  <p className="text-xs text-amber-300/70 mt-0.5 font-semibold">{fechaDisplay}</p>
+                                  {sesion.hora_inicio && sesion.hora_inicio !== '—' && (
+                                    <p className="text-xs text-slate-400 mt-0.5 tabular-nums">{hi} - {hf}</p>
+                                  )}
+                                </div>
+                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-amber-400/15 text-amber-200 flex-shrink-0">
+                                  <AlertTriangle className="w-3 h-3" />
+                                  Pendiente
+                                </span>
+                              </div>
+
+                              <div className="mt-3 space-y-1">
+                                <p className="text-xs font-bold text-slate-200 truncate">{sesion.estudiante_nombre}</p>
+                                <p className="text-[11px] text-slate-500 truncate">Tutor: {sesion.tutor_nombre || '—'}</p>
+                              </div>
+
+                              <div className="mt-auto pt-4 flex items-center gap-2 flex-wrap">
+                                {!esMensual && (
+                                  <Button
+                                    size="sm"
+                                    className="text-[11px] px-3 h-9 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                    disabled={isCompleting}
+                                    onClick={() => {
+                                      setConfirmMarcarDada({ sesion: { ...sesion, fecha: sesion._fecha }, sesionKey });
+                                    }}
+                                  >
+                                    {isCompleting ? 'Marcando...' : 'Marcar dada'}
+                                  </Button>
+                                )}
+                                {esMensual && (
+                                  <span className="text-[10px] text-amber-200/90">Mensual: no se marca por sesión.</span>
+                                )}
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  className="text-[11px] px-3 h-9"
+                                  onClick={() => {
+                                    setConfirmCancelarHoy({ sesion: { ...sesion, fecha: sesion._fecha }, sesionKey, motivo: '' });
+                                  }}
+                                >
+                                  Cancelar
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          </section>
+        )}
 
         {/* Calendario Mensual */}
         <section className="space-y-4">
