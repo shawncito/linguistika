@@ -117,18 +117,30 @@ export async function getResumenEncargados() {
     .select('*, encargados(id, nombre, email, telefono)');
   if (sErr) throw sErr;
 
-  // 2. Estudiantes con matrícula activa y encargado asignado → extraer encargado_ids únicos
-  const { data: estConMatricula, error: eErr } = await db
-    .from('matriculas')
-    .select('estudiantes!inner(encargado_id)')
-    .eq('estado', true)
-    .not('estudiantes.encargado_id', 'is', null);
-  if (eErr) throw eErr;
+  // 2. Encargados con estudiantes en matrícula activa (individual o grupal)
+  const [matIndiv, matGrupo] = await Promise.all([
+    // Ruta individual: matriculas.estado = true → estudiantes.encargado_id
+    db.from('matriculas')
+      .select('estudiantes!inner(encargado_id)')
+      .eq('estado', true)
+      .not('estudiantes.encargado_id', 'is', null),
+    // Ruta grupal: estudiantes.matricula_grupo_id → matriculas_grupo.estado = 'activa'
+    db.from('estudiantes')
+      .select('encargado_id, matriculas_grupo!inner(id)')
+      .not('encargado_id', 'is', null)
+      .eq('matriculas_grupo.estado', 'activa'),
+  ]);
+  if (matIndiv.error) throw matIndiv.error;
+  if (matGrupo.error) throw matGrupo.error;
 
   // Extraer IDs únicos de encargados con matrículas activas
-  const encIdsActivos = [...new Set(
-    (estConMatricula ?? []).map(r => r.estudiantes?.encargado_id).filter(Boolean)
-  )];
+  const encIdsSet = new Set();
+  for (const r of matIndiv.data ?? []) {
+    if (r.estudiantes?.encargado_id) encIdsSet.add(r.estudiantes.encargado_id);
+  }
+  for (const r of matGrupo.data ?? []) {
+    if (r.encargado_id) encIdsSet.add(r.encargado_id);
+  }
 
   // 3. Traer datos de esos encargados que no están ya en saldos
   const saldoMap = new Map();
@@ -136,7 +148,7 @@ export async function getResumenEncargados() {
     saldoMap.set(row.encargado_id, row);
   }
 
-  const encIdsFaltantes = encIdsActivos.filter(id => !saldoMap.has(id));
+  const encIdsFaltantes = [...encIdsSet].filter(id => !saldoMap.has(id));
   if (encIdsFaltantes.length > 0) {
     const { data: encFaltantes, error: efErr } = await db
       .from('encargados')
