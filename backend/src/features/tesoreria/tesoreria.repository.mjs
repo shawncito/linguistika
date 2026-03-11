@@ -238,6 +238,9 @@ export async function getDiario({ singleDate, mes, start, end, includePendientes
   const encargadoIdNum = encargadoId ? parseInt(String(encargadoId), 10) : null;
   const tutorIdNum = tutorId ? parseInt(String(tutorId), 10) : null;
   const cuentaIdNum = cuentaId ? parseInt(String(cuentaId), 10) : null;
+  if (encargadoIdNum !== null && !Number.isFinite(encargadoIdNum)) throw new AppError('encargadoId inválido', 400);
+  if (tutorIdNum !== null && !Number.isFinite(tutorIdNum)) throw new AppError('tutorId inválido', 400);
+  if (cuentaIdNum !== null && !Number.isFinite(cuentaIdNum)) throw new AppError('cuentaId inválido', 400);
   const { data, error, count } = await buildLibroQuery({ singleDate, mesParam: mes, start, end, includePendientes: includePendientes !== false, encargadoIdNum, tutorIdNum, cuentaIdNum, ascending: ascending === true || ascending === '1' || ascending === 'true', limitNum });
   if (error) { if (isMissingRelationError(error)) return { items: [], count: 0, limit: limitNum, error: error.message }; throw error; }
   return { items: data ?? [], count: count ?? 0, limit: limitNum };
@@ -248,6 +251,7 @@ export async function getDiario({ singleDate, mes, start, end, includePendientes
 export async function getMovimientosEncargado({ encargadoId, ...rest }) {
   const db = supabaseAdmin ?? supabase;
   const encargadoIdNum = parseInt(String(encargadoId), 10);
+  if (!Number.isFinite(encargadoIdNum)) throw new AppError('encargadoId inválido', 400);
   const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('encargado_id', encargadoIdNum).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este encargado.', 404);
@@ -257,6 +261,7 @@ export async function getMovimientosEncargado({ encargadoId, ...rest }) {
 export async function getMovimientosTutor({ tutorId, ...rest }) {
   const db = supabaseAdmin ?? supabase;
   const tutorIdNum = parseInt(String(tutorId), 10);
+  if (!Number.isFinite(tutorIdNum)) throw new AppError('tutorId inválido', 400);
   const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('tutor_id', tutorIdNum).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este tutor.', 404);
@@ -367,7 +372,9 @@ export async function getEsperadoDiario() {
 
 export async function getObligacionesEncargado(encargadoId) {
   const db = supabaseAdmin ?? supabase;
-  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('encargado_id', parseInt(String(encargadoId), 10)).maybeSingle();
+  const id = parseInt(String(encargadoId), 10);
+  if (!Number.isFinite(id)) throw new AppError('encargadoId inválido', 400);
+  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('encargado_id', id).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este encargado.', 404);
   const { data, error } = await db.from('tesoreria_obligaciones').select('*').eq('cuenta_id', cuenta.id).order('fecha_devengo', { ascending: true });
@@ -377,7 +384,9 @@ export async function getObligacionesEncargado(encargadoId) {
 
 export async function getObligacionesTutor(tutorId) {
   const db = supabaseAdmin ?? supabase;
-  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('tutor_id', parseInt(String(tutorId), 10)).maybeSingle();
+  const id = parseInt(String(tutorId), 10);
+  if (!Number.isFinite(id)) throw new AppError('tutorId inválido', 400);
+  const { data: cuenta, error: cErr } = await db.from('tesoreria_cuentas_corrientes').select('id').eq('tutor_id', id).maybeSingle();
   if (cErr) throw cErr;
   if (!cuenta) throw new AppError('No se encontró cuenta de tesorería para este tutor.', 404);
   const { data, error } = await db.from('tesoreria_obligaciones').select('*').eq('cuenta_id', cuenta.id).order('fecha_devengo', { ascending: true });
