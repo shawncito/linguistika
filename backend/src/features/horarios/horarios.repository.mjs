@@ -68,7 +68,7 @@ export async function getHorariosByTutorAndDia(tutorId, dia) {
 }
 
 export async function getMatriculaTutor(matriculaId) {
-  const { data, error } = await supabase.from('matriculas').select('id,tutor_id').eq('id', matriculaId).maybeSingle();
+  const { data, error } = await supabase.from('matriculas').select('id,tutor_id,estudiante_id,curso_id').eq('id', matriculaId).maybeSingle();
   if (error) throw error;
   return data;
 }
@@ -93,7 +93,7 @@ export async function createClase({ matricula_id, fecha, hora_inicio, hora_fin, 
   }
 
   const { data, error } = await supabase.from('clases')
-    .insert({ matricula_id, fecha, hora_inicio, hora_fin, notas, created_by: userId, estado: 'programada' })
+    .insert({ matricula_id, fecha, hora_inicio, hora_fin, notas, created_by: userId, estado: 'programada', tutor_id: mat.tutor_id, estudiante_id: mat.estudiante_id ?? null, curso_id: mat.curso_id ?? null })
     .select().single();
   if (error) throw error;
   return data;

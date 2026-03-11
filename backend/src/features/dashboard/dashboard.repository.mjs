@@ -329,14 +329,15 @@ export async function completarSesion(matricula_id, fecha) {
     .eq('id', matricula_id)
     .maybeSingle();
   if (matErr) throw matErr;
+  if (!mat) throw new Error('Matrícula no encontrada');
 
   await supabase.from('sesiones_clases').delete().eq('matricula_id', matricula_id).eq('fecha', fecha);
   const { error } = await supabase.from('sesiones_clases').insert({
     matricula_id: Number(matricula_id),
     fecha,
     estado: 'dada',
-    curso_id: mat?.curso_id ?? null,
-    tutor_id: mat?.tutor_id ?? null,
+    curso_id: mat.curso_id,
+    tutor_id: mat.tutor_id,
   });
   if (error) throw error;
   // Update clases record if exists
@@ -352,14 +353,15 @@ export async function cancelarSesionDia(matricula_id, fecha, motivo) {
     .eq('id', matricula_id)
     .maybeSingle();
   if (matErr) throw matErr;
+  if (!mat) throw new Error('Matrícula no encontrada');
 
   await supabase.from('sesiones_clases').delete().eq('matricula_id', matricula_id).eq('fecha', fecha);
   const { error } = await supabase.from('sesiones_clases').insert({
     matricula_id: Number(matricula_id),
     fecha,
     estado: 'cancelada',
-    curso_id: mat?.curso_id ?? null,
-    tutor_id: mat?.tutor_id ?? null,
+    curso_id: mat.curso_id,
+    tutor_id: mat.tutor_id,
   });
   if (error) throw error;
   if (motivo) await supabase.from('clases').update({ motivo_cancelacion: motivo, estado: 'cancelada' }).eq('matricula_id', matricula_id).eq('fecha', fecha);
@@ -376,7 +378,8 @@ export async function actualizarEstadoSesion(matricula_id, fecha, { avisado, con
     const { error } = await supabase.from('clases').update(updates).eq('id', existing.id);
     if (error) throw error;
   } else {
-    const { error } = await supabase.from('clases').insert({ matricula_id: Number(matricula_id), fecha, estado: 'programada', ...updates });
+    const { data: mat } = await supabase.from('matriculas').select('curso_id,tutor_id,estudiante_id').eq('id', matricula_id).maybeSingle();
+    const { error } = await supabase.from('clases').insert({ matricula_id: Number(matricula_id), fecha, estado: 'programada', curso_id: mat?.curso_id ?? null, tutor_id: mat?.tutor_id ?? null, estudiante_id: mat?.estudiante_id ?? null, ...updates });
     if (error) throw error;
   }
   return { message: 'Estado actualizado.', matricula_id, fecha, ...updates };

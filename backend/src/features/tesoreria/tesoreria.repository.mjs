@@ -432,7 +432,7 @@ export async function registrarCobroGrupal({ grupoId, body, userId }) {
   for (const eid of estudiantesBulkIds) {
     const { data: est, error: eErr } = await db.from('estudiantes_bulk').select('id, nombre').eq('id', eid).maybeSingle();
     if (eErr || !est) continue;
-    const { error: mErr } = await db.from('movimientos_dinero').insert({ tipo: 'cobro', monto: montoNum, fecha, descripcion: descripcion ?? `Cobro grupo ${grupo.nombre_grupo}`, referencia_tabla: 'estudiantes_bulk', referencia_id: est.id, grupo_id: grupoId, created_by: userId });
+    const { error: mErr } = await db.from('movimientos_dinero').insert({ tipo: 'cobro', monto: montoNum, fecha_pago: fecha, notas: descripcion ?? `Cobro grupo ${grupo.nombre_grupo}`, curso_id: grupo.curso_id ?? null, tutor_id: grupo.tutor_id ?? null, estado: 'completado' });
     if (!mErr) movimientos.push({ tipo: 'bulk', id: est.id, nombre: est.nombre });
   }
   let tutorRegistro = null;
