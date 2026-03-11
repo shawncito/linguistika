@@ -117,20 +117,44 @@ export async function getResumenEncargados() {
     .select('*, encargados(id, nombre, email, telefono)');
   if (sErr) throw sErr;
 
-  // 2. TODOS los encargados
-  const { data: todosEnc, error: eErr } = await db
-    .from('encargados')
-    .select('id, nombre, email, telefono');
-  if (eErr) throw eErr;
+  // 2. Encargados con al menos una matrícula vinculada (individual o grupal)
+  const { data: matIndividuales, error: e1 } = await db
+    .from('matriculas')
+    .select('estudiante_id');
+  if (e1) throw e1;
+  const estIdsConMatInd = new Set((matIndividuales ?? []).map(m => m.estudiante_id).filter(Boolean));
+
+  const { data: estudiantes, error: e2 } = await db
+    .from('estudiantes')
+    .select('id, encargado_id, matricula_grupo_id')
+    .not('encargado_id', 'is', null);
+  if (e2) throw e2;
+
+  // Encargado tiene matrícula vinculada si su estudiante tiene matrícula individual o matricula_grupo_id
+  const encIdsConMatricula = new Set();
+  for (const est of estudiantes ?? []) {
+    if (!est.encargado_id) continue;
+    if (estIdsConMatInd.has(est.id) || est.matricula_grupo_id) {
+      encIdsConMatricula.add(est.encargado_id);
+    }
+  }
 
   const saldoMap = new Map();
   for (const row of saldos ?? []) {
-    saldoMap.set(row.encargado_id, row);
+    if (encIdsConMatricula.has(row.encargado_id)) {
+      saldoMap.set(row.encargado_id, row);
+    }
   }
 
-  // Agregar encargados que no tienen cuenta de tesorería aún
-  for (const enc of todosEnc ?? []) {
-    if (!saldoMap.has(enc.id)) {
+  // Agregar encargados con matrícula que no tienen cuenta de tesorería aún
+  const encIdsFaltantes = [...encIdsConMatricula].filter(id => !saldoMap.has(id));
+  if (encIdsFaltantes.length > 0) {
+    const { data: encFaltantes, error: efErr } = await db
+      .from('encargados')
+      .select('id, nombre, email, telefono')
+      .in('id', encIdsFaltantes);
+    if (efErr) throw efErr;
+    for (const enc of encFaltantes ?? []) {
       saldoMap.set(enc.id, {
         encargado_id: enc.id,
         cuenta_id: null,
