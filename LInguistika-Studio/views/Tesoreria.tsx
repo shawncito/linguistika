@@ -20,11 +20,13 @@ type EncargadoResumenItem = {
 };
 
 type TutorResumenItem = {
-  cuenta_id: number;
+  cuenta_id: number | null;
   tutor_id: number;
   por_pagar: number;
   pagado: number;
-  tutores?: { id: number; nombre?: string | null; email?: string | null } | null;
+  balance_neto?: number;
+  estado?: string;
+  tutores?: { id: number; nombre?: string | null; email?: string | null; telefono?: string | null } | null;
 };
 
 type EncargadoPorcentajeItem = {
@@ -171,6 +173,8 @@ const Tesoreria: React.FC = () => {
   const [loadingTut, setLoadingTut] = useState(false);
   const [tutores, setTutores] = useState<TutorResumenItem[]>([]);
   const [selectedTutorId, setSelectedTutorId] = useState<number | null>(null);
+  const [tutSearchQuery, setTutSearchQuery] = useState('');
+  const [tutEstadoFilter, setTutEstadoFilter] = useState<'todos' | 'deuda' | 'al_dia' | 'saldo_favor'>('todos');
 
   const [loadingHistEnc, setLoadingHistEnc] = useState(false);
   const [histEnc, setHistEnc] = useState<DiarioItem[]>([]);
@@ -1661,6 +1665,27 @@ const Tesoreria: React.FC = () => {
                   </Button>
                 </div>
 
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <input
+                    type="text"
+                    placeholder="Buscar por nombre, email o teléfono…"
+                    value={tutSearchQuery}
+                    onChange={(e) => setTutSearchQuery(e.target.value)}
+                    className="flex-1 min-w-[180px] h-9 px-3 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-[#00AEEF]/50"
+                  />
+                  <select
+                    value={tutEstadoFilter}
+                    onChange={(e) => setTutEstadoFilter(e.target.value as 'todos' | 'deuda' | 'al_dia' | 'saldo_favor')}
+                    className="h-9 px-3 rounded-lg bg-white/5 border border-white/10 text-sm text-white focus:outline-none focus:border-[#00AEEF]/50"
+                  >
+                    <option value="todos">Todos</option>
+                    <option value="deuda">Con deuda</option>
+                    <option value="al_dia">Al día</option>
+                    <option value="saldo_favor">Saldo a favor</option>
+                  </select>
+                </div>
+
+                <div className="max-h-[420px] overflow-y-auto rounded-xl">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1670,7 +1695,19 @@ const Tesoreria: React.FC = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {tutores.map((x) => {
+                    {tutores
+                      .filter((x) => {
+                        if (tutEstadoFilter !== 'todos' && x.estado !== tutEstadoFilter) return false;
+                        if (tutSearchQuery.trim()) {
+                          const q = tutSearchQuery.trim().toLowerCase();
+                          const nombre = (x.tutores?.nombre || '').toLowerCase();
+                          const email = (x.tutores?.email || '').toLowerCase();
+                          const tel = (x.tutores?.telefono || '').toLowerCase();
+                          if (!nombre.includes(q) && !email.includes(q) && !tel.includes(q)) return false;
+                        }
+                        return true;
+                      })
+                      .map((x) => {
                       const selected = selectedTutorId === x.tutor_id;
                       return (
                         <TableRow
@@ -1680,7 +1717,7 @@ const Tesoreria: React.FC = () => {
                         >
                           <TableCell className="font-semibold">
                             <div className="text-white font-black truncate">{x.tutores?.nombre || `Tutor #${x.tutor_id}`}</div>
-                            <div className="text-[11px] text-slate-300 truncate">{x.tutores?.email || ''}</div>
+                            <div className="text-[11px] text-slate-300 truncate">{[x.tutores?.email, x.tutores?.telefono].filter(Boolean).join(' • ')}</div>
                           </TableCell>
                           <TableCell className="text-right">{formatCRC(Number(x.por_pagar) || 0)}</TableCell>
                           <TableCell className="text-right">{formatCRC(Number(x.pagado) || 0)}</TableCell>
@@ -1694,6 +1731,7 @@ const Tesoreria: React.FC = () => {
                     )}
                   </TableBody>
                 </Table>
+                </div>
               </Card>
 
               <Card className="p-6 lg:col-span-5">

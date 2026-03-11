@@ -111,68 +111,26 @@ export async function writeXlsx({ res, filename, sheetName, columns, rows }) {
 export async function getResumenEncargados() {
   const db = supabaseAdmin ?? supabase;
 
-  // 1. Encargados con saldos en tesorería (tienen cuenta corriente)
+  // 1. Saldos de encargados con cuenta corriente
   const { data: saldos, error: sErr } = await db
     .from('tesoreria_saldos_encargados_v1')
     .select('*, encargados(id, nombre, email, telefono)');
   if (sErr) throw sErr;
 
-  // 2. Encargados con al menos un estudiante con matrícula activa
-  //    Ruta 1: matriculas individuales (estado = true)
-  //    Ruta 2: matriculas grupales via estudiantes.matricula_grupo_id
-  const { data: matActivas, error: e1b } = await db
-    .from('matriculas')
-    .select('estudiante_id')
-    .eq('estado', true);
-  if (e1b) throw e1b;
-  const estIdsConMatricula = new Set((matActivas ?? []).map(m => m.estudiante_id).filter(Boolean));
+  // 2. TODOS los encargados
+  const { data: todosEnc, error: eErr } = await db
+    .from('encargados')
+    .select('id, nombre, email, telefono');
+  if (eErr) throw eErr;
 
-  const { data: estConGrupo, error: e2 } = await db
-    .from('estudiantes')
-    .select('id, encargado_id, matricula_grupo_id')
-    .not('encargado_id', 'is', null);
-  if (e2) throw e2;
-
-  // IDs de matriculas_grupo activas
-  const { data: gruposActivos, error: e3 } = await db
-    .from('matriculas_grupo')
-    .select('id')
-    .eq('estado', 'activa');
-  if (e3) throw e3;
-  const grupoIdsActivos = new Set((gruposActivos ?? []).map(g => g.id));
-
-  // Recolectar encargado_ids con matrícula activa
-  const encIdsActivos = new Set();
-  for (const est of estConGrupo ?? []) {
-    if (!est.encargado_id) continue;
-    // Tiene matrícula individual activa
-    if (estIdsConMatricula.has(est.id)) {
-      encIdsActivos.add(est.encargado_id);
-      continue;
-    }
-    // Tiene matrícula grupal activa
-    if (est.matricula_grupo_id && grupoIdsActivos.has(est.matricula_grupo_id)) {
-      encIdsActivos.add(est.encargado_id);
-    }
-  }
-
-  // Traer datos de encargados activos que no están ya en saldos
   const saldoMap = new Map();
   for (const row of saldos ?? []) {
-    // Solo incluir si tiene matrícula activa
-    if (encIdsActivos.has(row.encargado_id)) {
-      saldoMap.set(row.encargado_id, row);
-    }
+    saldoMap.set(row.encargado_id, row);
   }
 
-  const encIdsFaltantes = [...encIdsActivos].filter(id => !saldoMap.has(id));
-  if (encIdsFaltantes.length > 0) {
-    const { data: encFaltantes, error: efErr } = await db
-      .from('encargados')
-      .select('id, nombre, email, telefono')
-      .in('id', encIdsFaltantes);
-    if (efErr) throw efErr;
-    for (const enc of encFaltantes ?? []) {
+  // Agregar encargados que no tienen cuenta de tesorería aún
+  for (const enc of todosEnc ?? []) {
+    if (!saldoMap.has(enc.id)) {
       saldoMap.set(enc.id, {
         encargado_id: enc.id,
         cuenta_id: null,
@@ -198,9 +156,55 @@ export async function getResumenEncargados() {
 
 export async function getResumenTutores() {
   const db = supabaseAdmin ?? supabase;
-  const { data, error } = await db.from('tesoreria_saldos_tutores_v1').select('*');
-  if (error) throw error;
-  return data ?? [];
+
+  // 1. Saldos de tutores con cuenta corriente
+  const { data: saldos, error: sErr } = await db
+    .from('tesoreria_saldos_tutores_v1')
+    .select('*');
+  if (sErr) throw sErr;
+
+  // 2. Todos los tutores activos
+  const { data: todosTut, error: tErr } = await db
+    .from('tutores')
+    .select('id, nombre, email, telefono')
+    .eq('estado', true);
+  if (tErr) throw tErr;
+
+  const saldoMap = new Map();
+  for (const row of saldos ?? []) {
+    saldoMap.set(row.tutor_id, row);
+  }
+
+  // Agregar tutores activos que no tienen cuenta de tesorería aún
+  for (const tut of todosTut ?? []) {
+    if (!saldoMap.has(tut.id)) {
+      saldoMap.set(tut.id, {
+        tutor_id: tut.id,
+        cuenta_id: null,
+        por_pagar: 0,
+        pagado: 0,
+      });
+    }
+  }
+
+  // Traer nombres de todos los tutores en el mapa
+  const tutIds = [...saldoMap.keys()];
+  const { data: tutInfo, error: tiErr } = await db
+    .from('tutores')
+    .select('id, nombre, email, telefono')
+    .in('id', tutIds);
+  if (tiErr) throw tiErr;
+  const tutMap = new Map((tutInfo ?? []).map(t => [t.id, t]));
+
+  return [...saldoMap.values()].map(row => ({
+    tutor_id: row.tutor_id,
+    cuenta_id: row.cuenta_id,
+    por_pagar: Number(row.por_pagar) || 0,
+    pagado: Number(row.pagado) || 0,
+    balance_neto: (Number(row.por_pagar) || 0) - (Number(row.pagado) || 0),
+    estado: (Number(row.por_pagar) || 0) > (Number(row.pagado) || 0) ? 'deuda' : (Number(row.pagado) || 0) > (Number(row.por_pagar) || 0) ? 'saldo_favor' : 'al_dia',
+    tutores: tutMap.get(row.tutor_id) || { id: row.tutor_id, nombre: `Tutor #${row.tutor_id}` },
+  }));
 }
 
 /* ─── Libro diario ───────────────────────────────────────────────────────── */
