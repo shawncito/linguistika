@@ -155,6 +155,8 @@ const Tesoreria: React.FC = () => {
   const [loadingEnc, setLoadingEnc] = useState(false);
   const [encargados, setEncargados] = useState<EncargadoResumenItem[]>([]);
   const [selectedEncargadoId, setSelectedEncargadoId] = useState<number | null>(null);
+  const [encSearchQuery, setEncSearchQuery] = useState('');
+  const [encEstadoFilter, setEncEstadoFilter] = useState<'todos' | 'deuda' | 'al_dia' | 'saldo_favor'>('todos');
 
   const [loadingBolsa, setLoadingBolsa] = useState(false);
   const [bolsa, setBolsa] = useState<BolsaInfo | null>(null);
@@ -1306,6 +1308,27 @@ const Tesoreria: React.FC = () => {
                   </Button>
                 </div>
 
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <input
+                    type="text"
+                    placeholder="Buscar por nombre, email o teléfono…"
+                    value={encSearchQuery}
+                    onChange={(e) => setEncSearchQuery(e.target.value)}
+                    className="flex-1 min-w-[180px] h-9 px-3 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-[#00AEEF]/50"
+                  />
+                  <select
+                    value={encEstadoFilter}
+                    onChange={(e) => setEncEstadoFilter(e.target.value as 'todos' | 'deuda' | 'al_dia' | 'saldo_favor')}
+                    className="h-9 px-3 rounded-lg bg-white/5 border border-white/10 text-sm text-white focus:outline-none focus:border-[#00AEEF]/50"
+                  >
+                    <option value="todos">Todos</option>
+                    <option value="deuda">Con deuda</option>
+                    <option value="al_dia">Al día</option>
+                    <option value="saldo_favor">Saldo a favor</option>
+                  </select>
+                </div>
+
+                <div className="max-h-[420px] overflow-y-auto rounded-xl">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1315,7 +1338,19 @@ const Tesoreria: React.FC = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {encargados.map((x) => {
+                    {encargados
+                      .filter((x) => {
+                        if (encEstadoFilter !== 'todos' && x.estado !== encEstadoFilter) return false;
+                        if (encSearchQuery.trim()) {
+                          const q = encSearchQuery.trim().toLowerCase();
+                          const nombre = (x.encargados?.nombre || '').toLowerCase();
+                          const email = (x.encargados?.email || '').toLowerCase();
+                          const tel = (x.encargados?.telefono || '').toLowerCase();
+                          if (!nombre.includes(q) && !email.includes(q) && !tel.includes(q)) return false;
+                        }
+                        return true;
+                      })
+                      .map((x) => {
                       const selected = selectedEncargadoId === x.encargado_id;
                       return (
                         <TableRow
@@ -1339,6 +1374,7 @@ const Tesoreria: React.FC = () => {
                     )}
                   </TableBody>
                 </Table>
+                </div>
               </Card>
 
               <Card className="p-6 lg:col-span-5">
