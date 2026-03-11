@@ -117,45 +117,21 @@ export async function getResumenEncargados() {
     .select('*, encargados(id, nombre, email, telefono)');
   if (sErr) throw sErr;
 
-  // 2. Encargados con estudiantes en matrícula activa (individual o grupal)
-  const [matIndiv, matGrupo] = await Promise.all([
-    // Ruta individual: matriculas.estado = true → estudiantes.encargado_id
-    db.from('matriculas')
-      .select('estudiantes!inner(encargado_id)')
-      .eq('estado', true)
-      .not('estudiantes.encargado_id', 'is', null),
-    // Ruta grupal: estudiantes.matricula_grupo_id → matriculas_grupo.estado = 'activa'
-    db.from('estudiantes')
-      .select('encargado_id, matriculas_grupo!inner(id)')
-      .not('encargado_id', 'is', null)
-      .eq('matriculas_grupo.estado', 'activa'),
-  ]);
-  if (matIndiv.error) throw matIndiv.error;
-  if (matGrupo.error) throw matGrupo.error;
+  // 2. Todos los encargados que tienen al menos un estudiante vinculado
+  const { data: allEnc, error: aErr } = await db
+    .from('encargados')
+    .select('id, nombre, email, telefono');
+  if (aErr) throw aErr;
 
-  // Extraer IDs únicos de encargados con matrículas activas
-  const encIdsSet = new Set();
-  for (const r of matIndiv.data ?? []) {
-    if (r.estudiantes?.encargado_id) encIdsSet.add(r.estudiantes.encargado_id);
-  }
-  for (const r of matGrupo.data ?? []) {
-    if (r.encargado_id) encIdsSet.add(r.encargado_id);
-  }
-
-  // 3. Traer datos de esos encargados que no están ya en saldos
+  // Merge: saldos indexados por encargado_id
   const saldoMap = new Map();
   for (const row of saldos ?? []) {
     saldoMap.set(row.encargado_id, row);
   }
 
-  const encIdsFaltantes = [...encIdsSet].filter(id => !saldoMap.has(id));
-  if (encIdsFaltantes.length > 0) {
-    const { data: encFaltantes, error: efErr } = await db
-      .from('encargados')
-      .select('id, nombre, email, telefono')
-      .in('id', encIdsFaltantes);
-    if (efErr) throw efErr;
-    for (const enc of encFaltantes ?? []) {
+  // Agregar encargados que no están en saldos
+  for (const enc of allEnc ?? []) {
+    if (!saldoMap.has(enc.id)) {
       saldoMap.set(enc.id, {
         encargado_id: enc.id,
         cuenta_id: null,
