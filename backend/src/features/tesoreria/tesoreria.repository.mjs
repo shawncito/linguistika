@@ -117,22 +117,33 @@ export async function getResumenEncargados() {
     .select('*, encargados(id, nombre, email, telefono)');
   if (sErr) throw sErr;
 
-  // 2. Todos los encargados que tienen al menos un estudiante con matrícula activa
-  const { data: encActivos, error: eErr } = await db
-    .from('encargados')
-    .select('id, nombre, email, telefono, estudiantes!inner(id, matriculas!inner(id))')
-    .eq('estudiantes.matriculas.estado', true);
+  // 2. Estudiantes con matrícula activa y encargado asignado → extraer encargado_ids únicos
+  const { data: estConMatricula, error: eErr } = await db
+    .from('matriculas')
+    .select('estudiantes!inner(encargado_id)')
+    .eq('estado', true)
+    .not('estudiantes.encargado_id', 'is', null);
   if (eErr) throw eErr;
 
-  // Merge: saldos indexados por encargado_id
+  // Extraer IDs únicos de encargados con matrículas activas
+  const encIdsActivos = [...new Set(
+    (estConMatricula ?? []).map(r => r.estudiantes?.encargado_id).filter(Boolean)
+  )];
+
+  // 3. Traer datos de esos encargados que no están ya en saldos
   const saldoMap = new Map();
   for (const row of saldos ?? []) {
     saldoMap.set(row.encargado_id, row);
   }
 
-  // Agregar encargados activos que no están en saldos
-  for (const enc of encActivos ?? []) {
-    if (!saldoMap.has(enc.id)) {
+  const encIdsFaltantes = encIdsActivos.filter(id => !saldoMap.has(id));
+  if (encIdsFaltantes.length > 0) {
+    const { data: encFaltantes, error: efErr } = await db
+      .from('encargados')
+      .select('id, nombre, email, telefono')
+      .in('id', encIdsFaltantes);
+    if (efErr) throw efErr;
+    for (const enc of encFaltantes ?? []) {
       saldoMap.set(enc.id, {
         encargado_id: enc.id,
         cuenta_id: null,
