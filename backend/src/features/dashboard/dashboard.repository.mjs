@@ -322,8 +322,22 @@ export async function getMetricas({ mes, tutor_id }) {
 }
 
 export async function completarSesion(matricula_id, fecha) {
+  // Fetch matricula to get curso_id and tutor_id (required by sesiones_clases)
+  const { data: mat, error: matErr } = await supabase
+    .from('matriculas')
+    .select('curso_id,tutor_id')
+    .eq('id', matricula_id)
+    .maybeSingle();
+  if (matErr) throw matErr;
+
   await supabase.from('sesiones_clases').delete().eq('matricula_id', matricula_id).eq('fecha', fecha);
-  const { error } = await supabase.from('sesiones_clases').insert({ matricula_id: Number(matricula_id), fecha, estado: 'dada' });
+  const { error } = await supabase.from('sesiones_clases').insert({
+    matricula_id: Number(matricula_id),
+    fecha,
+    estado: 'dada',
+    curso_id: mat?.curso_id ?? null,
+    tutor_id: mat?.tutor_id ?? null,
+  });
   if (error) throw error;
   // Update clases record if exists
   await supabase.from('clases').update({ estado: 'completada' }).eq('matricula_id', matricula_id).eq('fecha', fecha);
@@ -331,8 +345,22 @@ export async function completarSesion(matricula_id, fecha) {
 }
 
 export async function cancelarSesionDia(matricula_id, fecha, motivo) {
+  // Fetch matricula to get curso_id and tutor_id (required by sesiones_clases)
+  const { data: mat, error: matErr } = await supabase
+    .from('matriculas')
+    .select('curso_id,tutor_id')
+    .eq('id', matricula_id)
+    .maybeSingle();
+  if (matErr) throw matErr;
+
   await supabase.from('sesiones_clases').delete().eq('matricula_id', matricula_id).eq('fecha', fecha);
-  const { error } = await supabase.from('sesiones_clases').insert({ matricula_id: Number(matricula_id), fecha, estado: 'cancelada' });
+  const { error } = await supabase.from('sesiones_clases').insert({
+    matricula_id: Number(matricula_id),
+    fecha,
+    estado: 'cancelada',
+    curso_id: mat?.curso_id ?? null,
+    tutor_id: mat?.tutor_id ?? null,
+  });
   if (error) throw error;
   if (motivo) await supabase.from('clases').update({ motivo_cancelacion: motivo, estado: 'cancelada' }).eq('matricula_id', matricula_id).eq('fecha', fecha);
   return { message: 'Clase cancelada para este día.', matricula_id, fecha };
