@@ -193,4 +193,8 @@ export const tesoreriaService = {
     const res = await httpClient.post('/tesoreria/cierres/ajustar', data);
     return (res.data?.data ?? res.data) as any;
   },
+  verificarPassword: async (password: string): Promise<any> => {
+    const res = await httpClient.post('/tesoreria/verificar-password', { password });
+    return (res.data?.data ?? res.data) as any;
+  },
 };

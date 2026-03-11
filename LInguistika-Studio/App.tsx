@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, BookOpen, GraduationCap, 
   ClipboardList, CreditCard, Menu, X, Languages, Phone, 
   Search, Bell, User,
-  Plus, Minus, RotateCcw
+  Plus, Minus, RotateCcw, Upload
 } from 'lucide-react';
 
 import Dashboard from './views/Dashboard';
@@ -16,6 +16,7 @@ import Matriculas from './views/Matriculas';
 import Tesoreria from './views/Tesoreria';
 import Login from './views/Login';
 import Empleados from './views/Empleados';
+import Importaciones from './views/Importaciones';
 import { auth } from './services/api';
 import { api } from './services/api';
 import { ActivityLogDrawer, ACTIVITY_LAST_SEEN_KEY } from './components/ActivityLogDrawer';
@@ -31,6 +32,7 @@ const TopNav: React.FC<{ canSeeTesoreria?: boolean }> = ({ canSeeTesoreria = tru
     { name: 'Matrículas', path: '/matriculas', icon: <ClipboardList className="w-4 h-4" /> },
     { name: 'Tesoreria', path: '/pagos', icon: <CreditCard className="w-4 h-4" />, requiresTesoreria: true },
     { name: 'Empleados', path: '/empleados', icon: <Users className="w-4 h-4" /> },
+    { name: 'Importaciones', path: '/importaciones', icon: <Upload className="w-4 h-4" /> },
   ].filter(item => !item.requiresTesoreria || canSeeTesoreria);
 
   return (
@@ -575,6 +577,7 @@ const App: React.FC = () => {
           <Route path="/matriculas" element={<Matriculas />} />
           <Route path="/pagos" element={<RequireTesoreria><Tesoreria /></RequireTesoreria>} />
           <Route path="/empleados" element={<Empleados />} />
+          <Route path="/importaciones" element={<Importaciones />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

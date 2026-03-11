@@ -15,6 +15,8 @@ import { pagosService } from './api/pagosService';
 import { tesoreriaService } from './api/tesoreriaService';
 import { dashboardService } from './api/dashboardService';
 import { horasTrabajoService } from './api/horasTrabajoService';
+import { horariosService } from './api/horariosService';
+import { finanzasService } from './api/finanzasService';
 
 /** Objeto auth para manejo de token (compatibilidad hacia atras). */
 export const auth = {
@@ -37,4 +39,6 @@ export const api = {
   tesoreria:    tesoreriaService,
   dashboard:    dashboardService,
   horasTrabajo: horasTrabajoService,
+  horarios:     horariosService,
+  finanzas:     finanzasService,
 };

@@ -13,3 +13,5 @@ export { matriculasService } from './matriculasService';
 export { pagosService } from './pagosService';
 export { tesoreriaService } from './tesoreriaService';
 export { tutoresService } from './tutoresService';
+export { horariosService } from './horariosService';
+export { finanzasService } from './finanzasService';
