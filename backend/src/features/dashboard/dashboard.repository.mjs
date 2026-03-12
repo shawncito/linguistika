@@ -321,16 +321,26 @@ export async function getMetricas({ mes, tutor_id }) {
   };
 }
 
+function buildSesionFields(fecha, curso) {
+  const date = new Date(`${fecha}T00:00:00`);
+  const diaSemana = diasSemanaES[date.getDay()] || 'Lunes';
+  const schedule = safeJsonParse(curso?.dias_schedule);
+  const sch = schedule?.[diaSemana];
+  const hi = sch?.hora_inicio || '00:00';
+  const hf = sch?.hora_fin || '01:00';
+  return { dia_semana: diaSemana, hora_inicio: hi, hora_fin: hf, duracion_horas: calcDuracionHoras(hi, hf) ?? 1 };
+}
+
 export async function completarSesion(matricula_id, fecha) {
-  // Fetch matricula to get curso_id and tutor_id (required by sesiones_clases)
   const { data: mat, error: matErr } = await supabase
     .from('matriculas')
-    .select('curso_id,tutor_id')
+    .select('curso_id,tutor_id,cursos(dias_schedule)')
     .eq('id', matricula_id)
     .maybeSingle();
   if (matErr) throw matErr;
   if (!mat) throw new Error('Matrícula no encontrada');
 
+  const sesionFields = buildSesionFields(fecha, mat.cursos);
   await supabase.from('sesiones_clases').delete().eq('matricula_id', matricula_id).eq('fecha', fecha);
   const { error } = await supabase.from('sesiones_clases').insert({
     matricula_id: Number(matricula_id),
@@ -338,23 +348,23 @@ export async function completarSesion(matricula_id, fecha) {
     estado: 'dada',
     curso_id: mat.curso_id,
     tutor_id: mat.tutor_id,
+    ...sesionFields,
   });
   if (error) throw error;
-  // Update clases record if exists
   await supabase.from('clases').update({ estado: 'completada' }).eq('matricula_id', matricula_id).eq('fecha', fecha);
   return { message: 'Clase marcada como dada.', matricula_id, fecha };
 }
 
 export async function cancelarSesionDia(matricula_id, fecha, motivo) {
-  // Fetch matricula to get curso_id and tutor_id (required by sesiones_clases)
   const { data: mat, error: matErr } = await supabase
     .from('matriculas')
-    .select('curso_id,tutor_id')
+    .select('curso_id,tutor_id,cursos(dias_schedule)')
     .eq('id', matricula_id)
     .maybeSingle();
   if (matErr) throw matErr;
   if (!mat) throw new Error('Matrícula no encontrada');
 
+  const sesionFields = buildSesionFields(fecha, mat.cursos);
   await supabase.from('sesiones_clases').delete().eq('matricula_id', matricula_id).eq('fecha', fecha);
   const { error } = await supabase.from('sesiones_clases').insert({
     matricula_id: Number(matricula_id),
@@ -362,6 +372,7 @@ export async function cancelarSesionDia(matricula_id, fecha, motivo) {
     estado: 'cancelada',
     curso_id: mat.curso_id,
     tutor_id: mat.tutor_id,
+    ...sesionFields,
   });
   if (error) throw error;
   if (motivo) await supabase.from('clases').update({ motivo_cancelacion: motivo, estado: 'cancelada' }).eq('matricula_id', matricula_id).eq('fecha', fecha);
