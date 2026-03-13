@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { usePersistentState } from '../lib/usePersistentState';
-import { supabaseClient } from '../lib/supabaseClient';
 import { useCursos } from '../hooks';
 import { bulkService } from '../services/api/bulkService';
 import { Curso, Tutor } from '../types';
@@ -12,6 +12,31 @@ import { Plus, Edit, Trash2, BookOpen, Users as UsersIcon, Clock, MoreVertical, 
 
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const NIVELES = ['None', 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+
+type DiaSchedule = Record<string, {
+  hora_inicio: string;
+  hora_fin: string;
+  duracion_horas?: number;
+}>;
+
+const DIA_CANON_BY_NORM: Record<string, string> = {
+  lunes: 'Lunes',
+  martes: 'Martes',
+  miercoles: 'Miércoles',
+  jueves: 'Jueves',
+  viernes: 'Viernes',
+  sabado: 'Sábado',
+  domingo: 'Domingo',
+};
+
+const parseJsonSafe = <T,>(value: unknown): T | null => {
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+};
 
 const timeToMinutes = (value?: string | null) => {
   if (!value) return null;
@@ -27,6 +52,91 @@ const normalizeDiaKey = (value?: string | null) => {
     .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '');
+};
+
+const toCanonicalDia = (value: unknown): string | null => {
+  const norm = normalizeDiaKey(typeof value === 'string' ? value : '');
+  return DIA_CANON_BY_NORM[norm] || null;
+};
+
+const normalizeDiasValue = (rawDias: unknown, fallbackSchedule?: DiaSchedule): string[] => {
+  let source: unknown = rawDias;
+  if (typeof source === 'string') {
+    const parsed = parseJsonSafe<unknown>(source);
+    source = parsed ?? source.split(',').map((x) => x.trim()).filter(Boolean);
+  }
+
+  const fromRaw = Array.isArray(source)
+    ? source
+        .map((d) => toCanonicalDia(d))
+        .filter((d): d is string => !!d)
+    : [];
+
+  if (fromRaw.length > 0) {
+    return Array.from(new Set(fromRaw));
+  }
+
+  if (fallbackSchedule && Object.keys(fallbackSchedule).length > 0) {
+    return Object.keys(fallbackSchedule);
+  }
+
+  return [];
+};
+
+const normalizeScheduleValue = (rawSchedule: unknown): DiaSchedule => {
+  let source: unknown = rawSchedule;
+  if (typeof source === 'string') {
+    const parsed = parseJsonSafe<unknown>(source);
+    source = parsed ?? null;
+  }
+
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+
+  const clean: DiaSchedule = {};
+  for (const [diaRaw, slot] of Object.entries(source as Record<string, any>)) {
+    const dia = toCanonicalDia(diaRaw);
+    if (!dia || !slot || typeof slot !== 'object') continue;
+
+    const horaInicio = typeof slot.hora_inicio === 'string' ? slot.hora_inicio.slice(0, 5) : '';
+    const horaFin = typeof slot.hora_fin === 'string' ? slot.hora_fin.slice(0, 5) : '';
+    if (!horaInicio || !horaFin) continue;
+
+    const dur = Number(slot.duracion_horas);
+    clean[dia] = {
+      hora_inicio: horaInicio,
+      hora_fin: horaFin,
+      ...(Number.isFinite(dur) ? { duracion_horas: dur } : {}),
+    };
+  }
+
+  return clean;
+};
+
+const normalizeTurnoValue = (rawTurno: unknown): Record<string, 'Tarde' | 'Noche'> => {
+  let source: unknown = rawTurno;
+  if (typeof source === 'string') {
+    const parsed = parseJsonSafe<unknown>(source);
+    source = parsed ?? null;
+  }
+
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+
+  const clean: Record<string, 'Tarde' | 'Noche'> = {};
+  for (const [diaRaw, turnoRaw] of Object.entries(source as Record<string, any>)) {
+    const dia = toCanonicalDia(diaRaw);
+    if (!dia) continue;
+    const turno = turnoRaw === 'Noche' ? 'Noche' : turnoRaw === 'Tarde' ? 'Tarde' : null;
+    if (turno) clean[dia] = turno;
+  }
+
+  return clean;
+};
+
+const normalizeCursoHorario = (curso: Partial<Curso>) => {
+  const diasSchedule = normalizeScheduleValue(curso.dias_schedule);
+  const dias = normalizeDiasValue(curso.dias, diasSchedule);
+  const diasTurno = normalizeTurnoValue(curso.dias_turno);
+  return { dias, diasSchedule, diasTurno };
 };
 
 const formatRange = (inicio?: string | null, fin?: string | null) =>
@@ -259,8 +369,8 @@ const Cursos: React.FC = () => {
 
   const tutorCompatMap = useMemo(() => {
     const map: Record<number, { compatible: boolean; detalles: string }> = {};
-    const diasCurso = formData.dias || [];
-    const scheduleCurso = formData.dias_schedule || {};
+    const scheduleCurso = normalizeScheduleValue(formData.dias_schedule);
+    const diasCurso = normalizeDiasValue(formData.dias, scheduleCurso);
 
       tutoresActivos.forEach((tutor) => {
         const diasHorarios = (tutor as any).dias_horarios || {};
@@ -335,30 +445,18 @@ const Cursos: React.FC = () => {
       .id;
   }, [tutoresActivos, tutorCompatMap]);
 
-  // Suscripción en tiempo real a cursos y tutores (para combos)
-  useEffect(() => {
-    if (!supabaseClient) return;
-    const channel = supabaseClient
-      .channel('realtime-cursos')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cursos' }, () => refresh())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tutores' }, () => refresh())
-      .subscribe();
-
-    return () => {
-      supabaseClient.removeChannel(channel);
-    };
-  }, []);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const newErrors: Record<string, string> = {};
+    const scheduleNormalizado = normalizeScheduleValue(formData.dias_schedule);
+    const diasNormalizados = normalizeDiasValue(formData.dias, scheduleNormalizado);
 
     if (!formData.nombre.trim()) newErrors.nombre = 'Nombre requerido';
-    if (formData.dias.length === 0) newErrors.dias = 'Selecciona al menos un día';
+    if (diasNormalizados.length === 0) newErrors.dias = 'Selecciona al menos un día';
     
     // Validar que todos los días tengan horas asignadas
-    for (const dia of formData.dias) {
-      if (!formData.dias_schedule[dia]?.hora_inicio || !formData.dias_schedule[dia]?.hora_fin) {
+    for (const dia of diasNormalizados) {
+      if (!scheduleNormalizado[dia]?.hora_inicio || !scheduleNormalizado[dia]?.hora_fin) {
         newErrors.dias = 'Todos los días deben tener horas de inicio y fin';
         break;
       }
@@ -404,8 +502,8 @@ const Cursos: React.FC = () => {
         tipo_clase: tipoClaseValue,
         tipo_pago: tipoPagoValue,
         max_estudiantes: tipoClaseValue === 'tutoria' ? null : formData.max_estudiantes,
-        dias: formData.dias,
-        dias_schedule: formData.dias_schedule,
+        dias: diasNormalizados,
+        dias_schedule: scheduleNormalizado,
         costo_curso: formData.costo_curso,
         pago_tutor: formData.pago_tutor,
         tutor_id: formData.tutor_id || null,
@@ -493,6 +591,7 @@ const Cursos: React.FC = () => {
   };
 
   const handleEdit = (curso: Curso) => {
+    const { dias, diasSchedule } = normalizeCursoHorario(curso);
     setEditingId(curso.id);
     setFormData({
       nombre: curso.nombre,
@@ -502,8 +601,8 @@ const Cursos: React.FC = () => {
       tipo_clase: curso.tipo_clase || 'grupal',
       tipo_pago: curso.tipo_pago || 'sesion',
       max_estudiantes: curso.max_estudiantes || 10,
-      dias: Array.isArray(curso.dias) ? curso.dias : [],
-      dias_schedule: curso.dias_schedule || {},
+      dias,
+      dias_schedule: diasSchedule,
       costo_curso: curso.costo_curso || 0,
       pago_tutor: curso.pago_tutor || 0,
       tutor_id: curso.tutor_id || 0,
@@ -571,7 +670,7 @@ const Cursos: React.FC = () => {
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">
-      <aside className="lg:w-[32%] space-y-4 sticky top-24 self-start">
+      <aside className="lg:w-[32%] space-y-4 sticky top-24 self-start page-sidebar-scroll">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -849,19 +948,57 @@ const Cursos: React.FC = () => {
               )}
             </div>
 
-            {selectedCurso.dias_schedule && Object.keys(selectedCurso.dias_schedule).length > 0 && (
-              <div>
-                <div className="text-xs font-bold text-slate-300 uppercase mb-2">Horario del curso</div>
-                <div className="space-y-2">
-                  {Object.entries(selectedCurso.dias_schedule).map(([dia, info]: any) => (
-                    <div key={dia} className="flex items-center justify-between p-2.5 rounded-lg bg-[#0F2445] border border-white/10">
-                      <span className="font-semibold text-white">{dia}</span>
-                      <span className="text-sm text-slate-200">{info.hora_inicio} - {info.hora_fin}</span>
+            {(() => {
+              const { dias, diasSchedule, diasTurno } = normalizeCursoHorario(selectedCurso);
+              if (Object.keys(diasSchedule).length > 0) {
+                return (
+                  <div>
+                    <div className="text-xs font-bold text-slate-300 uppercase mb-2">Horario del curso</div>
+                    <div className="space-y-2">
+                      {Object.entries(diasSchedule).map(([dia, info]) => (
+                        <div key={dia} className="flex items-center justify-between p-2.5 rounded-lg bg-[#0F2445] border border-white/10">
+                          <span className="font-semibold text-white">{dia}</span>
+                          <span className="text-sm text-slate-200">{info.hora_inicio} - {info.hora_fin}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
+                  </div>
+                );
+              }
+
+              if (Object.keys(diasTurno).length > 0) {
+                return (
+                  <div>
+                    <div className="text-xs font-bold text-slate-300 uppercase mb-2">Horario del curso</div>
+                    <div className="space-y-2">
+                      {Object.entries(diasTurno).map(([dia, turno]) => (
+                        <div key={dia} className="flex items-center justify-between p-2.5 rounded-lg bg-[#0F2445] border border-white/10">
+                          <span className="font-semibold text-white">{dia}</span>
+                          <span className="text-sm text-slate-200">{turno}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (dias.length > 0) {
+                return (
+                  <div>
+                    <div className="text-xs font-bold text-slate-300 uppercase mb-2">Días del curso</div>
+                    <div className="flex flex-wrap gap-2">
+                      {dias.map((dia) => (
+                        <span key={dia} className="text-xs bg-cyan-500/10 text-cyan-100 border border-cyan-400/30 font-semibold px-2 py-1 rounded">
+                          {dia}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+
+              return null;
+            })()}
 
             {selectedCurso.grado_activo && selectedCurso.grado_nombre && (
               <div className="p-3 rounded-lg border border-indigo-400/30 bg-indigo-500/10">
@@ -874,7 +1011,7 @@ const Cursos: React.FC = () => {
       </Dialog>
 
       {/* Modal de Formulario */}
-      {showModal && (
+      {showModal && typeof document !== 'undefined' && createPortal((
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <Card className="w-full max-w-7xl min-h-[86vh] max-h-[96vh] overflow-y-auto">
             <CardHeader className="border-b border-slate-200 flex justify-between items-start">
@@ -994,17 +1131,20 @@ const Cursos: React.FC = () => {
                         onChange={(e) => {
                           const checked = e.target.checked;
                           if (checked) {
-                            setFormData(prev => ({ 
-                              ...prev, 
-                              dias: [...prev.dias, dia],
-                              dias_schedule: {
-                                ...prev.dias_schedule,
-                                [dia]: { hora_inicio: '09:00', hora_fin: '11:00', duracion_horas: 2 }
-                              }
-                            }));
+                            setFormData(prev => {
+                              const prevSchedule = normalizeScheduleValue(prev.dias_schedule);
+                              return {
+                                ...prev,
+                                dias: [...prev.dias, dia],
+                                dias_schedule: {
+                                  ...prevSchedule,
+                                  [dia]: { hora_inicio: '09:00', hora_fin: '11:00', duracion_horas: 2 }
+                                }
+                              };
+                            });
                           } else {
                             setFormData(prev => {
-                              const newSchedule = { ...prev.dias_schedule };
+                              const newSchedule = { ...normalizeScheduleValue(prev.dias_schedule) };
                               delete newSchedule[dia];
                               return {
                                 ...prev,
@@ -1053,9 +1193,9 @@ const Cursos: React.FC = () => {
                                 setFormData(prev => ({
                                   ...prev,
                                   dias_schedule: {
-                                    ...prev.dias_schedule,
+                                    ...normalizeScheduleValue(prev.dias_schedule),
                                     [dia]: {
-                                      ...prev.dias_schedule[dia],
+                                      ...normalizeScheduleValue(prev.dias_schedule)[dia],
                                       hora_inicio: horaInicio,
                                       duracion_horas: duracion
                                     }
@@ -1077,9 +1217,9 @@ const Cursos: React.FC = () => {
                                 setFormData(prev => ({
                                   ...prev,
                                   dias_schedule: {
-                                    ...prev.dias_schedule,
+                                    ...normalizeScheduleValue(prev.dias_schedule),
                                     [dia]: {
-                                      ...prev.dias_schedule[dia],
+                                      ...normalizeScheduleValue(prev.dias_schedule)[dia],
                                       hora_fin: horaFin,
                                       duracion_horas: duracion
                                     }
@@ -1389,7 +1529,7 @@ const Cursos: React.FC = () => {
             </form>
           </Card>
         </div>
-      )}
+      ), document.body)}
 
       {viewMode === 'tarjetas' ? (
         <>
@@ -1397,8 +1537,8 @@ const Cursos: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
         {cursosFiltrados.map((curso) => (
           <Card 
-            key={curso.id} 
-            className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30 flex flex-col h-full min-h-[560px]"
+            key={curso.id}
+            className="group relative overflow-hidden border-white/10 hover:border-[#00AEEF]/30 transition-all duration-300 hover:-translate-y-1 flex flex-col h-full"
           >
             <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-[#FFC800] to-[#00AEEF] opacity-60" />
             
@@ -1409,7 +1549,7 @@ const Cursos: React.FC = () => {
                     <BookOpen className="w-6 h-6" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <CardTitle className="text-lg text-white truncate">{curso.nombre}</CardTitle>
+                    <CardTitle className="text-lg text-white whitespace-normal break-words leading-tight">{curso.nombre}</CardTitle>
                     <div className="flex gap-2 mt-2 flex-wrap">
                       <Badge variant="secondary" className="font-bold">{curso.nivel || 'None'}</Badge>
                       <Badge className={`${curso.tipo_clase === 'tutoria' ? 'bg-purple-500/15 text-purple-200 border border-purple-400/40' : 'bg-emerald-500/15 text-emerald-200 border border-emerald-400/40'} font-bold`}>
@@ -1427,7 +1567,7 @@ const Cursos: React.FC = () => {
                       )}
                       {curso.grado_activo && curso.grado_nombre && (
                         <span
-                          className="text-[11px] font-bold px-3 py-1 rounded-full border truncate max-w-[100px]"
+                          className="text-[11px] font-bold px-3 py-1 rounded-full border whitespace-normal break-words"
                           style={{
                             backgroundColor: (curso.grado_color || '#00AEEF') + '22',
                             color: curso.grado_color || '#FFC800',
@@ -1495,11 +1635,22 @@ const Cursos: React.FC = () => {
                 <div className="flex items-center gap-2 text-slate-300 min-w-0">
                   <Clock className="w-4 h-4 text-cyan-300 flex-shrink-0" />
                   <span className="text-sm font-semibold truncate">
-                    {curso.dias_schedule && typeof curso.dias_schedule === 'object' && Object.keys(curso.dias_schedule).length > 0
-                      ? Object.entries(curso.dias_schedule).slice(0,2).map(([dia, schedule]: [string, any]) => 
-                          `${dia.slice(0,3)} ${schedule.hora_inicio}-${schedule.hora_fin}`
-                        ).join(', ') + (Object.keys(curso.dias_schedule).length > 2 ? '...' : '')
-                      : 'Sin horario'}
+                    {(() => {
+                      const { dias, diasSchedule, diasTurno } = normalizeCursoHorario(curso);
+                      if (Object.keys(diasSchedule).length > 0) {
+                        return Object.entries(diasSchedule)
+                          .slice(0, 2)
+                          .map(([dia, sc]) => `${dia.slice(0, 3)} ${sc.hora_inicio ?? '—'}-${sc.hora_fin ?? '—'}`)
+                          .join(', ') + (Object.keys(diasSchedule).length > 2 ? '…' : '');
+                      }
+                      if (Object.keys(diasTurno).length > 0) {
+                        return Object.entries(diasTurno)
+                          .slice(0, 2)
+                          .map(([dia, t]) => `${dia.slice(0, 3)} ${t}`)
+                          .join(', ');
+                      }
+                      return dias.length > 0 ? dias.slice(0, 3).map((d) => d.slice(0, 3)).join(', ') : 'Sin horario';
+                    })()}
                   </span>
                 </div>
               </div>
@@ -1532,18 +1683,22 @@ const Cursos: React.FC = () => {
                 </div>
               </div>
 
-              {Array.isArray(curso.dias) && curso.dias.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {curso.dias.map((dia) => {
-                    const schedule = curso.dias_schedule?.[dia];
-                    return (
-                      <span key={dia} className="text-xs bg-cyan-500/10 text-cyan-100 border border-cyan-400/30 font-semibold px-2 py-1 rounded">
-                        {dia.slice(0, 3)}: {schedule?.hora_inicio || '?'}-{schedule?.hora_fin || '?'}
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
+              {(() => {
+                const { dias, diasSchedule } = normalizeCursoHorario(curso);
+                if (dias.length === 0) return null;
+                return (
+                  <div className="flex flex-wrap gap-1">
+                    {dias.map((dia) => {
+                      const schedule = diasSchedule[dia];
+                      return (
+                        <span key={dia} className="text-xs bg-cyan-500/10 text-cyan-100 border border-cyan-400/30 font-semibold px-2 py-1 rounded">
+                          {dia.slice(0, 3)}: {schedule?.hora_inicio || '?'}-{schedule?.hora_fin || '?'}
+                        </span>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
 
               <div className="mt-auto">
                 <Button

@@ -47,12 +47,20 @@ export async function create(payload) {
   const row = {
     nombre: payload.nombre,
     descripcion: payload.descripcion || null,
+    metodo: payload.metodo || null,
     nivel: payload.nivel || null,
+    tipo_clase: payload.tipo_clase || 'grupal',
+    tipo_pago: payload.tipo_pago || 'sesion',
     tutor_id: payload.tutor_id,
-    dias_horario: payload.dias_horario,
-    hora_inicio: payload.hora_inicio,
-    hora_fin: payload.hora_fin,
-    capacidad_maxima: payload.capacidad_maxima || null,
+    dias: payload.dias || null,
+    dias_schedule: payload.dias_schedule || null,
+    dias_turno: payload.dias_turno || null,
+    max_estudiantes: payload.max_estudiantes ?? payload.capacidad_maxima ?? null,
+    costo_curso: payload.costo_curso ?? null,
+    pago_tutor: payload.pago_tutor ?? null,
+    grado_activo: payload.grado_activo ?? false,
+    grado_nombre: payload.grado_nombre || null,
+    grado_color: payload.grado_color || null,
     activo_para_matricula: payload.activo_para_matricula !== false,
     estado: true,
     created_by: payload.userId,
@@ -65,9 +73,24 @@ export async function create(payload) {
 
 export async function update(id, payload) {
   const updateData = { updated_by: payload.userId };
-  const fields = ['nombre', 'descripcion', 'nivel', 'tutor_id', 'dias_horario', 'hora_inicio', 'hora_fin', 'capacidad_maxima', 'activo_para_matricula'];
+  const fields = [
+    'nombre', 'descripcion', 'metodo', 'nivel',
+    'tipo_clase', 'tipo_pago',
+    'tutor_id',
+    'dias', 'dias_schedule', 'dias_turno',
+    'max_estudiantes',
+    'costo_curso', 'pago_tutor',
+    'grado_activo', 'grado_nombre', 'grado_color',
+    'activo_para_matricula',
+    // legacy fields kept for backward compat
+    'dias_horario', 'hora_inicio', 'hora_fin',
+  ];
   for (const f of fields) {
     if (payload[f] !== undefined) updateData[f] = payload[f];
+  }
+  // capacidad_maxima alias -> max_estudiantes
+  if (payload.capacidad_maxima !== undefined && payload.max_estudiantes === undefined) {
+    updateData.max_estudiantes = payload.capacidad_maxima;
   }
   if (payload.estado !== undefined) updateData.estado = payload.estado === 1 || payload.estado === true;
 

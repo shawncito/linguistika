@@ -1,5 +1,6 @@
 // Dashboard con calendario interactivo mejorado
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { authService } from '../services/api/authService';
 import { dashboardService } from '../services/api/dashboardService';
 import { matriculasService } from '../services/api/matriculasService';
 import { tutoresService } from '../services/api/tutoresService';
@@ -8,13 +9,16 @@ import { useRealtimeSubscription } from '../hooks/useRealtimeSubscription';
 import { Matricula, Curso, Tutor, Estudiante, ResumenTutorEstudiantes, ResumenCursoGrupos } from '../types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Input, Button, Dialog } from '../components/UI';
 import { formatCRC } from '../lib/format';
-import { 
-  Users, BookOpen, GraduationCap, 
+import {
+  Users, BookOpen, GraduationCap,
   ClipboardList, Clock, CreditCard,
   User as UserIcon, Calendar as CalendarIcon,
-  TrendingUp, Award, ChevronRight, Activity, Star,
-  Plus, Minus, AlertTriangle
+  TrendingUp, Award, ChevronRight, ChevronLeft, Activity, Star,
+  Plus, Minus, AlertTriangle, Download
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { saveAs } from 'file-saver';
+import jsPDF from 'jspdf';
 
 interface Stats {
   tutores_activos: number;
@@ -42,6 +46,7 @@ interface SesionDelDia {
   confirmado?: boolean;
   fecha?: string;
   estado_sesion?: 'dada' | 'cancelada' | null;
+  fecha_inscripcion?: string | null;
 }
 
 interface MetricasFinancieras {
@@ -62,6 +67,33 @@ interface MetricasFinancieras {
   real?: { ingresos: number; pagos_tutores: number; neto: number; movimientos: number };
   diferencial?: { ingresos: number; pagos_tutores: number; neto: number };
   fuente?: string;
+}
+
+interface TutorNota {
+  id: number;
+  tutor_id: number;
+  mensaje: string;
+  estado: 'pendiente' | 'hecha' | 'eliminada';
+  creado_por_nombre?: string | null;
+  actualizado_por_nombre?: string | null;
+  eliminado_por_nombre?: string | null;
+  hecha_en?: string | null;
+  eliminada_en?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface TutorNotaHistorial {
+  id: number;
+  nota_id: number;
+  tutor_id: number;
+  accion: 'crear' | 'editar' | 'marcar_hecha' | 'reabrir' | 'eliminar';
+  mensaje?: string | null;
+  estado?: string | null;
+  actor_name?: string | null;
+  actor_role?: string | null;
+  created_at?: string;
+  meta?: Record<string, any>;
 }
 
 const Dashboard: React.FC = () => {
@@ -86,8 +118,19 @@ const Dashboard: React.FC = () => {
   const [dayDetailQuery, setDayDetailQuery] = useState('');
   const [detalleMatricula, setDetalleMatricula] = useState<any | null>(null);
   const [tutorSeleccionado, setTutorSeleccionado] = useState<{ id: number; nombre: string } | null>(null);
+  const [tutorTab, setTutorTab] = useState<'alumnos' | 'clases'>('alumnos');
+  const [tutorMes, setTutorMes] = useState<string>(crToday.slice(0, 7));
   const [alumnosTutor, setAlumnosTutor] = useState<{ id: number; nombre: string }[]>([]);
   const [tutorMatriculas, setTutorMatriculas] = useState<Matricula[]>([]);
+  const [tutorNotas, setTutorNotas] = useState<TutorNota[]>([]);
+  const [tutorNotasHistorial, setTutorNotasHistorial] = useState<TutorNotaHistorial[]>([]);
+  const [tutorNotasLoading, setTutorNotasLoading] = useState(false);
+  const [tutorNotaDraft, setTutorNotaDraft] = useState('');
+  const [tutorNotaSaving, setTutorNotaSaving] = useState(false);
+  const [tutorNotaBusy, setTutorNotaBusy] = useState<Record<number, boolean>>({});
+  const [tutorNotaEditId, setTutorNotaEditId] = useState<number | null>(null);
+  const [tutorNotaEditText, setTutorNotaEditText] = useState('');
+  const [tutorHistorialOpen, setTutorHistorialOpen] = useState(false);
   const [programacionSesion, setProgramacionSesion] = useState<{ sesion: SesionDelDia; modo: 'info' | 'programar' } | null>(null);
   const [mensajeWA, setMensajeWA] = useState('');
   const [completandoKeys, setCompletandoKeys] = useState<Record<string, boolean>>({});
@@ -101,6 +144,13 @@ const Dashboard: React.FC = () => {
   const [pendientesExpanded, setPendientesExpanded] = useState(false);
 
   const [metricMes, setMetricMes] = useState<string>(crToday.slice(0, 7));
+  const [calMes, setCalMes] = useState<string>(crToday.slice(0, 7));
+  const autoCompletedRef = useRef<Set<string>>(new Set());
+  const selectedDateRef = useRef<string>(crToday);
+  const sessionOverridesRef = useRef<Record<string, Partial<SesionDelDia>>>({});
+  const generatedByNameRef = useRef<string>('');
+  const pdfLogoDataUrlRef = useRef<string>('');
+  useEffect(() => { selectedDateRef.current = selectedDate; }, [selectedDate]);
   const [metricas, setMetricas] = useState<MetricasFinancieras | null>(null);
   const [metricasDenied, setMetricasDenied] = useState(false);
   const [chartModo, setChartModo] = useState<'real' | 'esperado'>(() => {
@@ -141,28 +191,36 @@ const Dashboard: React.FC = () => {
   }, [calendarDensity]);
 
   useEffect(() => {
-    const id = window.setInterval(() => setUiTick5s((v) => v + 1), 5000);
+    const id = window.setInterval(() => setUiTick5s((value) => value + 1), 5000);
     return () => window.clearInterval(id);
   }, []);
 
   const totalSesionesMes = useMemo(() => {
-    return Object.values(sesionesDelMes || {}).reduce((sum, list) => sum + (list?.length || 0), 0);
-  }, [sesionesDelMes]);
+    return Object.entries(sesionesDelMes || {}).reduce((sum, [dateStr, list]) => {
+      if (!dateStr.startsWith(`${calMes}-`)) return sum;
+      return sum + (list?.length || 0);
+    }, 0);
+  }, [calMes, sesionesDelMes]);
 
   // Sesiones de días pasados que NO fueron marcadas como dada ni cancelada
+  // Solo incluir sesiones que tienen horario definido (pueden marcarse como dada)
   const sesionesPendientes = useMemo(() => {
     const result: (SesionDelDia & { _fecha: string })[] = [];
     for (const [dateStr, sesiones] of Object.entries(sesionesDelMes || {})) {
+      if (!dateStr.startsWith(`${calMes}-`)) continue;
       if (dateStr >= hoy) continue; // solo días pasados (antes de hoy)
       for (const s of sesiones) {
-        if (!s.estado_sesion) {
+        // Solo mostrar if: (1) sin estado, (2) tiene horario válido (no "—")
+        if (!s.estado_sesion && s.hora_inicio && s.hora_inicio !== '—' && s.hora_fin && s.hora_fin !== '—') {
+          const inscripcion = String(s.fecha_inscripcion || '').slice(0, 10);
+          if (inscripcion && dateStr < inscripcion) continue;
           result.push({ ...s, _fecha: dateStr, fecha: dateStr });
         }
       }
     }
-    // Ordenar por fecha descendente (más reciente primero)
+    // Ordenar por fecha DESC (más reciente primero), luego por hora
     return result.sort((a, b) => b._fecha.localeCompare(a._fecha) || String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
-  }, [sesionesDelMes, hoy]);
+  }, [calMes, sesionesDelMes, hoy]);
 
   const getSesionKey = useCallback((s: SesionDelDia) => {
     return `${s.matricula_id}:${s.hora_inicio}:${s.hora_fin}:${s.curso_nombre}`;
@@ -186,6 +244,414 @@ const Dashboard: React.FC = () => {
     return d.toLocaleTimeString('es-CR', { hour: 'numeric', minute: '2-digit', hour12: true });
   };
 
+  const getSessionStateKey = useCallback((fecha: string, matriculaId: number) => {
+    return `${String(fecha || '').slice(0, 10)}|${Number(matriculaId)}`;
+  }, []);
+
+  const filterVisibleSesionesForDate = useCallback((dateStr: string, sesiones: SesionDelDia[]) => {
+    if (dateStr < hoy) {
+      return sesiones.filter((session) => session.estado_sesion === 'dada' || session.estado_sesion === 'cancelada');
+    }
+    return sesiones;
+  }, [hoy]);
+
+  const getVisibleSesionesForDate = useCallback(
+    (dateStr: string, source: Record<string, SesionDelDia[]> = sesionesDelMes) => {
+      return filterVisibleSesionesForDate(dateStr, source[dateStr] || []);
+    },
+    [filterVisibleSesionesForDate, sesionesDelMes]
+  );
+
+  const filterOpenSesionesHoy = useCallback((sesiones: SesionDelDia[]) => {
+    return sesiones.filter((session) => session.estado_sesion !== 'dada' && session.estado_sesion !== 'cancelada');
+  }, []);
+
+  const getSesionesHoyList = useCallback((source: Record<string, SesionDelDia[]>) => {
+    return filterOpenSesionesHoy(source[hoy] || []);
+  }, [filterOpenSesionesHoy, hoy]);
+
+  const applySessionLocalPatch = useCallback((sesion: SesionDelDia, fechaRaw: string, patch: Partial<SesionDelDia>) => {
+    const fecha = String(fechaRaw || sesion.fecha || hoy).slice(0, 10);
+    const stateKey = getSessionStateKey(fecha, sesion.matricula_id);
+    sessionOverridesRef.current[stateKey] = {
+      ...(sessionOverridesRef.current[stateKey] || {}),
+      ...patch,
+      fecha,
+    };
+
+    const patchSession = (item: SesionDelDia) => {
+      const itemFecha = String(item.fecha || fecha).slice(0, 10);
+      if (item.matricula_id !== sesion.matricula_id || itemFecha !== fecha) return item;
+      return { ...item, ...patch, fecha };
+    };
+
+    setProgramacionSesion((prev) => {
+      if (!prev) return prev;
+      const prevFecha = String(prev.sesion.fecha || fecha).slice(0, 10);
+      if (prev.sesion.matricula_id !== sesion.matricula_id || prevFecha !== fecha) return prev;
+      return {
+        ...prev,
+        sesion: {
+          ...prev.sesion,
+          ...patch,
+          fecha,
+        },
+      };
+    });
+
+    setSesionesDelDia((prev) => prev.map(patchSession));
+    setSesionesHoy((prev) => filterOpenSesionesHoy(prev.map(patchSession)));
+    setSesionesDelMes((prev) => {
+      const next = { ...prev };
+      const list = next[fecha];
+      if (Array.isArray(list)) {
+        next[fecha] = list.map(patchSession);
+      }
+      return next;
+    });
+  }, [filterOpenSesionesHoy, getSessionStateKey, hoy]);
+
+  const resolveGeneratedByName = useCallback(async () => {
+    if (generatedByNameRef.current) return generatedByNameRef.current;
+    try {
+      const me = (await authService.me())?.user;
+      const name = String(me?.nombre_completo || me?.username || me?.email || '').trim() || 'Sistema';
+      generatedByNameRef.current = name;
+      return name;
+    } catch {
+      return generatedByNameRef.current || 'Sistema';
+    }
+  }, []);
+
+  const resolvePdfLogoDataUrl = useCallback(async () => {
+    if (pdfLogoDataUrlRef.current) return pdfLogoDataUrlRef.current;
+    if (typeof window === 'undefined') return '';
+
+    const dataUrl = await new Promise<string>((resolve) => {
+      const img = new Image();
+      img.decoding = 'async';
+      img.onload = () => {
+        try {
+          const width = img.naturalWidth || img.width || 64;
+          const height = img.naturalHeight || img.height || 64;
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve('');
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/png'));
+        } catch {
+          resolve('');
+        }
+      };
+      img.onerror = () => resolve('');
+      img.src = new URL('favicon.png', window.location.href).toString();
+    });
+
+    if (dataUrl) pdfLogoDataUrlRef.current = dataUrl;
+    return dataUrl;
+  }, []);
+
+  const getMatriculasSnapshot = useCallback(async () => {
+    if (Array.isArray(matriculasLista) && matriculasLista.length > 0) return matriculasLista;
+    const all = await matriculasService.getAll();
+    setMatriculasLista(all as any[]);
+    return all;
+  }, [matriculasLista]);
+
+  const getErrorMessage = (error: any, fallback: string) => {
+    return error?.response?.data?.error || error?.message || fallback;
+  };
+
+  const formatNotaDate = (value?: string | null) => {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString('es-CR', { dateStyle: 'short', timeStyle: 'short' });
+  };
+
+  const getNotaAccionLabel = (accion?: string | null) => {
+    switch (String(accion || '').toLowerCase()) {
+      case 'crear':
+        return 'Creó nota';
+      case 'editar':
+        return 'Editó nota';
+      case 'marcar_hecha':
+        return 'Marcó como hecha';
+      case 'reabrir':
+        return 'Reabrió nota';
+      case 'eliminar':
+        return 'Eliminó nota';
+      default:
+        return 'Actualizó nota';
+    }
+  };
+
+  const cargarTutorNotas = useCallback(async (tutorId: number, options: { silent?: boolean } = {}) => {
+    if (!tutorId) return;
+    if (!options.silent) setTutorNotasLoading(true);
+    try {
+      const result = await dashboardService.getTutorNotas(tutorId, { history_limit: 180 });
+      const notas = [...(result?.notas || [])]
+        .filter((n: any) => n && n.estado !== 'eliminada')
+        .sort((a: any, b: any) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+      const historial = [...(result?.historial || [])]
+        .sort((a: any, b: any) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      setTutorNotas(notas);
+      setTutorNotasHistorial(historial);
+    } catch (error) {
+      if (!options.silent) {
+        setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo cargar las notas internas del equipo') });
+      }
+    } finally {
+      if (!options.silent) setTutorNotasLoading(false);
+    }
+  }, []);
+
+  const crearTutorNota = useCallback(async () => {
+    const tutorId = tutorSeleccionado?.id;
+    const mensaje = tutorNotaDraft.trim();
+    if (!tutorId || !mensaje || tutorNotaSaving) return;
+
+    setTutorNotaSaving(true);
+    try {
+      await dashboardService.createTutorNota(tutorId, { mensaje });
+      setTutorNotaDraft('');
+      await cargarTutorNotas(tutorId, { silent: true });
+      setUiNotice({ type: 'success', message: 'Nota guardada y compartida con el equipo.' });
+    } catch (error) {
+      setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo crear la nota') });
+    } finally {
+      setTutorNotaSaving(false);
+    }
+  }, [cargarTutorNotas, tutorNotaDraft, tutorNotaSaving, tutorSeleccionado?.id]);
+
+  const guardarEdicionTutorNota = useCallback(async (notaId: number) => {
+    const tutorId = tutorSeleccionado?.id;
+    const mensaje = tutorNotaEditText.trim();
+    if (!tutorId || !notaId || !mensaje) return;
+
+    setTutorNotaBusy((prev) => ({ ...prev, [notaId]: true }));
+    try {
+      await dashboardService.updateTutorNota(tutorId, notaId, { mensaje });
+      setTutorNotaEditId(null);
+      setTutorNotaEditText('');
+      await cargarTutorNotas(tutorId, { silent: true });
+      setUiNotice({ type: 'success', message: 'Nota actualizada.' });
+    } catch (error) {
+      setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo editar la nota') });
+    } finally {
+      setTutorNotaBusy((prev) => {
+        const next = { ...prev };
+        delete next[notaId];
+        return next;
+      });
+    }
+  }, [cargarTutorNotas, tutorNotaEditText, tutorSeleccionado?.id]);
+
+  const cambiarEstadoTutorNota = useCallback(async (nota: TutorNota) => {
+    const tutorId = tutorSeleccionado?.id;
+    if (!tutorId || !nota?.id) return;
+    const nextState = nota.estado === 'hecha' ? 'pendiente' : 'hecha';
+
+    setTutorNotaBusy((prev) => ({ ...prev, [nota.id]: true }));
+    try {
+      await dashboardService.setTutorNotaEstado(tutorId, nota.id, { estado: nextState });
+      await cargarTutorNotas(tutorId, { silent: true });
+    } catch (error) {
+      setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo cambiar el estado de la nota') });
+    } finally {
+      setTutorNotaBusy((prev) => {
+        const next = { ...prev };
+        delete next[nota.id];
+        return next;
+      });
+    }
+  }, [cargarTutorNotas, tutorSeleccionado?.id]);
+
+  const eliminarTutorNota = useCallback(async (nota: TutorNota) => {
+    const tutorId = tutorSeleccionado?.id;
+    if (!tutorId || !nota?.id) return;
+    if (!window.confirm('¿Eliminar esta nota? Quedará registrada en el historial.')) return;
+
+    setTutorNotaBusy((prev) => ({ ...prev, [nota.id]: true }));
+    try {
+      await dashboardService.deleteTutorNota(tutorId, nota.id);
+      if (tutorNotaEditId === nota.id) {
+        setTutorNotaEditId(null);
+        setTutorNotaEditText('');
+      }
+      await cargarTutorNotas(tutorId, { silent: true });
+      setUiNotice({ type: 'success', message: 'Nota eliminada.' });
+    } catch (error) {
+      setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo eliminar la nota') });
+    } finally {
+      setTutorNotaBusy((prev) => {
+        const next = { ...prev };
+        delete next[nota.id];
+        return next;
+      });
+    }
+  }, [cargarTutorNotas, tutorNotaEditId, tutorSeleccionado?.id]);
+
+  const exportCalendarPdf = useCallback(async () => {
+    const [year, monthNum] = calMes.split('-').map(Number);
+    const month = monthNum - 1;
+    const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const firstDay = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const startDay = firstDay.getDay();
+
+    const days: (number | null)[] = [];
+    for (let index = 0; index < startDay; index++) days.push(null);
+    for (let day = 1; day <= daysInMonth; day++) days.push(day);
+    while (days.length % 7 !== 0) days.push(null);
+
+    const sessionsByDate: Record<string, { timeRange: string; participants: string[] }[]> = {};
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${year}-${String(monthNum).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const sessions = (sesionesDelMes[dateStr] || [])
+        .filter((session) => session.estado_sesion !== 'cancelada')
+        .sort((a, b) => String(a.hora_inicio || '').localeCompare(String(b.hora_inicio || '')))
+        .map((session) => {
+          const matricula = (matriculasLista || []).find((item: any) => item?.id === session.matricula_id);
+          const isGrupo = Boolean(matricula?.es_grupo) || Boolean(matricula?.grupo_nombre);
+          const ids = Array.isArray(matricula?.estudiante_ids) ? matricula.estudiante_ids : [];
+          const nombres = ids
+            .map((id: number) => String(estudiantesMapa[id]?.nombre || '').trim())
+            .filter(Boolean);
+          const fallback = String(session.estudiante_nombre || matricula?.grupo_nombre || '—')
+            .replace(/^Grupo:\s*/i, '')
+            .replace(/\s*\(\d+\)\s*$/, '')
+            .trim() || '—';
+
+          return {
+            timeRange: `${String(session.hora_inicio || '').slice(0, 5) || '—'} - ${String(session.hora_fin || '').slice(0, 5) || '—'}`,
+            participants: isGrupo ? (nombres.length > 0 ? nombres : [fallback]) : [fallback],
+          };
+        });
+      sessionsByDate[dateStr] = sessions;
+    }
+
+    const totalSessions = Object.values(sessionsByDate).reduce((sum, list) => sum + list.length, 0);
+    if (totalSessions === 0) {
+      setUiNotice({ type: 'info', message: 'No hay clases para exportar en este mes.' });
+      return;
+    }
+
+    const [generatedBy, logoDataUrl] = await Promise.all([
+      resolveGeneratedByName(),
+      resolvePdfLogoDataUrl(),
+    ]);
+
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const marginX = 24;
+    const marginBottom = 24;
+    const titleY = 30;
+    const subY = 47;
+    const metaY = 61;
+    const gridStartY = 84;
+    const headerHeight = 24;
+    const gridWidth = pageWidth - marginX * 2;
+    const weeks = Array.from({ length: days.length / 7 }, (_, index) => days.slice(index * 7, index * 7 + 7));
+    const cellWidth = gridWidth / 7;
+    const gridHeight = pageHeight - gridStartY - marginBottom;
+    const cellHeight = (gridHeight - headerHeight) / weeks.length;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(15, 44, 90);
+    doc.text(`Calendario de Clases - ${monthNames[month]} ${year}`, marginX, titleY);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(71, 85, 105);
+    doc.text('Cada cuadro muestra el horario y el nombre completo del estudiante o integrantes del grupo.', marginX, subY);
+    doc.text(`Generado por: ${generatedBy}`, marginX, metaY);
+    doc.text(`Generado: ${new Date().toLocaleString('es-CR')}`, pageWidth - marginX, metaY, { align: 'right' });
+
+    if (logoDataUrl) {
+      try {
+        const logoSize = 26;
+        const logoX = pageWidth - marginX - logoSize;
+        const logoY = 16;
+        doc.addImage(logoDataUrl, 'PNG', logoX, logoY, logoSize, logoSize, undefined, 'FAST');
+      } catch {
+        // Si falla la carga del logo, el PDF sigue generándose sin bloquear al usuario.
+      }
+    }
+
+    for (let col = 0; col < 7; col++) {
+      const x = marginX + col * cellWidth;
+      doc.setFillColor(15, 44, 90);
+      doc.setDrawColor(203, 213, 225);
+      doc.rect(x, gridStartY, cellWidth, headerHeight, 'FD');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(255, 255, 255);
+      doc.text(dayNames[col], x + cellWidth / 2, gridStartY + 16, { align: 'center' });
+    }
+
+    weeks.forEach((week, weekIndex) => {
+      week.forEach((day, colIndex) => {
+        const x = marginX + colIndex * cellWidth;
+        const y = gridStartY + headerHeight + weekIndex * cellHeight;
+        const isToday = day != null && `${year}-${String(monthNum).padStart(2, '0')}-${String(day).padStart(2, '0')}` === hoy;
+        const fill = day == null ? [248, 250, 252] : isToday ? [224, 242, 254] : [255, 255, 255];
+        doc.setFillColor(fill[0], fill[1], fill[2]);
+        doc.setDrawColor(203, 213, 225);
+        doc.rect(x, y, cellWidth, cellHeight, 'FD');
+
+        if (day == null) return;
+
+        const dateStr = `${year}-${String(monthNum).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const entries = sessionsByDate[dateStr] || [];
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.setTextColor(15, 23, 42);
+        doc.text(String(day), x + 6, y + 12);
+
+        const contentWidth = cellWidth - 10;
+        const topPadding = 22;
+        const lineHeight = 7.4;
+        const blockGap = 3;
+        const maxY = y + cellHeight - 5;
+        let cursorY = y + topPadding;
+
+        for (const entry of entries) {
+          const wrappedParticipantLines = entry.participants.flatMap((participant) => doc.splitTextToSize(participant, contentWidth) as string[]);
+          const neededHeight = ((1 + wrappedParticipantLines.length) * lineHeight) + blockGap;
+          if (cursorY + neededHeight > maxY) break;
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(6.8);
+          doc.setTextColor(15, 44, 90);
+          doc.text(entry.timeRange, x + 5, cursorY);
+          cursorY += lineHeight;
+
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(6.4);
+          doc.setTextColor(30, 41, 59);
+          wrappedParticipantLines.forEach((line) => {
+            doc.text(line, x + 5, cursorY);
+            cursorY += lineHeight;
+          });
+
+          cursorY += blockGap;
+        }
+      });
+    });
+
+    doc.save(`Calendario_${calMes}.pdf`);
+    setUiNotice({ type: 'success', message: `PDF exportado: Calendario_${calMes}.pdf` });
+  }, [calMes, estudiantesMapa, matriculasLista, resolveGeneratedByName, resolvePdfLogoDataUrl, sesionesDelMes]);
+
   const getCursoStudentCountForSession = (sesion: SesionDelDia): number | null => {
     const m = (matriculasLista || []).find((x: any) => x?.id === sesion.matricula_id);
     if (m) {
@@ -207,6 +673,10 @@ const Dashboard: React.FC = () => {
       return String(m?.estudiante_nombre || '').trim() || String(sesion.estudiante_nombre || '').trim();
     }
     return String(sesion.estudiante_nombre || '').trim();
+  };
+
+  const getEnrollmentDate = (source: any): string => {
+    return String(source?.fecha_inscripcion || source?.created_at || '').slice(0, 10);
   };
 
   // Función para obtener el día de la semana en español
@@ -443,12 +913,30 @@ const Dashboard: React.FC = () => {
     const nombres = ids
       .map((id: number) => estudiantesMapa[id]?.nombre || `Estudiante #${id}`)
       .filter(Boolean);
+    const nombreResuelto = grupoNombre
+      || (nombres.length > 0
+        ? (nombres.length <= 3 ? nombres.join(', ') : `${nombres.slice(0, 2).join(', ')} +${nombres.length - 2}`)
+        : 'Sin nombre');
     return {
       isGrupo,
-      nombre: grupoNombre || 'Sin nombre',
+      nombre: nombreResuelto,
       count: ids.length,
       nombres,
     };
+  };
+
+  const getSessionParticipantLabel = (sesion?: SesionDelDia | null): string => {
+    if (!sesion) return '—';
+    const grupoInfo = getGrupoInfoForSession(sesion);
+    if (grupoInfo.isGrupo && grupoInfo.nombres.length > 0) {
+      return grupoInfo.nombres.join(', ');
+    }
+    const raw = String(sesion.estudiante_nombre || '').trim();
+    const normalized = raw
+      .replace(/^Grupo:\s*/i, '')
+      .replace(/\s*\(\d+\)\s*$/, '')
+      .trim();
+    return normalized || '—';
   };
 
   const normalizePhoneForWhatsApp = (numero: string): string => {
@@ -520,9 +1008,10 @@ const Dashboard: React.FC = () => {
     const hf = formatTimeAmPm(sesion.hora_fin);
     const studentCount = getCursoStudentCountForSession(sesion);
     const singleName = getSingleStudentNameForSession(sesion);
+    const participantLabel = getSessionParticipantLabel(sesion);
     const msg = studentCount === 1
       ? `Hola, confirmamos la sesión de ${singleName} de hoy de ${hi} a ${hf}. ¿Puedes confirmar asistencia?`
-      : `Hola, confirmamos la sesión de ${sesion.curso_nombre} con ${sesion.estudiante_nombre} el ${fechaLabel} de ${hi} a ${hf}. ¿Puedes confirmar asistencia?`;
+      : `Hola, confirmamos la sesión de ${sesion.curso_nombre} con ${participantLabel} el ${fechaLabel} de ${hi} a ${hf}. ¿Puedes confirmar asistencia?`;
     setMensajeWA(msg);
   };
 
@@ -534,36 +1023,8 @@ const Dashboard: React.FC = () => {
       setUiNotice({ type: 'info', message: 'Actualizando estado de la sesión…' });
       await dashboardService.actualizarEstadoSesion(sesion.matricula_id, fecha, { avisado, confirmado });
 
-      const patchSession = (s: SesionDelDia) => {
-        if (s.matricula_id !== sesion.matricula_id) return s;
-        if ((s.fecha || fecha) !== fecha) return s;
-        return { ...s, avisado, confirmado };
-      };
-
-      setProgramacionSesion((prev) => {
-        if (!prev) return prev;
-        if (prev.sesion.matricula_id !== sesion.matricula_id) return prev;
-        return {
-          ...prev,
-          sesion: {
-            ...prev.sesion,
-            avisado,
-            confirmado,
-          },
-        };
-      });
-
-      setSesionesDelDia((prev) => prev.map(patchSession));
-      setSesionesHoy((prev) => prev.map(patchSession));
-      setSesionesDelMes((prev) => {
-        const next: any = { ...(prev as any) };
-        const list = next[fecha];
-        if (Array.isArray(list)) next[fecha] = list.map(patchSession);
-        return next;
-      });
-
-      // Revalidar desde el servidor (por si hay otros cambios colaterales)
-      await fetchData();
+      applySessionLocalPatch(sesion, fecha, { avisado, confirmado, fecha });
+      window.setTimeout(() => { void fetchData(); }, 350);
 
       const label = confirmado ? 'Confirmada' : avisado ? 'En espera' : 'Programada';
       setUiNotice({ type: 'success', message: `Estado actualizado: ${label}.` });
@@ -584,7 +1045,7 @@ const Dashboard: React.FC = () => {
 
   const cargarDetalleMatricula = async (matriculaId: number) => {
     try {
-      const all = await matriculasService.getAll();
+      const all = await getMatriculasSnapshot();
       const m = all.find((x) => x.id === matriculaId);
       if (!m) {
         setDetalleMatricula(null);
@@ -648,18 +1109,32 @@ const Dashboard: React.FC = () => {
 
   const cargarAlumnosTutor = async (tutorId: number, nombre: string) => {
     try {
-      const all = await matriculasService.getAll();
+      const all = await getMatriculasSnapshot();
       const filtradas = all.filter((m) => m.tutor_id === tutorId && m.estado !== 0);
       const uniq = new Map<number, string>();
       filtradas.forEach((m) => {
         if (m.estudiante_id) uniq.set(m.estudiante_id, m.estudiante_nombre || `Alumno ${m.estudiante_id}`);
+        const ids = Array.isArray((m as any)?.estudiante_ids) ? (m as any).estudiante_ids as number[] : [];
+        ids.forEach((id) => {
+          uniq.set(id, estudiantesMapa[id]?.nombre || `Alumno ${id}`);
+        });
       });
+      setTutorHistorialOpen(false);
+      setTutorNotaDraft('');
+      setTutorNotaEditId(null);
+      setTutorNotaEditText('');
       setTutorSeleccionado({ id: tutorId, nombre });
+      setTutorTab('alumnos');
       setTutorMatriculas(filtradas as Matricula[]);
       setAlumnosTutor(Array.from(uniq.entries()).map(([id, nombre]) => ({ id, nombre })));
     } catch (e) {
       console.error('Error cargando alumnos del tutor', e);
+      setTutorHistorialOpen(false);
+      setTutorNotaDraft('');
+      setTutorNotaEditId(null);
+      setTutorNotaEditText('');
       setTutorSeleccionado({ id: tutorId, nombre });
+      setTutorTab('alumnos');
       setTutorMatriculas([]);
       setAlumnosTutor([]);
     }
@@ -669,6 +1144,16 @@ const Dashboard: React.FC = () => {
     // Solo mostrar loading en la primera carga, no en actualizaciones realtime
     if (!dashboardLoaded.current) setLoading(true);
     try {
+      const monthsForView = Array.from(new Set([calMes, tutorMes].filter(Boolean))).sort();
+      const startMonth = monthsForView[0] || calMes;
+      const endMonth = monthsForView[monthsForView.length - 1] || calMes;
+
+      const [startY, startM] = startMonth.split('-').map(Number);
+      const [endY, endM] = endMonth.split('-').map(Number);
+      const endDim = new Date(endY, endM, 0).getDate();
+      const fi = `${String(startY)}-${String(startM).padStart(2, '0')}-01`;
+      const ff = `${String(endY)}-${String(endM).padStart(2, '0')}-${String(endDim).padStart(2, '0')}`;
+
       // ── Lanzar TODAS las llamadas API en paralelo ──
       const [tutoresAll, estudiantesAll, statsData, metricasResult, matriculasAll, estadosRangoResult, rt, rc] = await Promise.all([
         tutoresService.getAll().catch(() => [] as Tutor[]),
@@ -681,14 +1166,7 @@ const Dashboard: React.FC = () => {
           data: null, denied: e?.response?.status === 403,
         })),
         matriculasService.getAll().catch(() => [] as Matricula[]),
-        (() => {
-          const today = new Date(hoy + 'T00:00:00');
-          const y = today.getFullYear(), mo = today.getMonth();
-          const dim = new Date(y, mo + 1, 0).getDate();
-          const fi = `${y}-${String(mo + 1).padStart(2, '0')}-01`;
-          const ff = `${y}-${String(mo + 1).padStart(2, '0')}-${String(dim).padStart(2, '0')}`;
-          return dashboardService.obtenerEstadosClasesRango({ fecha_inicio: fi, fecha_fin: ff }).catch(() => []);
-        })(),
+        dashboardService.obtenerEstadosClasesRango({ fecha_inicio: fi, fecha_fin: ff }).catch(() => []),
         dashboardService.getResumenTutoresEstudiantes().catch(() => []),
         dashboardService.getResumenCursosGrupos().catch(() => []),
       ]);
@@ -705,13 +1183,9 @@ const Dashboard: React.FC = () => {
       // ── Métricas ──
       setMetricas(metricasResult.data as any);
       setMetricasDenied(metricasResult.denied);
+      setMatriculasLista(matriculasAll as any[]);
 
-      // ── Calcular sesiones del mes completo (incluye hoy) ──
-      const today = new Date(hoy + 'T00:00:00');
-      const year = today.getFullYear();
-      const month = today.getMonth();
-      const daysInMonth = new Date(year, month + 1, 0).getDate();
-
+      // ── Calcular sesiones de los meses visibles (calendario + panel tutor) ──
       const matriculas = matriculasAll.filter((m: any) => {
         const isActiva = !!m?.estado;
         const hasCursoTutor = m?.curso_id != null && m?.tutor_id != null;
@@ -722,68 +1196,87 @@ const Dashboard: React.FC = () => {
 
       const sesionesmes: Record<string, SesionDelDia[]> = {};
 
-      for (let day = 1; day <= daysInMonth; day++) {
-        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const diaSemana = getDiaSemana(dateStr);
-        const sesiones: SesionDelDia[] = [];
+      for (const monthKey of monthsForView) {
+        const [year, monthNum] = monthKey.split('-').map(Number);
+        if (!Number.isFinite(year) || !Number.isFinite(monthNum)) continue;
 
-        matriculas.forEach((matricula: any) => {
-          const isGrupo = Boolean((matricula as any)?.es_grupo);
-          const grupoNombre = String((matricula as any)?.grupo_nombre || '').trim();
-          const grupoCount = Array.isArray((matricula as any)?.estudiante_ids) ? (matricula as any).estudiante_ids.length : 0;
-          const estudianteNombre = !isGrupo
-            ? ((matricula as any)?.estudiante_nombre || `Alumno ${(matricula as any)?.estudiante_id}`)
-            : `Grupo: ${grupoNombre || 'Sin nombre'}${grupoCount ? ` (${grupoCount})` : ''}`;
+        const month = monthNum - 1;
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-          const cursoLike = {
-            dias_schedule: (matricula as any)?.curso_dias_schedule,
-            dias_turno: (matricula as any)?.curso_dias_turno,
-          };
-          const sched = getCursoScheduleForDay(cursoLike, diaSemana);
-          if (sched?.kind === 'schedule' && sched.value) {
-            const schedule = sched.value as any;
-            sesiones.push({
-              matricula_id: matricula.id,
-              curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
-              estudiante_nombre: estudianteNombre,
-              tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
-              hora_inicio: schedule.hora_inicio || schedule.horaInicio || schedule.start || '—',
-              hora_fin: schedule.hora_fin || schedule.horaFin || schedule.end || '—',
-              duracion_horas: schedule.duracion_horas || 0,
-              turno: schedule.turno,
-              curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
-              tutor_id: (matricula as any)?.tutor_id,
-              estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
-              curso_id: (matricula as any)?.curso_id,
-              avisado: true,
-              confirmado: false,
-              fecha: dateStr
-            });
-          } else if (sched?.kind === 'turno' && sched.value) {
-            const turno = sched.value as any;
-            sesiones.push({
-              matricula_id: matricula.id,
-              curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
-              estudiante_nombre: estudianteNombre,
-              tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
-              hora_inicio: '—',
-              hora_fin: '—',
-              duracion_horas: 0,
-              turno: turno,
-              curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
-              tutor_id: (matricula as any)?.tutor_id,
-              estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
-              curso_id: (matricula as any)?.curso_id,
-              avisado: true,
-              confirmado: false,
-              fecha: dateStr
-            });
+        for (let day = 1; day <= daysInMonth; day++) {
+          const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          const diaSemana = getDiaSemana(dateStr);
+          const sesiones: SesionDelDia[] = [];
+
+          matriculas.forEach((matricula: any) => {
+            const enrollmentDate = getEnrollmentDate(matricula);
+            if (enrollmentDate && dateStr < enrollmentDate) return;
+
+            const isGrupo = Boolean((matricula as any)?.es_grupo);
+            const grupoNombre = String((matricula as any)?.grupo_nombre || '').trim();
+            const grupoIds = Array.isArray((matricula as any)?.estudiante_ids) ? (matricula as any).estudiante_ids as number[] : [];
+            const participantNames = grupoIds
+              .map((id: number) => String(eMap[id]?.nombre || '').trim())
+              .filter((name): name is string => Boolean(name));
+            let estudianteNombre: string;
+            if (!isGrupo) {
+              estudianteNombre = (matricula as any)?.estudiante_nombre || `Alumno ${(matricula as any)?.estudiante_id}`;
+            } else {
+              estudianteNombre = participantNames.join(', ') || grupoNombre || 'Sin nombre';
+            }
+
+            const cursoLike = {
+              dias_schedule: (matricula as any)?.curso_dias_schedule,
+              dias_turno: (matricula as any)?.curso_dias_turno,
+            };
+            const sched = getCursoScheduleForDay(cursoLike, diaSemana);
+            if (sched?.kind === 'schedule' && sched.value) {
+              const schedule = sched.value as any;
+              sesiones.push({
+                matricula_id: matricula.id,
+                curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
+                estudiante_nombre: estudianteNombre,
+                tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
+                hora_inicio: schedule.hora_inicio || schedule.horaInicio || schedule.start || '—',
+                hora_fin: schedule.hora_fin || schedule.horaFin || schedule.end || '—',
+                duracion_horas: schedule.duracion_horas || 0,
+                turno: schedule.turno,
+                curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
+                tutor_id: (matricula as any)?.tutor_id,
+                estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
+                curso_id: (matricula as any)?.curso_id,
+                avisado: true,
+                confirmado: false,
+                fecha: dateStr,
+                fecha_inscripcion: enrollmentDate || null,
+              });
+            } else if (sched?.kind === 'turno' && sched.value) {
+              const turno = sched.value as any;
+              sesiones.push({
+                matricula_id: matricula.id,
+                curso_nombre: (matricula as any)?.curso_nombre || 'Curso',
+                estudiante_nombre: estudianteNombre,
+                tutor_nombre: (matricula as any)?.tutor_nombre || 'Tutor',
+                hora_inicio: '—',
+                hora_fin: '—',
+                duracion_horas: 0,
+                turno: turno,
+                curso_tipo_pago: (matricula as any)?.curso_tipo_pago ?? null,
+                tutor_id: (matricula as any)?.tutor_id,
+                estudiante_id: !isGrupo ? ((matricula as any)?.estudiante_id) : undefined,
+                curso_id: (matricula as any)?.curso_id,
+                avisado: true,
+                confirmado: false,
+                fecha: dateStr,
+                fecha_inscripcion: enrollmentDate || null,
+              });
+            }
+          });
+
+          if (sesiones.length > 0) {
+            sesiones.sort((a, b) => String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
+            sesionesmes[dateStr] = sesiones;
           }
-        });
-
-        if (sesiones.length > 0) {
-          sesiones.sort((a, b) => String(a.hora_inicio).localeCompare(String(b.hora_inicio)));
-          sesionesmes[dateStr] = sesiones;
         }
       }
 
@@ -800,6 +1293,7 @@ const Dashboard: React.FC = () => {
         }
       });
 
+      const consumedKeys = new Set<string>();
       for (const dateStr of Object.keys(sesionesmes)) {
         sesionesmes[dateStr].forEach((sesion: SesionDelDia) => {
           const key = `${dateStr}|${sesion.matricula_id}`;
@@ -808,15 +1302,89 @@ const Dashboard: React.FC = () => {
             sesion.avisado = estado.avisado;
             sesion.confirmado = estado.confirmado;
             sesion.estado_sesion = estado.estado_sesion;
+            consumedKeys.add(key);
           }
         });
       }
 
+      // ── Inyectar sesiones huérfanas (horario cambiado después de marcar) ──
+      for (const [key, estado] of estadosMap) {
+        if (consumedKeys.has(key) || !estado.estado_sesion) continue;
+        const [dateStr, matIdStr] = key.split('|');
+        const matId = Number(matIdStr);
+        const mat = matriculas.find((m: any) => m.id === matId);
+        if (!mat) continue;
+        const enrollmentDate = getEnrollmentDate(mat);
+        if (enrollmentDate && dateStr < enrollmentDate) continue;
+        const eRaw = (estadosRangoResult as any[]).find(
+          (e: any) => String(e.fecha || '').slice(0, 10) === dateStr && e.matricula_id === matId
+        );
+        const isGrupo = Boolean((mat as any)?.es_grupo);
+        const grupoNombre = String((mat as any)?.grupo_nombre || '').trim();
+        const grupoIdsOrphan = Array.isArray((mat as any)?.estudiante_ids) ? (mat as any).estudiante_ids as number[] : [];
+        const participantNames = grupoIdsOrphan
+          .map((id: number) => String(eMap[id]?.nombre || '').trim())
+          .filter((name): name is string => Boolean(name));
+        let estudianteNombre: string;
+        if (!isGrupo) {
+          estudianteNombre = (mat as any)?.estudiante_nombre || `Alumno ${(mat as any)?.estudiante_id}`;
+        } else {
+          estudianteNombre = participantNames.join(', ') || grupoNombre || 'Sin nombre';
+        }
+        const orphan: SesionDelDia = {
+          matricula_id: matId,
+          curso_nombre: (mat as any)?.curso_nombre || 'Curso',
+          estudiante_nombre: estudianteNombre,
+          tutor_nombre: (mat as any)?.tutor_nombre || 'Tutor',
+          hora_inicio: eRaw?.hora_inicio || '—',
+          hora_fin: eRaw?.hora_fin || '—',
+          duracion_horas: eRaw?.duracion_horas || 0,
+          turno: '',
+          curso_tipo_pago: (mat as any)?.curso_tipo_pago ?? null,
+          tutor_id: (mat as any)?.tutor_id,
+          estudiante_id: !isGrupo ? ((mat as any)?.estudiante_id) : undefined,
+          curso_id: (mat as any)?.curso_id,
+          avisado: estado.avisado,
+          confirmado: estado.confirmado,
+          fecha: dateStr,
+          estado_sesion: estado.estado_sesion,
+          fecha_inscripcion: enrollmentDate || null,
+        };
+        if (!sesionesmes[dateStr]) sesionesmes[dateStr] = [];
+        sesionesmes[dateStr].push(orphan);
+      }
+
+      const resolvedOverrideKeys: string[] = [];
+      for (const [stateKey, patch] of Object.entries(sessionOverridesRef.current)) {
+        const [dateStr, matriculaIdRaw] = stateKey.split('|');
+        const matriculaId = Number(matriculaIdRaw);
+        const list = sesionesmes[dateStr];
+        if (!Array.isArray(list)) continue;
+
+        let applied = false;
+        sesionesmes[dateStr] = list.map((sesion) => {
+          if (sesion.matricula_id !== matriculaId) return sesion;
+          applied = true;
+          return { ...sesion, ...patch, fecha: dateStr };
+        });
+
+        const serverState = estadosMap.get(stateKey);
+        if (applied && serverState && Object.entries(patch).every(([field, value]) => (serverState as any)?.[field] === value)) {
+          resolvedOverrideKeys.push(stateKey);
+        }
+      }
+
+      resolvedOverrideKeys.forEach((stateKey) => {
+        delete sessionOverridesRef.current[stateKey];
+      });
+
       setSesionesDelMes(sesionesmes);
       // Sesiones de hoy extraídas del cálculo mensual (sin llamada extra)
-      setSesionesHoy(sesionesmes[hoy] || []);
-      if (selectedDate) {
-        setSesionesDelDia(sesionesmes[selectedDate] || []);
+      setSesionesHoy(getSesionesHoyList(sesionesmes));
+      // Solo actualizar sesionesDelDia si ya hay un día seleccionado
+      const curSel = selectedDateRef.current;
+      if (curSel) {
+        setSesionesDelDia(filterVisibleSesionesForDate(curSel, sesionesmes[curSel] || []));
       }
 
       // Resúmenes (ya cargados en paralelo)
@@ -828,7 +1396,38 @@ const Dashboard: React.FC = () => {
       dashboardLoaded.current = true;
       setLoading(false);
     }
-  }, [selectedDate, hoy, metricMes]);
+  }, [calMes, filterVisibleSesionesForDate, getSesionesHoyList, hoy, metricMes, tutorMes]);
+
+  const tutorMonthView = useMemo(() => {
+    const [cy, cm] = tutorMes.split('-').map(Number);
+    const mNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    const dayNames = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+    const byDate = new Map<string, SesionDelDia[]>();
+
+    if (tutorSeleccionado?.id != null) {
+      for (const [dateStr, sesiones] of Object.entries(sesionesDelMes)) {
+        if (!dateStr.startsWith(`${tutorMes}-`)) continue;
+        const filtered = (sesiones as SesionDelDia[]).filter((s) => s.tutor_id === tutorSeleccionado.id);
+        if (filtered.length > 0) {
+          byDate.set(dateStr, [...filtered].sort((a, b) => (a.hora_inicio || '').localeCompare(b.hora_inicio || '')));
+        }
+      }
+    }
+
+    const sortedDates = Array.from(byDate.keys()).sort();
+    let totD = 0;
+    let totC = 0;
+    let totP = 0;
+    for (const seses of byDate.values()) {
+      for (const s of seses) {
+        if (s.estado_sesion === 'dada') totD++;
+        else if (s.estado_sesion === 'cancelada') totC++;
+        else totP++;
+      }
+    }
+
+    return { cy, cm, mNames, dayNames, byDate, sortedDates, totD, totC, totP };
+  }, [sesionesDelMes, tutorMes, tutorSeleccionado?.id]);
 
   const maxAbsSerie = (() => {
     const s = (metricas?.series_esperado || metricas?.series || []) as any[];
@@ -860,10 +1459,54 @@ const Dashboard: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    if (!tutorSeleccionado?.id) {
+      setTutorNotas([]);
+      setTutorNotasHistorial([]);
+      setTutorNotaDraft('');
+      setTutorNotaEditId(null);
+      setTutorNotaEditText('');
+      setTutorNotaBusy({});
+      setTutorHistorialOpen(false);
+      setTutorNotasLoading(false);
+      return;
+    }
+    setTutorNotaEditId(null);
+    setTutorNotaEditText('');
+    void cargarTutorNotas(tutorSeleccionado.id);
+  }, [cargarTutorNotas, tutorSeleccionado?.id]);
+
+  // Auto-completar sesiones mensuales pendientes de días pasados
+  useEffect(() => {
+    const mensualPendientes = sesionesPendientes.filter(s => {
+      if (s.curso_tipo_pago !== 'mensual') return false;
+      const key = `${s.matricula_id}:${s._fecha}`;
+      return !autoCompletedRef.current.has(key);
+    });
+    if (mensualPendientes.length === 0) return;
+    mensualPendientes.forEach(s => {
+      const key = `${s.matricula_id}:${s._fecha}`;
+      autoCompletedRef.current.add(key);
+      dashboardService.completarSesion(s.matricula_id, s._fecha)
+        .catch(e => console.warn('Auto-complete mensual failed:', key, e));
+    });
+    setTimeout(() => fetchData(), 1500);
+  }, [sesionesPendientes, fetchData]);
+
   // Suscripción realtime — actualiza automáticamente al cambiar datos relevantes
   useRealtimeSubscription(
     ['matriculas', 'sesiones_clases', 'clases', 'cursos', 'estudiantes', 'tutores', 'movimientos_dinero', 'tesoreria_pagos'],
     fetchData,
+  );
+
+  useRealtimeSubscription(
+    ['tutor_notas', 'tutor_notas_historial'],
+    () => {
+      if (tutorSeleccionado?.id) {
+        void cargarTutorNotas(tutorSeleccionado.id, { silent: true });
+      }
+    },
+    Boolean(tutorSeleccionado?.id),
   );
 
   const marcarSesionComoDada = useCallback(async (sesion: SesionDelDia) => {
@@ -876,15 +1519,18 @@ const Dashboard: React.FC = () => {
       const fechaToUse = sesion?.fecha || hoy || hoyStr;
       const result = await dashboardService.completarSesion(sesion.matricula_id, fechaToUse);
 
-      // Remover de la lista de hoy inmediatamente (experiencia UX)
-      setSesionesHoy(prev => prev.filter((s) => getSesionKey(s) !== sesionKey));
+      applySessionLocalPatch(sesion, fechaToUse, {
+        estado_sesion: 'dada',
+        avisado: true,
+        confirmado: true,
+        fecha: fechaToUse,
+      });
       setUiNotice({
         type: 'success',
         message: result?.message || 'Clase marcada como dada.'
       });
 
-      // Sincronizar stats/agenda
-      await fetchData();
+      window.setTimeout(() => { void fetchData(); }, 400);
     } catch (e: any) {
       console.error(e);
       setUiNotice({ type: 'error', message: e?.response?.data?.error || e?.message || 'Error marcando la clase como dada' });
@@ -895,7 +1541,7 @@ const Dashboard: React.FC = () => {
         return next;
       });
     }
-  }, [fetchData, getSesionKey, hoy]);
+  }, [applySessionLocalPatch, fetchData, getSesionKey, hoy]);
 
   const StatCard = ({ id, title, value, icon, accentColor, description }: any) => {
     const isOpen = statInfoOpen === id;
@@ -978,8 +1624,8 @@ const Dashboard: React.FC = () => {
           <div className="space-y-4">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
               <div className="text-sm font-black text-white">{confirmMarcarDada?.sesion.curso_nombre}</div>
-              <div className="text-xs text-slate-300 mt-1">{confirmMarcarDada?.sesion.estudiante_nombre}</div>
-              <div className="text-xs text-slate-400 mt-1">{formatTimeAmPm(confirmMarcarDada?.sesion.hora_inicio)} - {formatTimeAmPm(confirmMarcarDada?.sesion.hora_fin)}</div>
+              <div className="text-xs text-slate-300 mt-1">{getSessionParticipantLabel(confirmMarcarDada?.sesion)}</div>
+              <div className="text-xs text-slate-400 mt-1">{formatTimeAmPm(confirmMarcarDada?.sesion.hora_inicio ?? '')} - {formatTimeAmPm(confirmMarcarDada?.sesion.hora_fin ?? '')}</div>
             </div>
 
             <div className="text-sm text-slate-200">
@@ -1014,8 +1660,8 @@ const Dashboard: React.FC = () => {
           <div className="space-y-4">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
               <div className="text-sm font-black text-white">{confirmCancelarHoy?.sesion.curso_nombre}</div>
-              <div className="text-xs text-slate-300 mt-1">{confirmCancelarHoy?.sesion.estudiante_nombre}</div>
-              <div className="text-xs text-slate-400 mt-1">{formatTimeAmPm(confirmCancelarHoy?.sesion.hora_inicio)} - {formatTimeAmPm(confirmCancelarHoy?.sesion.hora_fin)}</div>
+              <div className="text-xs text-slate-300 mt-1">{getSessionParticipantLabel(confirmCancelarHoy?.sesion)}</div>
+              <div className="text-xs text-slate-400 mt-1">{formatTimeAmPm(confirmCancelarHoy?.sesion.hora_inicio ?? '')} - {formatTimeAmPm(confirmCancelarHoy?.sesion.hora_fin ?? '')}</div>
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -1052,8 +1698,12 @@ const Dashboard: React.FC = () => {
                   setConfirmCancelarHoy(null);
                   try {
                     await dashboardService.cancelarSesionDia(sesion.matricula_id, fechaToUse, motivo);
+                    applySessionLocalPatch(sesion, fechaToUse, {
+                      estado_sesion: 'cancelada',
+                      fecha: fechaToUse,
+                    });
                     setUiNotice({ type: 'success', message: 'Clase cancelada (solo por hoy).' });
-                    await fetchData();
+                    window.setTimeout(() => { void fetchData(); }, 400);
                   } catch (e: any) {
                     console.error(e);
                     setUiNotice({ type: 'error', message: e?.response?.data?.error || e?.message || 'Error cancelando la clase' });
@@ -1168,6 +1818,7 @@ const Dashboard: React.FC = () => {
                     const puedeMarcarDada = !esMensual && isFinite(hIni) && isFinite(mIni) && ahora >= finDate;
                         const hi = formatTimeAmPm(sesion.hora_inicio);
                         const hf = formatTimeAmPm(sesion.hora_fin);
+                      const participantLabel = getSessionParticipantLabel(sesion);
                     return (
                           <div
                             key={`hoy-top-${sesion.matricula_id}-${index}`}
@@ -1190,7 +1841,7 @@ const Dashboard: React.FC = () => {
                             </div>
 
                             <div className="mt-3 space-y-1">
-                              <p className="text-xs font-bold text-slate-200 truncate">{sesion.estudiante_nombre}</p>
+                              <p className="text-xs font-bold text-slate-200 whitespace-normal break-words">{participantLabel}</p>
                               <p className="text-[11px] text-slate-500 truncate">Tutor: {sesion.tutor_nombre || '—'}</p>
                             </div>
 
@@ -1339,6 +1990,7 @@ const Dashboard: React.FC = () => {
                           const hi = formatTimeAmPm(sesion.hora_inicio);
                           const hf = formatTimeAmPm(sesion.hora_fin);
                           const esMensual = (sesion.curso_tipo_pago || '').toLowerCase() === 'mensual';
+                          const participantLabel = getSessionParticipantLabel(sesion);
                           return (
                             <div
                               key={`pend-${sesion.matricula_id}-${sesion._fecha}-${index}`}
@@ -1361,7 +2013,7 @@ const Dashboard: React.FC = () => {
                               </div>
 
                               <div className="mt-3 space-y-1">
-                                <p className="text-xs font-bold text-slate-200 truncate">{sesion.estudiante_nombre}</p>
+                                <p className="text-xs font-bold text-slate-200 whitespace-normal break-words">{participantLabel}</p>
                                 <p className="text-[11px] text-slate-500 truncate">Tutor: {sesion.tutor_nombre || '—'}</p>
                               </div>
 
@@ -1413,6 +2065,48 @@ const Dashboard: React.FC = () => {
             </h2>
 
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const rows: { Fecha: string; Día: string; Alumno: string; Curso: string; Tutor: string; 'Hora Inicio': string; 'Hora Fin': string; Estado: string }[] = [];
+                  const [eY, eM] = calMes.split('-').map(Number);
+                  const dim = new Date(eY, eM, 0).getDate();
+                  for (let d = 1; d <= dim; d++) {
+                    const ds = `${eY}-${String(eM).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                    const ses = sesionesDelMes[ds] || [];
+                    for (const s of ses) {
+                      rows.push({
+                        Fecha: ds,
+                        Día: getDiaSemana(ds),
+                        Alumno: s.estudiante_nombre,
+                        Curso: s.curso_nombre,
+                        Tutor: s.tutor_nombre,
+                        'Hora Inicio': s.hora_inicio,
+                        'Hora Fin': s.hora_fin,
+                        Estado: s.estado_sesion === 'dada' ? 'Dada' : s.estado_sesion === 'cancelada' ? 'Cancelada' : 'Programada',
+                      });
+                    }
+                  }
+                  if (rows.length === 0) return;
+                  const ws = XLSX.utils.json_to_sheet(rows);
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, ws, 'Calendario');
+                  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+                  saveAs(new Blob([buf], { type: 'application/octet-stream' }), `Calendario_${calMes}.xlsx`);
+                }}
+                className="h-9 px-3 flex items-center gap-1.5 bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs font-bold rounded-md transition-colors"
+                title="Exportar mes a Excel"
+              >
+                <Download className="w-4 h-4" />
+                <span className="hidden md:inline">Excel</span>
+              </button>
+              <button
+                onClick={exportCalendarPdf}
+                className="h-9 px-3 flex items-center gap-1.5 bg-red-700/80 hover:bg-red-600 text-white text-xs font-bold rounded-md transition-colors"
+                title="Exportar mes a PDF"
+              >
+                <Download className="w-4 h-4" />
+                <span className="hidden md:inline">PDF</span>
+              </button>
               <span className="hidden md:inline text-xs text-slate-400 font-bold uppercase tracking-widest">Tamaño</span>
               <Button
                 size="sm"
@@ -1440,9 +2134,9 @@ const Dashboard: React.FC = () => {
                 const calendarPreviewCount = calendarDensity === 0 ? 2 : calendarDensity === 2 ? 4 : 3;
                 const chipPad = calendarDensity === 0 ? 'px-1.5 py-0.5' : calendarDensity === 2 ? 'px-2 py-1' : 'px-1.5 py-1';
 
-                const today = new Date(hoy + 'T00:00:00');
-                const year = today.getFullYear();
-                const month = today.getMonth();
+                const [calRenderY, calRenderM] = calMes.split('-').map(Number);
+                const year = calRenderY;
+                const month = calRenderM - 1;
                 const firstDay = new Date(year, month, 1);
                 const lastDay = new Date(year, month + 1, 0);
                 const daysInMonth = lastDay.getDate();
@@ -1455,10 +2149,29 @@ const Dashboard: React.FC = () => {
                 for (let i = 0; i < startDay; i++) days.push(null);
                 for (let d = 1; d <= daysInMonth; d++) days.push(d);
 
+                const prevMonth = () => {
+                  const [py, pm] = calMes.split('-').map(Number);
+                  const d = new Date(py, pm - 2, 1);
+                  setCalMes(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+                };
+                const nextMonth = () => {
+                  const [ny, nm] = calMes.split('-').map(Number);
+                  const d = new Date(ny, nm, 1);
+                  setCalMes(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+                };
+                const isCurrentMonth = calMes === crToday.slice(0, 7);
+
                 return (
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-xl font-black text-white">{monthNames[month]} {year}</h3>
+                      <button onClick={prevMonth} className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors" title="Mes anterior"><ChevronLeft className="w-5 h-5" /></button>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xl font-black text-white">{monthNames[month]} {year}</h3>
+                        {!isCurrentMonth && (
+                          <button onClick={() => setCalMes(crToday.slice(0, 7))} className="text-xs px-2 py-0.5 rounded bg-[#00AEEF]/20 text-[#00AEEF] hover:bg-[#00AEEF]/30 transition-colors">Hoy</button>
+                        )}
+                      </div>
+                      <button onClick={nextMonth} className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors" title="Mes siguiente"><ChevronRight className="w-5 h-5" /></button>
                     </div>
                     <div className="grid grid-cols-7 gap-2">
                       {dayNames.map(day => (
@@ -1471,12 +2184,7 @@ const Dashboard: React.FC = () => {
                         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const isToday = dateStr === hoy;
                         const isSelected = selectedDate === dateStr;
-                        const isPast = dateStr < hoy;
-                        
-                        // Filtrar sesiones pasadas: solo mostrar si fueron dadas
-                        const sesionesEnDia = isPast 
-                          ? (sesionesDelMes[dateStr] || []).filter(s => s.estado_sesion === 'dada')
-                          : (sesionesDelMes[dateStr] || []);
+                        const sesionesEnDia = getVisibleSesionesForDate(dateStr);
                         
                         const hasClasses = sesionesEnDia.length > 0;
                         const diaSemana = getDiaSemana(dateStr);
@@ -1498,7 +2206,7 @@ const Dashboard: React.FC = () => {
                             key={day}
                             onClick={() => {
                               setSelectedDate(dateStr);
-                              setSesionesDelDia(sesionesEnDia);
+                              setSesionesDelDia(getVisibleSesionesForDate(dateStr));
                               setDayDetailQuery('');
                               setShowDayDetail(true);
                             }}
@@ -1515,7 +2223,9 @@ const Dashboard: React.FC = () => {
                             {hasClasses && (
                               <span
                                 className={`absolute top-1.5 right-1.5 text-[10px] font-black px-1.5 py-0.5 rounded min-w-6 text-center tabular-nums ${
-                                  isToday ? 'bg-[#00AEEF]/30 text-[#00AEEF]' : isSelected ? 'bg-[#FFC800]/30 text-[#FFC800]' : 'bg-emerald-500/30 text-emerald-300'
+                                  isToday ? 'bg-[#00AEEF]/30 text-[#00AEEF]' 
+                                  : isSelected ? 'bg-[#FFC800]/30 text-[#FFC800]' 
+                                  : 'bg-emerald-500/30 text-emerald-300'
                                 }`}
                                 title={`${sesionesEnDia.length} sesión(es) programada(s)`}
                               >
@@ -1860,7 +2570,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* Sidebar derecha - 30% */}
-      <aside className="w-[30%] space-y-6 sticky top-24 self-start">
+      <aside className="w-[30%] space-y-6 sticky top-24 self-start page-sidebar-scroll">
         {programacionSesion && (
           <Card className="border-white/10 bg-[#0F2445] overflow-hidden">
             <div className="h-1.5 bg-[#FFC800]/45" />
@@ -1904,7 +2614,7 @@ const Dashboard: React.FC = () => {
                       </div>
                       <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                         <div className="text-[11px] text-slate-400 font-semibold">Estudiante / Grupo</div>
-                        <div className="text-sm font-bold text-white mt-1">{programacionSesion.sesion.estudiante_nombre || '—'}</div>
+                        <div className="text-sm font-bold text-white mt-1">{getSessionParticipantLabel(programacionSesion.sesion)}</div>
                         {grupoInfo.isGrupo && (
                           <div className="text-[11px] text-slate-300 mt-1">
                             Grupo: {grupoInfo.nombre}{grupoInfo.count ? ` (${grupoInfo.count})` : ''}
@@ -2123,7 +2833,7 @@ const Dashboard: React.FC = () => {
                         </div>
                       </div>
                       <div className="text-xs text-slate-300 space-y-1">
-                        <p className="whitespace-normal break-words"><span className="font-semibold text-slate-200">{sesion.estudiante_nombre}</span></p>
+                        <p className="whitespace-normal break-words"><span className="font-semibold text-slate-200">{getSessionParticipantLabel(sesion)}</span></p>
                         <p className="text-slate-500 text-[11px]">Docente: {sesion.tutor_nombre}</p>
                         <div className="flex items-center gap-2 text-[11px]">
                           {sesion.estado_sesion === 'dada' ? (
@@ -2192,7 +2902,7 @@ const Dashboard: React.FC = () => {
 
               <div className="p-5 space-y-4 flex-1 overflow-y-auto text-slate-100">
                 <div className="space-y-1">
-                  <p className="text-sm font-semibold">{programacionSesion.sesion.estudiante_nombre}</p>
+                  <p className="text-sm font-semibold">{getSessionParticipantLabel(programacionSesion.sesion)}</p>
                   <p className="text-[11px] text-slate-400">Docente: {programacionSesion.sesion.tutor_nombre}</p>
                   <div className="flex items-center gap-2 text-[11px]">
                     {(() => {
@@ -2413,16 +3123,31 @@ const Dashboard: React.FC = () => {
           <Card className="border-white/10 bg-[#0F2445]">
             <CardHeader className="border-b border-white/10">
               <div className="flex justify-between items-start">
-                <CardTitle className="text-white text-base">Alumnos de {tutorSeleccionado.nombre}</CardTitle>
-                <button onClick={() => { setTutorSeleccionado(null); setAlumnosTutor([]); setTutorMatriculas([]); }} className="text-slate-400 hover:text-white transition-colors">
+                <CardTitle className="text-white text-base">{tutorSeleccionado.nombre}</CardTitle>
+                <button onClick={() => { setTutorSeleccionado(null); setAlumnosTutor([]); setTutorMatriculas([]); setTutorNotaDraft(''); setTutorNotaEditId(null); setTutorNotaEditText(''); setTutorHistorialOpen(false); }} className="text-slate-400 hover:text-white transition-colors">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
+              <div className="flex gap-1 mt-3">
+                <button
+                  onClick={() => setTutorTab('alumnos')}
+                  className={`ui-tab-trigger text-[11px] font-bold px-3 py-1.5 rounded-md transition-colors ${tutorTab === 'alumnos' ? 'bg-white/15 text-white border border-white/20' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                >
+                  Alumnos
+                </button>
+                <button
+                  onClick={() => setTutorTab('clases')}
+                  className={`ui-tab-trigger text-[11px] font-bold px-3 py-1.5 rounded-md transition-colors ${tutorTab === 'clases' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                >
+                  Clases {(() => { const [, cm] = tutorMes.split('-').map(Number); return ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][cm - 1]; })()}
+                </button>
+              </div>
             </CardHeader>
             <CardContent className="pt-4">
-              {(() => {
+              <div key={tutorTab} className="ui-tab-panel-transition">
+              {tutorTab === 'alumnos' ? (() => {
                 const items = (tutorMatriculas || []).filter((m) => (m?.tutor_id === tutorSeleccionado.id) && m.estado !== 0);
                 if (items.length === 0) {
                   return <div className="text-xs text-slate-400">Sin alumnos asociados</div>;
@@ -2567,10 +3292,275 @@ const Dashboard: React.FC = () => {
                     </div>
                   </div>
                 );
+              })() : (() => {
+                if (tutorMonthView.sortedDates.length === 0) {
+                  return (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[12px] font-bold text-slate-300">Mes:</span>
+                        <input
+                          type="month"
+                          value={tutorMes}
+                          onChange={(e) => setTutorMes(e.target.value || calMes)}
+                          className="h-8 px-2 rounded-md bg-white/10 border border-white/15 text-xs text-white"
+                        />
+                        <button
+                          onClick={() => setTutorMes(calMes)}
+                          className="h-8 px-2.5 rounded-md text-[11px] font-bold bg-white/10 border border-white/15 text-slate-200 hover:bg-white/15"
+                        >
+                          Usar mes calendario
+                        </button>
+                      </div>
+                      <div className="text-sm text-slate-400 text-center py-4">Sin clases en {tutorMonthView.mNames[tutorMonthView.cm - 1]} {tutorMonthView.cy}</div>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="space-y-3.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[12px] font-bold text-slate-300">Mes:</span>
+                      <input
+                        type="month"
+                        value={tutorMes}
+                        onChange={(e) => setTutorMes(e.target.value || calMes)}
+                        className="h-8 px-2 rounded-md bg-white/10 border border-white/15 text-xs text-white"
+                      />
+                      <button
+                        onClick={() => setTutorMes(calMes)}
+                        className="h-8 px-2.5 rounded-md text-[11px] font-bold bg-white/10 border border-white/15 text-slate-200 hover:bg-white/15"
+                      >
+                        Usar mes calendario
+                      </button>
+                    </div>
+                    <div className="flex gap-3 text-[12px] font-bold flex-wrap">
+                      <span className="text-emerald-400">Dadas: {tutorMonthView.totD}</span>
+                      <span className="text-red-400">Canceladas: {tutorMonthView.totC}</span>
+                      <span className="text-slate-400">Pendientes: {tutorMonthView.totP}</span>
+                      <span className="text-white ml-auto">Total: {tutorMonthView.totD + tutorMonthView.totC + tutorMonthView.totP}</span>
+                    </div>
+                    <div className="space-y-2.5 max-h-[520px] overflow-y-auto pr-1">
+                      {tutorMonthView.sortedDates.map((dateStr) => {
+                        const parts = dateStr.split('-').map(Number);
+                        const dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+                        const dayName = tutorMonthView.dayNames[dateObj.getDay()];
+                        const sessions = tutorMonthView.byDate.get(dateStr)!;
+                        return (
+                          <div key={dateStr} className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
+                            <div className="px-3 py-2 bg-white/5 border-b border-white/10 flex items-center gap-2">
+                              <span className="text-sm font-black text-white">{parts[2]} {tutorMonthView.mNames[parts[1] - 1].slice(0, 3)}</span>
+                              <span className="text-[11px] text-slate-300 uppercase font-bold">{dayName}</span>
+                              <span className="ml-auto text-[11px] text-slate-400">{sessions.length} clase{sessions.length !== 1 ? 's' : ''}</span>
+                            </div>
+                            <div className="divide-y divide-white/5">
+                              {sessions.map((s, i) => (
+                                <div key={i} className="px-3 py-2.5 flex items-center gap-2">
+                                  <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${s.estado_sesion === 'dada' ? 'bg-emerald-400' : s.estado_sesion === 'cancelada' ? 'bg-red-400' : 'bg-slate-400'}`} />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-sm font-bold text-white whitespace-normal break-words leading-tight">{getSessionParticipantLabel(s)}</div>
+                                    <div className="text-xs text-slate-300 whitespace-normal break-words leading-tight mt-0.5">{s.curso_nombre}</div>
+                                  </div>
+                                  <div className="flex-shrink-0 text-right">
+                                    {(s.hora_inicio || s.hora_fin) && (
+                                      <div className="text-[11px] text-slate-200 font-bold">{s.hora_inicio?.slice(0, 5)}–{s.hora_fin?.slice(0, 5)}</div>
+                                    )}
+                                    <div className={`text-[11px] font-bold ${s.estado_sesion === 'dada' ? 'text-emerald-400' : s.estado_sesion === 'cancelada' ? 'text-red-400' : 'text-slate-300'}`}>
+                                      {s.estado_sesion === 'dada' ? 'Dada' : s.estado_sesion === 'cancelada' ? 'Cancelada' : 'Pendiente'}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
               })()}
+              </div>
             </CardContent>
           </Card>
         )}
+
+        <Card className="border-white/10 bg-[#0F2445]">
+          <CardHeader>
+            <CardTitle className="text-lg text-white">Notas Internas del Equipo</CardTitle>
+            <CardDescription className="text-xs text-slate-300">Bitácora colaborativa en tiempo real escrita por empleados sobre este tutor</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {!tutorSeleccionado ? (
+              <div className="text-xs text-slate-400 text-center py-4">Selecciona un tutor para gestionar notas colaborativas.</div>
+            ) : (
+              <>
+                <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+                  Tutor en seguimiento: <span className="text-white">{tutorSeleccionado.nombre}</span>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <textarea
+                    value={tutorNotaDraft}
+                    onChange={(e) => setTutorNotaDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        void crearTutorNota();
+                      }
+                    }}
+                    placeholder="Escribe una nota interna del equipo sobre este tutor (Enter para guardar, Shift+Enter para salto de línea)..."
+                    className="w-full min-h-[90px] rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#00AEEF]/50"
+                  />
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      className="bg-[#00AEEF] hover:bg-[#00AEEF]/85 text-[#051026] font-bold"
+                      onClick={() => void crearTutorNota()}
+                      disabled={tutorNotaSaving || !tutorNotaDraft.trim()}
+                    >
+                      {tutorNotaSaving ? 'Guardando...' : 'Guardar nota'}
+                    </Button>
+                  </div>
+                </div>
+
+                {tutorNotasLoading ? (
+                  <div className="text-xs text-slate-400">Cargando notas...</div>
+                ) : tutorNotas.length === 0 ? (
+                  <div className="text-xs text-slate-400">Aún no hay notas registradas para este tutor.</div>
+                ) : (
+                  <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                    {tutorNotas.map((nota) => {
+                      const busy = Boolean(tutorNotaBusy[nota.id]);
+                      const editing = tutorNotaEditId === nota.id;
+                      const actorName = nota.actualizado_por_nombre || nota.creado_por_nombre || 'Equipo';
+                      return (
+                        <div
+                          key={nota.id}
+                          className={`rounded-xl border p-3 ${nota.estado === 'hecha' ? 'bg-emerald-500/10 border-emerald-400/25' : 'bg-white/5 border-white/10'}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${nota.estado === 'hecha' ? 'text-emerald-200 border-emerald-400/30 bg-emerald-500/10' : 'text-amber-200 border-amber-400/30 bg-amber-500/10'}`}>
+                              {nota.estado === 'hecha' ? 'Hecha' : 'Pendiente'}
+                            </span>
+                            <span className="text-[11px] text-slate-400">{actorName} · {formatNotaDate(nota.updated_at || nota.created_at)}</span>
+                          </div>
+
+                          {editing ? (
+                            <div className="mt-2 space-y-2">
+                              <textarea
+                                value={tutorNotaEditText}
+                                onChange={(e) => setTutorNotaEditText(e.target.value)}
+                                className="w-full min-h-[80px] rounded-lg border border-white/15 bg-[#0B1B33] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#00AEEF]/50"
+                              />
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => {
+                                    setTutorNotaEditId(null);
+                                    setTutorNotaEditText('');
+                                  }}
+                                >
+                                  Cancelar
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="primary"
+                                  className="bg-[#00AEEF] hover:bg-[#00AEEF]/85 text-[#051026] font-bold"
+                                  disabled={busy || !tutorNotaEditText.trim()}
+                                  onClick={() => void guardarEdicionTutorNota(nota.id)}
+                                >
+                                  Guardar
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className={`mt-2 text-sm whitespace-pre-wrap break-words ${nota.estado === 'hecha' ? 'text-emerald-100 line-through decoration-emerald-300/70' : 'text-slate-100'}`}>
+                              {nota.mensaje}
+                            </p>
+                          )}
+
+                          {!editing && (
+                            <div className="mt-3 flex flex-wrap justify-end gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() => {
+                                  setTutorNotaEditId(nota.id);
+                                  setTutorNotaEditText(nota.mensaje || '');
+                                }}
+                              >
+                                Editar
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant={nota.estado === 'hecha' ? 'secondary' : 'success'}
+                                disabled={busy}
+                                onClick={() => void cambiarEstadoTutorNota(nota)}
+                              >
+                                {nota.estado === 'hecha' ? 'Reabrir' : 'Marcar hecha'}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={busy}
+                                onClick={() => void eliminarTutorNota(nota)}
+                              >
+                                Borrar
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="pt-3 border-t border-white/10">
+                  <button
+                    onClick={() => setTutorHistorialOpen((v) => !v)}
+                    className="text-xs font-bold text-slate-300 hover:text-white transition-colors"
+                  >
+                    {tutorHistorialOpen ? 'Ocultar historial' : `Ver historial (${tutorNotasHistorial.length})`}
+                  </button>
+
+                  {tutorHistorialOpen && (
+                    <div className="mt-3 space-y-2 max-h-[240px] overflow-y-auto pr-1">
+                      {tutorNotasHistorial.length === 0 ? (
+                        <div className="text-xs text-slate-400">Sin historial registrado.</div>
+                      ) : (
+                        tutorNotasHistorial.map((item) => {
+                          const before = item?.meta?.before;
+                          const after = item?.meta?.after;
+                          return (
+                            <div key={item.id} className="rounded-lg border border-white/10 bg-white/5 p-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[11px] font-bold text-slate-100">{getNotaAccionLabel(item.accion)}</span>
+                                <span className="text-[10px] text-slate-400">{formatNotaDate(item.created_at)}</span>
+                              </div>
+                              <div className="text-[11px] text-slate-300 mt-0.5">
+                                Empleado: {item.actor_name || 'Usuario'}{item.actor_role ? ` (${item.actor_role})` : ''}
+                              </div>
+                              {item.mensaje && (
+                                <div className="text-xs text-slate-200 mt-1 whitespace-pre-wrap break-words">{item.mensaje}</div>
+                              )}
+                              {(before !== undefined || after !== undefined) && (
+                                <div className="mt-1 text-[11px] text-slate-400">
+                                  {before !== undefined && before !== null ? `Antes: ${String(before)} ` : ''}
+                                  {after !== undefined && after !== null ? `Después: ${String(after)}` : ''}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
 
       </aside>
     </div>

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell } = require('electron');
+const { app, BrowserWindow, Menu, shell, globalShortcut } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
@@ -74,7 +74,13 @@ function createWindow(apiUrl) {
     const devUrl = process.env.ELECTRON_START_URL || 'http://localhost:5173';
     const url = `${devUrl}/?api=${encodeURIComponent(apiUrl)}`;
     mainWindow.loadURL(url);
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    mainWindow.webContents.once('did-finish-load', () => {
+      mainWindow.webContents.openDevTools({ mode: 'right' });
+    });
+    // F12 para abrir/cerrar DevTools
+    globalShortcut.register('F12', () => {
+      if (mainWindow?.webContents) mainWindow.webContents.toggleDevTools();
+    });
   } else {
     const indexPath = path.join(__dirname, '..', 'LInguistika-Studio', 'dist', 'index.html');
     mainWindow.loadFile(indexPath, { query: { api: apiUrl } });

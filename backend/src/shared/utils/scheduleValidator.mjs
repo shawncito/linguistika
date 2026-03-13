@@ -3,6 +3,49 @@ function normalizeDiaKey(value) {
   return String(value).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
+const DIA_CANON_BY_NORM = {
+  lunes: 'Lunes',
+  martes: 'Martes',
+  miercoles: 'Miércoles',
+  jueves: 'Jueves',
+  viernes: 'Viernes',
+  sabado: 'Sábado',
+  domingo: 'Domingo',
+};
+
+function parseScheduleSource(rawSchedule) {
+  if (rawSchedule == null) return null;
+  if (typeof rawSchedule === 'string') {
+    try {
+      return JSON.parse(rawSchedule);
+    } catch {
+      return null;
+    }
+  }
+  return rawSchedule;
+}
+
+function normalizeCursoSchedule(rawSchedule) {
+  const source = parseScheduleSource(rawSchedule);
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    return { schedule: null, hadEntries: false };
+  }
+
+  const entries = Object.entries(source);
+  const normalized = {};
+  for (const [diaRaw, slot] of entries) {
+    const diaNorm = normalizeDiaKey(diaRaw);
+    const diaCanon = DIA_CANON_BY_NORM[diaNorm];
+    if (!diaCanon || !slot || typeof slot !== 'object') continue;
+    normalized[diaCanon] = slot;
+  }
+
+  return {
+    schedule: normalized,
+    hadEntries: entries.length > 0,
+  };
+}
+
 function timeToMinutes(time) {
   const [h, m] = String(time).split(':').map(Number);
   return h * 60 + m;
@@ -20,8 +63,14 @@ export function validateTutorCourseSchedule(tutor, curso) {
     return { compatible: false, issues: ['❌ El tutor no tiene horarios definidos'] };
   }
 
-  const cursoSchedule = curso.dias_schedule;
+  const { schedule: cursoSchedule, hadEntries } = normalizeCursoSchedule(curso.dias_schedule);
   if (!cursoSchedule || Object.keys(cursoSchedule).length === 0) {
+    if (hadEntries) {
+      return {
+        compatible: false,
+        issues: ['❌ El formato de horario del curso es inválido. Vuelve a guardar el horario por día.'],
+      };
+    }
     return { compatible: false, issues: ['❌ El curso no tiene horarios definidos'] };
   }
 

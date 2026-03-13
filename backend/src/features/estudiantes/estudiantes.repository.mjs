@@ -18,6 +18,13 @@ function normalizeStudent(s) {
   };
 }
 
+function isMissingEdadColumnError(error) {
+  const msg = String(error?.message || '').toLowerCase();
+  return String(error?.code || '') === '42703'
+    || (msg.includes('could not find the') && msg.includes('edad') && msg.includes('column'))
+    || (msg.includes('column') && msg.includes('edad') && msg.includes('does not exist'));
+}
+
 export async function findAll() {
   const { data, error } = await supabase
     .from('estudiantes')
@@ -57,9 +64,8 @@ export async function findByNameInBulk(nombre) {
 }
 
 export async function create(payload) {
-  const row = {
+  const baseRow = {
     nombre: payload.nombre,
-    edad: payload.edad || null,
     nivel: payload.nivel || null,
     telefono: payload.telefono || null,
     dias: payload.dias ? JSON.stringify(payload.dias) : null,
@@ -70,7 +76,19 @@ export async function create(payload) {
     created_by: payload.userId,
   };
 
-  const { data, error } = await supabase.from('estudiantes').insert(row).select().single();
+  const withEdad = {
+    ...baseRow,
+    edad: payload.edad || null,
+  };
+
+  let { data, error } = await supabase.from('estudiantes').insert(withEdad).select().single();
+
+  if (error && isMissingEdadColumnError(error)) {
+    const retry = await supabase.from('estudiantes').insert(baseRow).select().single();
+    data = retry.data;
+    error = retry.error;
+  }
+
   if (error) throw error;
   return normalizeStudent(data);
 }
@@ -88,12 +106,25 @@ export async function update(id, payload) {
   if (payload.encargado_id !== undefined) updateData.encargado_id = payload.encargado_id;
   updateData.updated_by = payload.userId;
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('estudiantes')
     .update(updateData)
     .eq('id', id)
     .select()
     .single();
+
+  if (error && payload.edad !== undefined && isMissingEdadColumnError(error)) {
+    const { edad: _omitEdad, ...fallbackData } = updateData;
+    const retry = await supabase
+      .from('estudiantes')
+      .update(fallbackData)
+      .eq('id', id)
+      .select()
+      .single();
+    data = retry.data;
+    error = retry.error;
+  }
+
   if (error) throw error;
   return normalizeStudent(data);
 }

@@ -3,9 +3,107 @@
 // Views continue to import from '../services/api' (the original monolith is preserved).
 // This module is used internally by the per-feature service files under services/api/.
 import axios from 'axios';
+import type { AxiosRequestConfig, AxiosResponse } from 'axios';
 
 const TOKEN_KEY = 'linguistika_token';
 let memoryToken: string | null = null;
+const DEFAULT_GET_CACHE_TTL_MS = 5000;
+const MAX_GET_CACHE_ENTRIES = 150;
+
+type CachedHttpResponse = Pick<AxiosResponse, 'data' | 'status' | 'statusText' | 'headers'>;
+
+const getResponseCache = new Map<string, { expiresAt: number; response: CachedHttpResponse }>();
+const inflightGetRequests = new Map<string, Promise<AxiosResponse>>();
+
+function stableSerialize(value: unknown): unknown {
+  if (value == null) return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof URLSearchParams !== 'undefined' && value instanceof URLSearchParams) return value.toString();
+  if (Array.isArray(value)) return value.map(stableSerialize);
+  if (typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(source).sort()) {
+      out[key] = stableSerialize(source[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function stableStringify(value: unknown): string {
+  try {
+    return JSON.stringify(stableSerialize(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function clearGetCache(): void {
+  getResponseCache.clear();
+}
+
+export function clearHttpGetCache(): void {
+  clearGetCache();
+}
+
+function pruneGetCache(now = Date.now()): void {
+  for (const [key, entry] of getResponseCache) {
+    if (entry.expiresAt <= now) getResponseCache.delete(key);
+  }
+  while (getResponseCache.size > MAX_GET_CACHE_ENTRIES) {
+    const oldestKey = getResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    getResponseCache.delete(oldestKey);
+  }
+}
+
+function buildRequestCacheKey(config: AxiosRequestConfig): string {
+  const method = String(config.method || 'get').toUpperCase();
+  const base = String(config.baseURL || '');
+  const url = String(config.url || '');
+  const fullUrl = /^https?:\/\//i.test(url) || /^file:\/\//i.test(url)
+    ? url
+    : `${base.replace(/\/+$/, '')}/${url.replace(/^\/+/, '')}`;
+  const paramsPart = stableStringify(config.params ?? null);
+  return `${method}|${fullUrl}|${paramsPart}`;
+}
+
+function canCacheGetRequest(config: AxiosRequestConfig): boolean {
+  const method = String(config.method || 'get').toLowerCase();
+  if (method !== 'get') return false;
+
+  const headers = (config.headers || {}) as Record<string, unknown>;
+  const skipHeader = String(headers['x-skip-cache'] ?? headers['X-Skip-Cache'] ?? '').toLowerCase();
+  if (skipHeader === 'true') return false;
+  if ((config as any).__skipCache === true) return false;
+
+  // Evita cachear lecturas de sesión actual para no mostrar permisos obsoletos.
+  const rawUrl = String(config.url || '').toLowerCase();
+  if (rawUrl.includes('/auth/me')) return false;
+
+  return true;
+}
+
+function resolveAdapter(adapterLike: AxiosRequestConfig['adapter'] | undefined): ((config: AxiosRequestConfig) => Promise<AxiosResponse>) | null {
+  if (typeof adapterLike === 'function') {
+    return adapterLike as (config: AxiosRequestConfig) => Promise<AxiosResponse>;
+  }
+
+  const axiosAny = axios as any;
+  if (typeof axiosAny?.getAdapter === 'function') {
+    try {
+      const resolved = axiosAny.getAdapter(adapterLike ?? httpClient.defaults.adapter);
+      if (typeof resolved === 'function') {
+        return resolved as (config: AxiosRequestConfig) => Promise<AxiosResponse>;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
 
@@ -127,11 +225,78 @@ httpClient.interceptors.request.use((config) => {
     delete (config.headers as any)['Content-Type'];
     delete (config.headers as any)['content-type'];
   }
+
+  const method = String(config.method || 'get').toLowerCase();
+  if (method !== 'get') {
+    clearGetCache();
+    return config;
+  }
+
+  if (!canCacheGetRequest(config)) return config;
+
+  const cacheKey = buildRequestCacheKey(config);
+  (config as any).__cacheKey = cacheKey;
+
+  const now = Date.now();
+  const cached = getResponseCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    config.adapter = async (adapterConfig) => ({
+      data: cached.response.data,
+      status: cached.response.status,
+      statusText: cached.response.statusText,
+      headers: cached.response.headers,
+      config: adapterConfig ?? config,
+      request: undefined,
+    });
+    return config;
+  }
+  if (cached && cached.expiresAt <= now) getResponseCache.delete(cacheKey);
+
+  const execute = resolveAdapter(config.adapter ?? httpClient.defaults.adapter);
+  if (!execute) return config;
+
+  config.adapter = async (adapterConfig) => {
+    const sharedRequest = inflightGetRequests.get(cacheKey);
+    if (sharedRequest) {
+      const sharedResponse = await sharedRequest;
+      return { ...sharedResponse, config: adapterConfig };
+    }
+
+    const requestPromise = Promise.resolve(execute(adapterConfig)) as Promise<AxiosResponse>;
+    inflightGetRequests.set(cacheKey, requestPromise);
+
+    try {
+      return await requestPromise;
+    } finally {
+      inflightGetRequests.delete(cacheKey);
+    }
+  };
+
   return config;
 });
 
 httpClient.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    const config = res.config || {};
+    if (canCacheGetRequest(config)) {
+      const cacheKey = (config as any).__cacheKey || buildRequestCacheKey(config);
+      const ttlRaw = Number((config as any).__cacheTtlMs);
+      const ttlMs = Number.isFinite(ttlRaw) ? Math.max(0, ttlRaw) : DEFAULT_GET_CACHE_TTL_MS;
+      if (ttlMs > 0) {
+        getResponseCache.set(cacheKey, {
+          expiresAt: Date.now() + ttlMs,
+          response: {
+            data: res.data,
+            status: res.status,
+            statusText: res.statusText,
+            headers: res.headers,
+          },
+        });
+        pruneGetCache();
+      }
+    }
+    return res;
+  },
   (err) => {
     const status = err?.response?.status;
     const url = String(err?.config?.url || '');
@@ -143,6 +308,7 @@ httpClient.interceptors.response.use(
       (status === 403 && isAuthMe && (msg.includes('no es empleado') || msg.includes('desactivado') || msg))
     ) {
       TokenManager.clearToken();
+      clearGetCache();
       if (typeof window !== 'undefined' && window.location.hash !== '#/login') {
         window.location.hash = '#/login';
       }

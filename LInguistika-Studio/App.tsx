@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, BookOpen, GraduationCap, 
   ClipboardList, CreditCard, Menu, X, Languages, Phone, 
   Search, Bell, User,
-  Plus, Minus, RotateCcw, Upload
+  Plus, Minus, RotateCcw
 } from 'lucide-react';
 
 import Dashboard from './views/Dashboard';
@@ -16,7 +16,6 @@ import Matriculas from './views/Matriculas';
 import Tesoreria from './views/Tesoreria';
 import Login from './views/Login';
 import Empleados from './views/Empleados';
-import Importaciones from './views/Importaciones';
 import { auth } from './services/api';
 import { api } from './services/api';
 import { ActivityLogDrawer, ACTIVITY_LAST_SEEN_KEY } from './components/ActivityLogDrawer';
@@ -32,7 +31,6 @@ const TopNav: React.FC<{ canSeeTesoreria?: boolean }> = ({ canSeeTesoreria = tru
     { name: 'Matrículas', path: '/matriculas', icon: <ClipboardList className="w-4 h-4" /> },
     { name: 'Tesoreria', path: '/pagos', icon: <CreditCard className="w-4 h-4" />, requiresTesoreria: true },
     { name: 'Empleados', path: '/empleados', icon: <Users className="w-4 h-4" /> },
-    { name: 'Importaciones', path: '/importaciones', icon: <Upload className="w-4 h-4" /> },
   ].filter(item => !item.requiresTesoreria || canSeeTesoreria);
 
   return (
@@ -526,7 +524,17 @@ const RequireTesoreria: React.FC<{ children: React.ReactNode }> = ({ children })
   return canSeeTesoreria ? <>{children}</> : <Navigate to="/" replace />;
 };
 
+const RouteTransitionFrame: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const location = useLocation();
+  return (
+    <div key={location.pathname} className="ui-page-transition">
+      {children}
+    </div>
+  );
+};
+
 const ProtectedLayout: React.FC = () => {
+  const location = useLocation();
   const [uiScale, setUiScale] = useState<number>(() => {
     try {
       const raw = localStorage.getItem('ui.scale');
@@ -547,11 +555,13 @@ const ProtectedLayout: React.FC = () => {
   }, [uiScale]);
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#051026]" style={{ zoom: uiScale } as any}>
+    <div className="flex flex-col min-h-screen bg-[#051026]" style={{ zoom: uiScale, ['--ui-scale' as any]: String(uiScale) } as any}>
       <AppHeader uiScale={uiScale} setUiScale={setUiScale} />
       <main className="flex-grow">
-        <div className="p-6 md:p-8 mx-auto w-full animate-in fade-in duration-700">
-          <Outlet />
+        <div className="p-6 md:p-8 mx-auto w-full">
+          <div key={location.pathname} className="ui-page-transition">
+            <Outlet />
+          </div>
         </div>
       </main>
     </div>
@@ -562,7 +572,7 @@ const App: React.FC = () => {
   return (
     <HashRouter>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route path="/login" element={<RouteTransitionFrame><Login /></RouteTransitionFrame>} />
         <Route
           element={
             <RequireAuth>
@@ -577,7 +587,6 @@ const App: React.FC = () => {
           <Route path="/matriculas" element={<Matriculas />} />
           <Route path="/pagos" element={<RequireTesoreria><Tesoreria /></RequireTesoreria>} />
           <Route path="/empleados" element={<Empleados />} />
-          <Route path="/importaciones" element={<Importaciones />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

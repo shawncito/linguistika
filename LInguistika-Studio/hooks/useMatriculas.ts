@@ -13,13 +13,16 @@ function extractMessage(error: unknown): string {
 }
 
 /**
- * Gestiona matrículas con operaciones CRUD y validación de compatibilidad tutor-curso.
+ * Gestiona matrículas con operaciones CRUD.
  *
  * @example
- * const { matriculas, loading, createMatricula, deleteMatricula, validateTutorCourse } = useMatriculas();
+ * const { matriculas, loading, createMatricula, deleteMatricula } = useMatriculas();
  */
 export function useMatriculas() {
-  const { data: matriculas, loading, error, refresh } = useAsyncList<Matricula>(matriculasService.getAll, { realtimeTable: ['matriculas', 'matriculas_grupo'] });
+  const { data: matriculas, loading, error, refresh } = useAsyncList<Matricula>(matriculasService.getAll, {
+    realtimeTable: ['matriculas', 'matriculas_grupo'],
+    cacheKey: 'matriculas:list',
+  });
 
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
@@ -87,13 +90,6 @@ export function useMatriculas() {
     }
   }, [refresh]);
 
-  const validateTutorCourse = useCallback(async (
-    tutor_id: number,
-    curso_id: number
-  ): Promise<{ compatible: boolean; issues: string[] }> => {
-    return matriculasService.validateTutorCourse(tutor_id, curso_id);
-  }, []);
-
   return {
     matriculas,
     loading,
@@ -104,7 +100,6 @@ export function useMatriculas() {
     updateMatricula,
     deleteMatricula,
     createFromBulkGrupo,
-    validateTutorCourse,
     refresh,
   };
 }

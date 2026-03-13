@@ -60,3 +60,23 @@ export function cancelarSesionDia(matricula_id, fecha, motivo) {
 export function actualizarEstadoSesion(matricula_id, fecha, datos) {
   return repo.actualizarEstadoSesion(matricula_id, fecha, datos);
 }
+
+export function listTutorNotas(tutorId, query = {}) {
+  return repo.listTutorNotas(tutorId, { historyLimit: query?.history_limit });
+}
+
+export function createTutorNota({ tutorId, mensaje, actor }) {
+  return repo.createTutorNota({ tutorId, mensaje, actor });
+}
+
+export function updateTutorNotaTexto({ tutorId, notaId, mensaje, actor }) {
+  return repo.updateTutorNotaTexto({ tutorId, notaId, mensaje, actor });
+}
+
+export function setTutorNotaEstado({ tutorId, notaId, estado, actor }) {
+  return repo.setTutorNotaEstado({ tutorId, notaId, estado, actor });
+}
+
+export function deleteTutorNota({ tutorId, notaId, actor }) {
+  return repo.deleteTutorNota({ tutorId, notaId, actor });
+}

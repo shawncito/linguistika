@@ -31,6 +31,8 @@ export async function findById(id) {
 
 export async function create(payload) {
   const { nombre, email, telefono, especialidad, color, dias_turno, dias_horarios, es_especializado, niveles_apto, tarifa_por_hora, userId } = payload;
+  const tarifa = Number(tarifa_por_hora);
+  const tarifaSafe = Number.isFinite(tarifa) ? tarifa : 0;
 
   const nombreKey = normalizeName(nombre);
   const like = escapeLike(nombreKey);
@@ -54,7 +56,7 @@ export async function create(payload) {
     dias_horarios: dias_horarios ? JSON.stringify(dias_horarios) : null,
     es_especializado: !!es_especializado,
     niveles_apto: niveles_apto || [],
-    tarifa_por_hora: tarifa_por_hora || null,
+    tarifa_por_hora: tarifaSafe,
     created_by: userId,
     estado: true,
   };
@@ -85,7 +87,10 @@ export async function update(id, payload) {
   if (fields.dias_horarios !== undefined) updateData.dias_horarios = fields.dias_horarios ? JSON.stringify(fields.dias_horarios) : null;
   if (fields.es_especializado !== undefined) updateData.es_especializado = !!fields.es_especializado;
   if (fields.niveles_apto !== undefined) updateData.niveles_apto = fields.niveles_apto || [];
-  if (fields.tarifa_por_hora !== undefined) updateData.tarifa_por_hora = fields.tarifa_por_hora;
+  if (fields.tarifa_por_hora !== undefined) {
+    const tarifa = Number(fields.tarifa_por_hora);
+    updateData.tarifa_por_hora = Number.isFinite(tarifa) ? tarifa : 0;
+  }
   if (fields.estado !== undefined) updateData.estado = fields.estado === 1 || fields.estado === true;
 
   const { data, error } = await supabase

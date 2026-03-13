@@ -105,4 +105,33 @@ export const dashboardService = {
     const res = await httpClient.get('/dashboard/metricas', { params });
     return res.data as any;
   },
+
+  getTutorNotas: async (tutorId: number, params?: { history_limit?: number }): Promise<{ notas: any[]; historial: any[] }> => {
+    const res = await httpClient.get(`/dashboard/tutores/${tutorId}/notas`, { params });
+    const data = res.data as any;
+    return {
+      notas: Array.isArray(data?.notas) ? data.notas : [],
+      historial: Array.isArray(data?.historial) ? data.historial : [],
+    };
+  },
+
+  createTutorNota: async (tutorId: number, payload: { mensaje: string }): Promise<any> => {
+    const res = await httpClient.post(`/dashboard/tutores/${tutorId}/notas`, payload);
+    return res.data as any;
+  },
+
+  updateTutorNota: async (tutorId: number, notaId: number, payload: { mensaje: string }): Promise<any> => {
+    const res = await httpClient.patch(`/dashboard/tutores/${tutorId}/notas/${notaId}`, payload);
+    return res.data as any;
+  },
+
+  setTutorNotaEstado: async (tutorId: number, notaId: number, payload: { estado: 'pendiente' | 'hecha' }): Promise<any> => {
+    const res = await httpClient.patch(`/dashboard/tutores/${tutorId}/notas/${notaId}/estado`, payload);
+    return res.data as any;
+  },
+
+  deleteTutorNota: async (tutorId: number, notaId: number): Promise<any> => {
+    const res = await httpClient.delete(`/dashboard/tutores/${tutorId}/notas/${notaId}`);
+    return res.data as any;
+  },
 };

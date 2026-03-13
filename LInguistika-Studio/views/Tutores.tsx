@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useLocation } from "react-router-dom";
 import { usePersistentState } from "../lib/usePersistentState";
 import { useTutores } from "../hooks";
@@ -265,10 +266,10 @@ const Tutores: React.FC = () => {
     try {
       const dataToSubmit = {
         nombre: formData.nombre.trim(),
-        email: formData.email.trim() || null,
+        email: formData.email.trim() || undefined,
         telefono: formData.telefono.trim(),
         especialidad: (formData.especialidades || []).join(", "),
-        color: formData.color || null,
+        color: formData.color || undefined,
         horario_tipo: "personalizado" as "personalizado" | "predefinido",
         dias_horarios: formData.dias_horarios,
         es_especializado: !!formData.es_especializado,
@@ -347,7 +348,7 @@ const Tutores: React.FC = () => {
 
   return (
     <div className="flex gap-6">
-      <aside className="w-[30%] space-y-6 sticky top-24 self-start">
+      <aside className="w-[30%] space-y-6 sticky top-24 self-start page-sidebar-scroll">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -767,7 +768,7 @@ const Tutores: React.FC = () => {
         </section>
       </div>
 
-      {showModal && (
+      {showModal && typeof document !== 'undefined' && createPortal((
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto border-white/10">
             <CardHeader className="border-b border-white/10 flex justify-between items-start">
@@ -1027,7 +1028,7 @@ const Tutores: React.FC = () => {
             </form>
           </Card>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 };

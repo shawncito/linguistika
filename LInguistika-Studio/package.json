@@ -12,13 +12,18 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.91.1",
     "axios": "^1.7.9",
+    "file-saver": "^2.0.5",
+    "jspdf": "^4.2.0",
+    "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.562.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
-    "react-router-dom": "^7.12.0"
+    "react-router-dom": "^7.12.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",
+    "@types/file-saver": "^2.0.7",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.13",
     "@types/react-dom": "^19.2.3",

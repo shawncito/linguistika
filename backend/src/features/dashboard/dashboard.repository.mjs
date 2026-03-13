@@ -1,6 +1,84 @@
-import { supabase } from '../../shared/config/supabaseClient.mjs';
+import { supabase, supabaseAdmin } from '../../shared/config/supabaseClient.mjs';
 
 const diasSemanaES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+const notasDb = supabaseAdmin ?? supabase;
+const TUTOR_NOTA_STATES = new Set(['pendiente', 'hecha']);
+
+function sanitizeTutorNoteMessage(value) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) throw new Error('El mensaje de la nota es requerido');
+  return text.slice(0, 5000);
+}
+
+function summarizeNoteText(text) {
+  const clean = String(text || '').trim();
+  if (!clean) return '(sin texto)';
+  return clean.length > 90 ? `${clean.slice(0, 90)}...` : clean;
+}
+
+async function registrarHistorialTutorNota({
+  notaId,
+  tutorId,
+  accion,
+  mensaje,
+  estado,
+  actor,
+  meta,
+}) {
+  const { error } = await notasDb
+    .from('tutor_notas_historial')
+    .insert({
+      nota_id: Number(notaId),
+      tutor_id: Number(tutorId),
+      accion,
+      mensaje,
+      estado: estado ?? null,
+      actor_user_id: actor?.userId ?? null,
+      actor_name: actor?.name ?? actor?.email ?? null,
+      actor_role: actor?.role ?? null,
+      meta: meta ?? {},
+    });
+  if (error) throw error;
+}
+
+async function registrarActividadTutorNota({
+  action,
+  summary,
+  tutorId,
+  noteId,
+  actor,
+  meta,
+}) {
+  if (!supabaseAdmin) return;
+  const route = `/api/v1/dashboard/tutores/${tutorId}/notas${noteId ? `/${noteId}` : ''}`;
+  const method = action === 'create' ? 'POST' : action === 'delete' ? 'DELETE' : 'PATCH';
+  const entityId = noteId ? String(noteId) : String(tutorId);
+  try {
+    await supabaseAdmin
+      .from('activity_logs')
+      .insert({
+        actor_user_id: actor?.userId ?? null,
+        actor_email: actor?.email ?? null,
+        actor_role: actor?.role ?? null,
+        actor_name: actor?.name ?? null,
+        action,
+        summary,
+        entity_type: 'tutor_nota',
+        entity_id: entityId,
+        method,
+        route,
+        status: 200,
+        request_id: null,
+        meta: {
+          tutor_id: Number(tutorId),
+          nota_id: noteId ? Number(noteId) : null,
+          ...(meta || {}),
+        },
+      });
+  } catch (error) {
+    console.warn('TutorNotas activity log error:', error?.message || error);
+  }
+}
 
 function safeJsonParse(value) {
   try {
@@ -179,7 +257,7 @@ export async function getEstadosClasesRango({ fecha_inicio, fecha_fin }) {
       .gte('fecha', fecha_inicio).lte('fecha', fecha_fin)
       .not('matricula_id', 'is', null),
     supabase.from('sesiones_clases')
-      .select('fecha,matricula_id,estado')
+      .select('fecha,matricula_id,estado,hora_inicio,hora_fin,duracion_horas')
       .gte('fecha', fecha_inicio).lte('fecha', fecha_fin)
       .not('matricula_id', 'is', null),
   ]);
@@ -214,7 +292,7 @@ export async function getEstadosClasesRango({ fecha_inicio, fecha_fin }) {
     const key = `${fecha}|${s.matricula_id}`;
     if (clasesKeys.has(key)) continue;
     const estado_sesion = s.estado === 'dada' ? 'dada' : s.estado === 'cancelada' ? 'cancelada' : null;
-    if (estado_sesion) result.push({ fecha, matricula_id: s.matricula_id, avisado: false, confirmado: false, estado_sesion });
+    if (estado_sesion) result.push({ fecha, matricula_id: s.matricula_id, avisado: false, confirmado: false, estado_sesion, hora_inicio: s.hora_inicio || null, hora_fin: s.hora_fin || null, duracion_horas: s.duracion_horas || null });
   }
   return result;
 }
@@ -394,6 +472,256 @@ export async function actualizarEstadoSesion(matricula_id, fecha, { avisado, con
     if (error) throw error;
   }
   return { message: 'Estado actualizado.', matricula_id, fecha, ...updates };
+}
+
+export async function listTutorNotas(tutorId, { historyLimit = 120 } = {}) {
+  const tutorIdNum = Number(tutorId);
+  if (!Number.isFinite(tutorIdNum) || tutorIdNum <= 0) throw new Error('Tutor inválido');
+
+  const limit = Number.isFinite(Number(historyLimit))
+    ? Math.min(Math.max(Number(historyLimit), 20), 300)
+    : 120;
+
+  const [notasRes, historialRes] = await Promise.all([
+    notasDb
+      .from('tutor_notas')
+      .select('id,tutor_id,mensaje,estado,creado_por,creado_por_nombre,actualizado_por,actualizado_por_nombre,eliminado_por,eliminado_por_nombre,hecha_en,eliminada_en,created_at,updated_at')
+      .eq('tutor_id', tutorIdNum)
+      .neq('estado', 'eliminada')
+      .order('created_at', { ascending: true }),
+    notasDb
+      .from('tutor_notas_historial')
+      .select('id,nota_id,tutor_id,accion,mensaje,estado,actor_user_id,actor_name,actor_role,created_at,meta')
+      .eq('tutor_id', tutorIdNum)
+      .order('created_at', { ascending: false })
+      .limit(limit),
+  ]);
+
+  if (notasRes.error) throw notasRes.error;
+  if (historialRes.error) throw historialRes.error;
+
+  return {
+    notas: notasRes.data ?? [],
+    historial: historialRes.data ?? [],
+  };
+}
+
+export async function createTutorNota({ tutorId, mensaje, actor }) {
+  const tutorIdNum = Number(tutorId);
+  if (!Number.isFinite(tutorIdNum) || tutorIdNum <= 0) throw new Error('Tutor inválido');
+  const mensajeClean = sanitizeTutorNoteMessage(mensaje);
+
+  const { data: inserted, error: insertError } = await notasDb
+    .from('tutor_notas')
+    .insert({
+      tutor_id: tutorIdNum,
+      mensaje: mensajeClean,
+      estado: 'pendiente',
+      creado_por: actor?.userId ?? null,
+      creado_por_nombre: actor?.name ?? actor?.email ?? null,
+      actualizado_por: actor?.userId ?? null,
+      actualizado_por_nombre: actor?.name ?? actor?.email ?? null,
+      hecha_en: null,
+      eliminada_en: null,
+      updated_at: new Date().toISOString(),
+    })
+    .select('id,tutor_id,mensaje,estado,creado_por,creado_por_nombre,actualizado_por,actualizado_por_nombre,eliminado_por,eliminado_por_nombre,hecha_en,eliminada_en,created_at,updated_at')
+    .single();
+  if (insertError) throw insertError;
+
+  await registrarHistorialTutorNota({
+    notaId: inserted.id,
+    tutorId: tutorIdNum,
+    accion: 'crear',
+    mensaje: inserted.mensaje,
+    estado: inserted.estado,
+    actor,
+    meta: { before: null, after: inserted.mensaje },
+  });
+
+  await registrarActividadTutorNota({
+    action: 'create',
+    summary: `Registró nota interna sobre tutor #${tutorIdNum}: ${summarizeNoteText(inserted.mensaje)}`,
+    tutorId: tutorIdNum,
+    noteId: inserted.id,
+    actor,
+    meta: {
+      estado: inserted.estado,
+      mensaje: inserted.mensaje,
+    },
+  });
+
+  return inserted;
+}
+
+export async function updateTutorNotaTexto({ tutorId, notaId, mensaje, actor }) {
+  const tutorIdNum = Number(tutorId);
+  const notaIdNum = Number(notaId);
+  if (!Number.isFinite(tutorIdNum) || tutorIdNum <= 0) throw new Error('Tutor inválido');
+  if (!Number.isFinite(notaIdNum) || notaIdNum <= 0) throw new Error('Nota inválida');
+
+  const mensajeClean = sanitizeTutorNoteMessage(mensaje);
+
+  const { data: current, error: currentError } = await notasDb
+    .from('tutor_notas')
+    .select('id,tutor_id,mensaje,estado')
+    .eq('id', notaIdNum)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) throw new Error('Nota no encontrada');
+  if (Number(current.tutor_id) !== tutorIdNum) throw new Error('La nota no pertenece al tutor seleccionado');
+  if (current.estado === 'eliminada') throw new Error('No se puede editar una nota eliminada');
+
+  const { data: updated, error: updateError } = await notasDb
+    .from('tutor_notas')
+    .update({
+      mensaje: mensajeClean,
+      actualizado_por: actor?.userId ?? null,
+      actualizado_por_nombre: actor?.name ?? actor?.email ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', notaIdNum)
+    .select('id,tutor_id,mensaje,estado,creado_por,creado_por_nombre,actualizado_por,actualizado_por_nombre,eliminado_por,eliminado_por_nombre,hecha_en,eliminada_en,created_at,updated_at')
+    .single();
+  if (updateError) throw updateError;
+
+  await registrarHistorialTutorNota({
+    notaId: notaIdNum,
+    tutorId: tutorIdNum,
+    accion: 'editar',
+    mensaje: updated.mensaje,
+    estado: updated.estado,
+    actor,
+    meta: { before: current.mensaje, after: updated.mensaje },
+  });
+
+  await registrarActividadTutorNota({
+    action: 'update',
+    summary: `Actualizó nota interna #${notaIdNum} del tutor #${tutorIdNum}`,
+    tutorId: tutorIdNum,
+    noteId: notaIdNum,
+    actor,
+    meta: {
+      before: current.mensaje,
+      after: updated.mensaje,
+    },
+  });
+
+  return updated;
+}
+
+export async function setTutorNotaEstado({ tutorId, notaId, estado, actor }) {
+  const tutorIdNum = Number(tutorId);
+  const notaIdNum = Number(notaId);
+  const estadoFinal = String(estado || '').trim().toLowerCase();
+  if (!Number.isFinite(tutorIdNum) || tutorIdNum <= 0) throw new Error('Tutor inválido');
+  if (!Number.isFinite(notaIdNum) || notaIdNum <= 0) throw new Error('Nota inválida');
+  if (!TUTOR_NOTA_STATES.has(estadoFinal)) throw new Error('Estado inválido');
+
+  const { data: current, error: currentError } = await notasDb
+    .from('tutor_notas')
+    .select('id,tutor_id,mensaje,estado')
+    .eq('id', notaIdNum)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) throw new Error('Nota no encontrada');
+  if (Number(current.tutor_id) !== tutorIdNum) throw new Error('La nota no pertenece al tutor seleccionado');
+  if (current.estado === 'eliminada') throw new Error('No se puede actualizar una nota eliminada');
+
+  const accion = estadoFinal === 'hecha' ? 'marcar_hecha' : 'reabrir';
+
+  const { data: updated, error: updateError } = await notasDb
+    .from('tutor_notas')
+    .update({
+      estado: estadoFinal,
+      hecha_en: estadoFinal === 'hecha' ? new Date().toISOString() : null,
+      actualizado_por: actor?.userId ?? null,
+      actualizado_por_nombre: actor?.name ?? actor?.email ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', notaIdNum)
+    .select('id,tutor_id,mensaje,estado,creado_por,creado_por_nombre,actualizado_por,actualizado_por_nombre,eliminado_por,eliminado_por_nombre,hecha_en,eliminada_en,created_at,updated_at')
+    .single();
+  if (updateError) throw updateError;
+
+  await registrarHistorialTutorNota({
+    notaId: notaIdNum,
+    tutorId: tutorIdNum,
+    accion,
+    mensaje: updated.mensaje,
+    estado: updated.estado,
+    actor,
+    meta: { before: current.estado, after: updated.estado },
+  });
+
+  await registrarActividadTutorNota({
+    action: 'update',
+    summary: estadoFinal === 'hecha'
+      ? `Marcó como hecha la nota interna #${notaIdNum} (tutor #${tutorIdNum})`
+      : `Reabrió la nota interna #${notaIdNum} (tutor #${tutorIdNum})`,
+    tutorId: tutorIdNum,
+    noteId: notaIdNum,
+    actor,
+    meta: {
+      before: current.estado,
+      after: updated.estado,
+    },
+  });
+
+  return updated;
+}
+
+export async function deleteTutorNota({ tutorId, notaId, actor }) {
+  const tutorIdNum = Number(tutorId);
+  const notaIdNum = Number(notaId);
+  if (!Number.isFinite(tutorIdNum) || tutorIdNum <= 0) throw new Error('Tutor inválido');
+  if (!Number.isFinite(notaIdNum) || notaIdNum <= 0) throw new Error('Nota inválida');
+
+  const { data: current, error: currentError } = await notasDb
+    .from('tutor_notas')
+    .select('id,tutor_id,mensaje,estado')
+    .eq('id', notaIdNum)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) throw new Error('Nota no encontrada');
+  if (Number(current.tutor_id) !== tutorIdNum) throw new Error('La nota no pertenece al tutor seleccionado');
+
+  if (current.estado !== 'eliminada') {
+    const { error: updateError } = await notasDb
+      .from('tutor_notas')
+      .update({
+        estado: 'eliminada',
+        eliminada_en: new Date().toISOString(),
+        eliminado_por: actor?.userId ?? null,
+        eliminado_por_nombre: actor?.name ?? actor?.email ?? null,
+        actualizado_por: actor?.userId ?? null,
+        actualizado_por_nombre: actor?.name ?? actor?.email ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', notaIdNum);
+    if (updateError) throw updateError;
+
+    await registrarHistorialTutorNota({
+      notaId: notaIdNum,
+      tutorId: tutorIdNum,
+      accion: 'eliminar',
+      mensaje: current.mensaje,
+      estado: 'eliminada',
+      actor,
+      meta: { before: current.estado, after: 'eliminada' },
+    });
+
+    await registrarActividadTutorNota({
+      action: 'delete',
+      summary: `Eliminó nota interna #${notaIdNum} del tutor #${tutorIdNum}`,
+      tutorId: tutorIdNum,
+      noteId: notaIdNum,
+      actor,
+      meta: { mensaje: current.mensaje },
+    });
+  }
+
+  return { ok: true, nota_id: notaIdNum };
 }
 
 export async function getEstadisticasGeneral() {

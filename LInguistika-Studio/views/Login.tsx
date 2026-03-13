@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import { Lock, Mail, X } from 'lucide-react';
+import { Eye, EyeOff, Lock, Mail, X } from 'lucide-react';
 import { api, auth } from '../services/api';
 import { Button, Card, Input, Label, Select } from '../components/UI';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
-  const [email, setEmail] = useState('admin@linguistika.com');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sad, setSad] = useState(false);
@@ -404,7 +405,7 @@ const Login: React.FC = () => {
                         type="email"
                         value={useCustomEmail ? customEmail : email}
                         onChange={(e) => useCustomEmail ? setCustomEmail(e.target.value) : setEmail(e.target.value)}
-                        placeholder="admin@linguistika.com"
+                        placeholder="tu@correo.com"
                         className="pl-11 bg-white/5 border-white/10 text-white placeholder:text-slate-500"
                         autoComplete="email"
                       />
@@ -433,13 +434,21 @@ const Login: React.FC = () => {
                 <div className="relative">
                   <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <Input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="pl-11 bg-white/5 border-white/10 text-white placeholder:text-slate-500"
+                    className="pl-11 pr-12 bg-white/5 border-white/10 text-white placeholder:text-slate-500"
                     autoComplete="current-password"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-400 hover:text-white transition"
+                    aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
 

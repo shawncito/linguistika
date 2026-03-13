@@ -1,5 +1,6 @@
 
 import React from 'react';
+import { createPortal } from 'react-dom';
 
 // --- BUTTON (Material Style) ---
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -14,7 +15,7 @@ export const Button: React.FC<ButtonProps> = ({
   className = '', 
   ...props 
 }) => {
-  const base = "inline-flex items-center justify-center rounded-2xl text-sm font-semibold transition-all duration-200 active:scale-95 disabled:opacity-50 select-none shadow-lg shadow-black/30 hover:shadow-cyan-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00AEEF]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#051026]";
+  const base = "inline-flex items-center justify-center rounded-2xl text-sm font-semibold transition-all duration-200 active:scale-95 disabled:opacity-50 select-none shadow-lg shadow-black/30 hover:shadow-cyan-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00AEEF]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#051026] motion-reduce:transition-none motion-reduce:transform-none";
 
   const variants = {
     primary: "bg-[#00AEEF] text-[#051026] hover:bg-[#00AEEF]/85",
@@ -43,7 +44,7 @@ export const Button: React.FC<ButtonProps> = ({
 export const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ children, className = "", ...props }) => (
   <div
     {...props}
-    className={`rounded-3xl border border-white/8 bg-[#0F2445] shadow-[0_30px_90px_-45px_rgba(0,0,0,0.8)] hover:shadow-cyan-500/15 transition-all duration-300 ${className}`}
+    className={`rounded-3xl border border-white/8 bg-[#0F2445] shadow-[0_30px_90px_-45px_rgba(0,0,0,0.8)] hover:shadow-cyan-500/15 transition-all duration-300 motion-reduce:animate-none ${className}`}
   >
     {children}
   </div>
@@ -139,7 +140,7 @@ export const TableBody: React.FC<{ children: React.ReactNode }> = ({ children })
 );
 
 export const TableRow: React.FC<React.HTMLAttributes<HTMLTableRowElement>> = ({ children, className = "", ...props }) => (
-  <tr className={`bg-[#0F2445] rounded-2xl shadow-lg shadow-black/30 border border-white/10 hover:border-[#00AEEF]/40 transition-colors ${className}`} {...props}>{children}</tr>
+  <tr className={`bg-[#0F2445] rounded-2xl shadow-lg shadow-black/30 border border-white/10 hover:border-[#00AEEF]/40 transition-colors motion-reduce:animate-none ${className}`} {...props}>{children}</tr>
 );
 
 export const TableHead: React.FC<React.ThHTMLAttributes<HTMLTableCellElement>> = ({ children, className = "", ...props }) => (
@@ -174,29 +175,49 @@ export const Dialog: React.FC<{
   showBackdrop = true,
   position = 'center',
 }) => {
-  if (!isOpen) return null;
+  const [rendered, setRendered] = React.useState(isOpen);
+  const [visible, setVisible] = React.useState(isOpen);
 
-  // Determinar la posición del modal
+  React.useEffect(() => {
+    let closeTimer: number | null = null;
+    let frame: number | null = null;
+
+    if (isOpen) {
+      setRendered(true);
+      frame = window.requestAnimationFrame(() => setVisible(true));
+    } else {
+      setVisible(false);
+      closeTimer = window.setTimeout(() => setRendered(false), 180);
+    }
+
+    return () => {
+      if (closeTimer) window.clearTimeout(closeTimer);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [isOpen]);
+
+  if (!rendered) return null;
+
   const positionClasses = {
-    left: 'left-2 top-1/2 -translate-y-1/2',
-    center: 'left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2',
-    right: 'right-2 top-1/2 -translate-y-1/2',
+    left: 'items-center justify-start',
+    center: 'items-center justify-center',
+    right: 'items-center justify-end',
   };
 
-  return (
+  const dialogMarkup = (
     <>
       {showBackdrop && (
         <div 
-          className="fixed inset-0 bg-[#051026]/70 backdrop-blur-sm transition-opacity" 
+          className={`fixed inset-0 bg-[#051026]/70 backdrop-blur-sm transition-opacity duration-200 motion-reduce:transition-none ${visible ? 'opacity-100' : 'opacity-0'}`} 
           style={{ zIndex }} 
           onClick={onClose} 
         />
       )}
       <div 
-        className={`fixed w-full ${maxWidthClass} ${positionClasses[position]} p-4 ${containerClassName}`}
+        className={`fixed inset-0 flex p-4 pointer-events-none ${positionClasses[position]} ${containerClassName}`}
         style={{ zIndex: zIndex + 1 }}
       >
-        <div className={`relative bg-[#0F2445] rounded-3xl border border-white/10 shadow-2xl shadow-black/40 animate-in fade-in zoom-in duration-300 overflow-hidden max-h-[calc(100vh-2rem)] flex flex-col ${contentClassName}`}>
+        <div className={`relative w-full ${maxWidthClass} pointer-events-auto bg-[#0F2445] rounded-3xl border border-white/10 shadow-2xl shadow-black/40 overflow-hidden max-h-[calc(100vh-2rem)] flex flex-col transition-all duration-200 motion-reduce:transition-none ${visible ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-2 scale-[0.98] pointer-events-none'} ${contentClassName}`}>
           <div className="h-1 bg-[#FFC800]" />
           <div className="flex items-center justify-between p-6 border-b border-white/10 bg-white/5">
             <h2 className="text-xl font-bold text-white">{title}</h2>
@@ -216,4 +237,10 @@ export const Dialog: React.FC<{
       </div>
     </>
   );
+
+  if (typeof document === 'undefined') {
+    return dialogMarkup;
+  }
+
+  return createPortal(dialogMarkup, document.body);
 };

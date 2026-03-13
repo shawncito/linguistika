@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
-import { supabaseClient } from '../lib/supabaseClient';
 import { usePersistentState } from '../lib/usePersistentState';
 import { useEstudiantes } from '../hooks';
 import { estudiantesService } from '../services/api/estudiantesService';
 import { bulkService } from '../services/api/bulkService';
 import { cursosService } from '../services/api/cursosService';
+import { matriculasService } from '../services/api/matriculasService';
 import { tutoresService } from '../services/api/tutoresService';
 import { Estudiante } from '../types';
 import { Button, Card, CardHeader, CardTitle, CardDescription, CardContent, Input, Label, Select, Badge, Dialog, Table, TableHead, TableHeader, TableRow, TableCell, TableBody } from '../components/UI';
@@ -106,6 +107,7 @@ const Estudiantes: React.FC = () => {
   const { estudiantes, loading, createEstudiante, updateEstudiante, deleteEstudiante, refresh } = useEstudiantes();
   const [bulkEstudiantes, setBulkEstudiantes] = useState<BulkEstudiante[]>([]);
   const [bulkGrupos, setBulkGrupos] = useState<BulkGrupo[]>([]);
+  const [matriculasActivas, setMatriculasActivas] = useState<any[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -140,6 +142,14 @@ const Estudiantes: React.FC = () => {
     {
       version: 1,
       validate: (v: unknown): v is 'todos' | 'activos' | 'inactivos' => v === 'todos' || v === 'activos' || v === 'inactivos',
+    }
+  );
+  const [matriculaFiltro, setMatriculaFiltro] = usePersistentState<'todos' | 'con_activa' | 'sin_activa'>(
+    'ui:estudiantes:matriculaFiltro',
+    'todos',
+    {
+      version: 1,
+      validate: (v: unknown): v is 'todos' | 'con_activa' | 'sin_activa' => v === 'todos' || v === 'con_activa' || v === 'sin_activa',
     }
   );
   const [viewMode, setViewMode] = usePersistentState<'tabla' | 'tarjetas'>('ui:estudiantes:viewMode', 'tabla', {
@@ -230,9 +240,28 @@ const Estudiantes: React.FC = () => {
     setBulkGrupos(gruposData as any);
   }, []);
 
+  const loadMatriculasActivas = useCallback(async () => {
+    const rows = await matriculasService.getAll();
+    setMatriculasActivas((rows as any[]).filter((m) => m?.estado !== 0));
+  }, []);
+
   useEffect(() => {
     loadBulkData();
   }, [loadBulkData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadMatriculasActivas()
+      .then(() => {
+        if (cancelled) return;
+      })
+      .catch(() => {
+        if (!cancelled) setMatriculasActivas([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadMatriculasActivas]);
 
   // Open detail if URL has ?open=<id>
   const location = useLocation();
@@ -429,33 +458,18 @@ const Estudiantes: React.FC = () => {
     }
   };
 
-  // Suscripción en tiempo real a cambios en estudiantes
-  useEffect(() => {
-    if (!supabaseClient) return;
-    const channel = supabaseClient
-      .channel('realtime-estudiantes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'estudiantes' }, () => {
-        refresh();
-        loadBulkData();
-      })
-      .subscribe();
-
-    return () => {
-      supabaseClient.removeChannel(channel);
-    };
-  }, [loadBulkData, refresh]);
-
   // Recargar datos cuando la pestaña se vuelve visible
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         refresh();
         loadBulkData();
+        loadMatriculasActivas();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [loadBulkData, refresh]);
+  }, [loadBulkData, loadMatriculasActivas, refresh]);
 
   const validateEmail = (email: string): boolean => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -628,6 +642,27 @@ const Estudiantes: React.FC = () => {
     return [...normal, ...bulk];
   }, [estudiantes, bulkEstudiantes]);
 
+  const activeStudentIds = useMemo(() => {
+    const set = new Set<string>();
+    matriculasActivas.forEach((m: any) => {
+      if (m?.estudiante_id != null) set.add(String(m.estudiante_id));
+      const ids = Array.isArray(m?.estudiante_ids) ? (m.estudiante_ids as number[]) : [];
+      ids.forEach((id) => set.add(String(id)));
+    });
+    return set;
+  }, [matriculasActivas]);
+
+  const activeGroupIds = useMemo(() => {
+    const set = new Set<string>();
+    bulkGrupos.forEach((g) => {
+      const estado = String(g.estado || '').trim().toLowerCase();
+      if (!estado || estado === 'activa' || estado === 'activo') {
+        set.add(String(g.id));
+      }
+    });
+    return set;
+  }, [bulkGrupos]);
+
   const filteredEstudiantes = useMemo(() => {
     const filtered = unifiedStudents.filter((e) => {
       const matchesSearch = `${e.nombre} ${e.nombre_encargado ?? ''} ${e.email_encargado ?? ''} ${e.telefono_encargado ?? ''}`
@@ -645,7 +680,18 @@ const Estudiantes: React.FC = () => {
         : grupoFiltro === 'sin_grupo'
           ? !e.matricula_grupo_id
           : String(e.matricula_grupo_id ?? '') === String(grupoFiltro);
-      return matchesSearch && matchesGrado && matchesEstado && matchesGrupo;
+
+      const hasActiveEnrollment = e.kind === 'bulk'
+        ? !!e.matricula_grupo_id && activeGroupIds.has(String(e.matricula_grupo_id))
+        : activeStudentIds.has(String(e.id));
+
+      const matchesMatricula = matriculaFiltro === 'todos'
+        ? true
+        : matriculaFiltro === 'con_activa'
+          ? hasActiveEnrollment
+          : !hasActiveEnrollment;
+
+      return matchesSearch && matchesGrado && matchesEstado && matchesGrupo && matchesMatricula;
     });
 
     const compareText = (a: string | null | undefined, b: string | null | undefined) =>
@@ -690,7 +736,7 @@ const Estudiantes: React.FC = () => {
     });
 
     return sorted;
-  }, [unifiedStudents, bulkGrupos, search, gradoFiltro, estadoFiltro, grupoFiltro, sortMode]);
+  }, [unifiedStudents, bulkGrupos, search, gradoFiltro, estadoFiltro, grupoFiltro, matriculaFiltro, activeGroupIds, activeStudentIds, sortMode]);
 
   const selectedGrupoAdmin = useMemo(() => {
     if (!grupoAdminId) return null;
@@ -876,6 +922,11 @@ const Estudiantes: React.FC = () => {
     return { total, activos, inactivos };
   }, [filteredEstudiantes]);
 
+  const isInitialLoading = loading
+    && unifiedStudents.length === 0
+    && bulkEstudiantes.length === 0
+    && bulkGrupos.length === 0;
+
   const getGrupoLabel = (e: UnifiedStudent) => {
     const gid = String(e.matricula_grupo_id ?? '');
     return gid ? (grupoNameById.get(gid) || `Grupo #${gid}`) : 'Sin grupo';
@@ -892,7 +943,7 @@ const Estudiantes: React.FC = () => {
               {est.nombre.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <CardTitle className="text-lg text-white truncate">{est.nombre}</CardTitle>
+              <CardTitle className="text-lg text-white whitespace-normal break-words leading-tight">{est.nombre}</CardTitle>
               <div className="flex flex-wrap items-center gap-2 mt-2">
                 <Badge variant="secondary" className="font-bold" style={gradoChipStyle(est.grado)}>
                   {est.grado || 'N/A'}
@@ -1036,17 +1087,10 @@ const Estudiantes: React.FC = () => {
     return map;
   }, [unifiedStudents]);
 
-  if (loading) return (
-    <div className="flex flex-col items-center justify-center h-[50vh]">
-      <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-4" />
-      <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Cargando alumnado...</p>
-    </div>
-  );
-
   return (
     <div className="flex gap-6">
       {/* Sidebar izquierda - 30% */}
-      <aside className="w-[30%] space-y-6 sticky top-24 self-start">
+      <aside className="w-[30%] space-y-6 sticky top-24 self-start page-sidebar-scroll">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -1092,6 +1136,15 @@ const Estudiantes: React.FC = () => {
                 {bulkGrupos.map((g) => (
                   <option key={g.id} value={String(g.id)}>{g.nombre_grupo || `Grupo #${g.id}`}</option>
                 ))}
+              </Select>
+            </div>
+
+            <div>
+              <Label>Matrícula</Label>
+              <Select value={matriculaFiltro} onChange={(e) => setMatriculaFiltro(e.target.value as any)}>
+                <option value="todos">Todos</option>
+                <option value="con_activa">Con matrícula activa</option>
+                <option value="sin_activa">Sin matrícula activa</option>
               </Select>
             </div>
 
@@ -1306,7 +1359,7 @@ const Estudiantes: React.FC = () => {
                       <div key={gid || 'sin_grupo'} className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 hover:border-cyan-300 hover:bg-cyan-50/50 transition-all">
                         <div className="flex items-center gap-2.5 min-w-0">
                           <Users className="w-4 h-4 text-[#FFC800] flex-shrink-0" />
-                          <span className="font-semibold text-slate-800 text-sm truncate">{nombre}</span>
+                          <span className="font-semibold text-slate-800 text-sm whitespace-normal break-words">{nombre}</span>
                         </div>
                         <span className="text-xs font-bold text-cyan-700 bg-cyan-50 px-2.5 py-1 rounded-full border border-cyan-200">
                           {count}
@@ -1414,7 +1467,16 @@ const Estudiantes: React.FC = () => {
           </div>
         </div>
 
-        {filteredEstudiantes.length === 0 && (
+        {isInitialLoading && (
+          <Card className="border border-white/10 bg-white/5">
+            <CardContent className="py-4 flex items-center gap-3 text-sm font-semibold text-slate-200">
+              <div className="w-5 h-5 border-2 border-slate-300 border-t-[#00AEEF] rounded-full animate-spin" />
+              Cargando estudiantes y grupos...
+            </CardContent>
+          </Card>
+        )}
+
+        {!isInitialLoading && filteredEstudiantes.length === 0 && (
           <Card className="border border-dashed border-slate-200 bg-slate-50">
             <CardContent className="py-10 text-center text-sm font-semibold text-slate-500">No hay alumnos que coincidan con los filtros aplicados.</CardContent>
           </Card>
@@ -1530,7 +1592,7 @@ const Estudiantes: React.FC = () => {
                           <Users className="w-5 h-5" />
                         </div>
                         <div className="min-w-0">
-                          <CardTitle className="text-lg truncate">{grupo}</CardTitle>
+                          <CardTitle className="text-lg whitespace-normal break-words leading-tight">{grupo}</CardTitle>
                           <CardDescription>{lista.length} alumno(s) en este grupo</CardDescription>
                         </div>
                       </div>
@@ -1721,7 +1783,7 @@ const Estudiantes: React.FC = () => {
                             {grado.charAt(0)}
                           </div>
                           <div className="min-w-0">
-                            <div className="text-white font-black text-lg truncate">{grado}</div>
+                            <div className="text-white font-black text-lg whitespace-normal break-words leading-tight">{grado}</div>
                             <div className="text-slate-300 text-sm font-semibold">{lista.length} estudiante(s)</div>
                           </div>
                         </div>
@@ -1744,7 +1806,7 @@ const Estudiantes: React.FC = () => {
                             <Users className="w-5 h-5" />
                           </div>
                           <div className="min-w-0">
-                            <div className="text-white font-black text-lg truncate">{grupo}</div>
+                            <div className="text-white font-black text-lg whitespace-normal break-words leading-tight">{grupo}</div>
                             <div className="text-slate-300 text-sm font-semibold">{lista.length} estudiante(s)</div>
                           </div>
                         </div>
@@ -1799,7 +1861,7 @@ const Estudiantes: React.FC = () => {
                 }}
               >
                 <CardHeader>
-                  <CardTitle className="text-base text-white truncate">{g.nombre_grupo || `Grupo #${g.id}`}</CardTitle>
+                  <CardTitle className="text-base text-white whitespace-normal break-words leading-tight">{g.nombre_grupo || `Grupo #${g.id}`}</CardTitle>
                   <CardDescription className="text-slate-300">
                     {g.curso_nombre ? `${g.curso_nombre}` : '—'}{g.tutor_nombre ? ` · ${g.tutor_nombre}` : ''}{g.turno ? ` · ${g.turno}` : ''}
                   </CardDescription>
@@ -2364,7 +2426,7 @@ const Estudiantes: React.FC = () => {
       )}
 
       {/* Modal de Formulario */}
-      {showModal && (
+      {showModal && typeof document !== 'undefined' && createPortal((
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
           onMouseDown={(e) => {
@@ -2572,7 +2634,7 @@ const Estudiantes: React.FC = () => {
             </form>
           </Card>
         </div>
-      )}
+      ), document.body)}
       </div>
     </div>
   );

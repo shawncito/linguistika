@@ -1,5 +1,30 @@
 # Changelog - Sistema Linguistika
 
+## [2026-03-12] - Notas internas, estabilidad de creación y continuidad de sesión
+
+### 🎯 Resumen
+Se consolidaron cambios de backend y frontend para mejorar estabilidad en flujos de creación, colaboración interna y continuidad visual. Además, se dejó documentación explícita para retomar revisión manual en una próxima sesión.
+
+### ✅ Cambios principales incluidos
+- Dashboard: notas internas colaborativas por tutor (crear, editar, marcar hecha/reabrir, eliminar, historial y realtime).
+- Roles: endpoints de notas restringidos a empleados (`admin`, `contador`, `tutor_view_only`).
+- Compatibilidad DB en estudiantes: fallback cuando falta columna `edad`.
+- Robustez en tutores: `tarifa_por_hora` siempre persistida como numérica no nula.
+- UX de modales: portalización para centrado estable en crear Tutor/Estudiante/Matrícula/Curso.
+- Realtime/cache: mejoras en hooks de listas y limpieza de cache GET al recibir eventos.
+- Calendario y dashboard: mejoras de visualización/operación y exportación mensual (Excel/PDF).
+- Migración agregada: `backend/migrations/025_add_tutor_notes_and_history.sql`.
+
+### 🧪 Estado técnico validado
+- Typecheck frontend: OK.
+- Diagnósticos de archivos críticos modificados: sin errores.
+- Smoke check backend módulos dashboard/notas: OK.
+- Verificación de tablas/columnas `tutor_notas` y `tutor_notas_historial` en Supabase activo: OK.
+
+### ⏳ Pendiente para próxima sesión
+- Revisión manual end-to-end en app desktop para confirmar todos los flujos de negocio.
+- Detalle de continuidad: ver `PENDIENTE_REVISION_ULTIMOS_CAMBIOS.md`.
+
 ## [2026-03-09] - Optimización de Rendimiento en Dashboard (v0.4)
 
 ### 🎯 Objetivo

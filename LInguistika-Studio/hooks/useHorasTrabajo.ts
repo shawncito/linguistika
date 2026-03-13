@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { horasTrabajoService } from '../services/api/horasTrabajoService';
 import { useAsyncList } from './useAsyncList';
 import type { HorasTrabajo } from '../types';
@@ -33,7 +33,17 @@ export function useHorasTrabajo(params?: { fecha?: string; tutor_id?: number; es
     params?.estado,
   ]);
 
-  const { data: horasTrabajo, loading, error, refresh } = useAsyncList<HorasTrabajo>(fetchFn, { realtimeTable: 'horas_trabajo' });
+  const cacheKey = useMemo(() => {
+    const fecha = params?.fecha ? String(params.fecha) : 'all';
+    const tutor = params?.tutor_id != null ? String(params.tutor_id) : 'all';
+    const estado = params?.estado ? String(params.estado) : 'all';
+    return `horas_trabajo:list:${fecha}:${tutor}:${estado}`;
+  }, [params?.estado, params?.fecha, params?.tutor_id]);
+
+  const { data: horasTrabajo, loading, error, refresh } = useAsyncList<HorasTrabajo>(fetchFn, {
+    realtimeTable: 'horas_trabajo',
+    cacheKey,
+  });
 
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { usePersistentState } from '../lib/usePersistentState';
 import { useMatriculas, useRealtimeSubscription } from '../hooks';
 import { estudiantesService } from '../services/api/estudiantesService';
@@ -263,7 +264,7 @@ const Matriculas: React.FC = () => {
       estudiante_id: matricula.estudiante_id,
       curso_id: matricula.curso_id,
       tutor_id: matricula.tutor_id,
-      es_grupo: matricula.es_grupo,
+      es_grupo: matricula.es_grupo === true,
       grupo_nombre: matricula.grupo_nombre || '',
       estudiante_ids: [],
       grupo_origen: 'manual',
@@ -571,7 +572,7 @@ const Matriculas: React.FC = () => {
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">
-      <aside className="lg:w-[32%] space-y-4 sticky top-24 self-start">
+      <aside className="lg:w-[32%] space-y-4 sticky top-24 self-start page-sidebar-scroll">
         <Card className="border-white/10">
           <CardHeader>
             <CardTitle className="text-lg">Resumen rápido</CardTitle>
@@ -918,7 +919,7 @@ const Matriculas: React.FC = () => {
       )}
 
       {/* Modal de Formulario */}
-      {showModal && (
+      {showModal && typeof document !== 'undefined' && createPortal((
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
           <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-[#0F2445] border border-white/10 shadow-2xl">
             <div className="border-b border-white/10 p-8 flex justify-between items-start bg-white/5 rounded-t-3xl">
@@ -1127,7 +1128,7 @@ const Matriculas: React.FC = () => {
                     disabled={formData.es_grupo && formData.grupo_origen === 'excel'}
                   >
                     <option value={0}>Selecciona un curso...</option>
-                    {cursos.filter(c => c.estado === 1).map(c => (
+                    {cursos.filter(c => c.estado === 1 && c.dias_schedule && Object.keys(c.dias_schedule).length > 0).map(c => (
                       <option key={c.id} value={c.id}>
                         {c.nombre} ({c.nivel}) - {c.tipo_clase === 'tutoria' ? 'Tutoría' : 'Grupal'}
                       </option>
@@ -1241,7 +1242,7 @@ const Matriculas: React.FC = () => {
             )}
           </Card>
         </div>
-      )}
+      ), document.body)}
       </div>
     </div>
   );
