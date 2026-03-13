@@ -80,3 +80,27 @@ export function setTutorNotaEstado({ tutorId, notaId, estado, actor }) {
 export function deleteTutorNota({ tutorId, notaId, actor }) {
   return repo.deleteTutorNota({ tutorId, notaId, actor });
 }
+
+export function listCalendarNotasSummary({ fecha_inicio, fecha_fin }) {
+  return repo.listCalendarNotasSummary({ fechaInicio: fecha_inicio, fechaFin: fecha_fin });
+}
+
+export function listCalendarNotas(fecha, query = {}) {
+  return repo.listCalendarNotas(fecha, { historyLimit: query?.history_limit });
+}
+
+export function createCalendarNota({ fecha, mensaje, actor }) {
+  return repo.createCalendarNota({ fecha, mensaje, actor });
+}
+
+export function updateCalendarNotaTexto({ fecha, notaId, mensaje, actor }) {
+  return repo.updateCalendarNotaTexto({ fecha, notaId, mensaje, actor });
+}
+
+export function setCalendarNotaEstado({ fecha, notaId, estado, actor }) {
+  return repo.setCalendarNotaEstado({ fecha, notaId, estado, actor });
+}
+
+export function deleteCalendarNota({ fecha, notaId, actor }) {
+  return repo.deleteCalendarNota({ fecha, notaId, actor });
+}

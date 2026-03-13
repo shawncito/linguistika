@@ -23,3 +23,25 @@ export async function eliminarEmpleado(req, res, next) {
     res.json(await svc.deleteEmployee(req.params.id));
   } catch (err) { next(err); }
 }
+
+export async function listarPaginas(req, res, next) {
+  try {
+    res.json(await svc.listarPaginas());
+  } catch (err) { next(err); }
+}
+
+export async function togglePagina(req, res, next) {
+  try {
+    const { activa, mensaje } = req.body ?? {};
+    if (typeof activa !== 'boolean') {
+      return res.status(400).json({ error: 'El campo `activa` debe ser boolean' });
+    }
+    const result = await svc.togglePagina(req.params.slug, {
+      activa,
+      desactivada_por: req.user?.id ?? null,
+      desactivada_por_nombre: req.userName ?? null,
+      mensaje: mensaje ?? null,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+}

@@ -1,6 +1,6 @@
 # Linguistika — Database Schema Reference
 
-> Last updated: 2025-03-10
+> Last updated: 2026-03-13
 > Source: Supabase PostgreSQL
 
 ## Core Tables
@@ -287,6 +287,39 @@
 | meta | jsonb | |
 | created_at | timestamptz | |
 
+### calendario_notas
+| Column | Type | Notes |
+|--------|------|-------|
+| id | bigserial PK | |
+| fecha | date NOT NULL | Día del calendario al que pertenece la nota |
+| mensaje | text NOT NULL | |
+| estado | text DEFAULT 'pendiente' | 'pendiente'/'hecha'/'eliminada' |
+| creado_por | uuid | |
+| creado_por_nombre | text | |
+| actualizado_por | uuid | |
+| actualizado_por_nombre | text | |
+| eliminado_por | uuid | |
+| eliminado_por_nombre | text | |
+| hecha_en | timestamptz | |
+| eliminada_en | timestamptz | |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+### calendario_notas_historial
+| Column | Type | Notes |
+|--------|------|-------|
+| id | bigserial PK | |
+| nota_id | bigint FK→calendario_notas | |
+| fecha | date NOT NULL | |
+| accion | text | 'crear'/'editar'/'marcar_hecha'/'reabrir'/'eliminar' |
+| mensaje | text NOT NULL | |
+| estado | text | |
+| actor_user_id | uuid | |
+| actor_name | text | |
+| actor_role | text | |
+| meta | jsonb | |
+| created_at | timestamptz | |
+
 ### usuarios
 | Column | Type | Notes |
 |--------|------|-------|
@@ -297,6 +330,17 @@
 | telefono | text | |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
+
+### paginas_mantenimiento
+| Column | Type | Notes |
+|--------|------|-------|
+| slug | text PK | Route key ('dashboard', 'tutores', etc.) |
+| nombre | text NOT NULL | Friendly label |
+| activa | boolean DEFAULT true | If false, non-admins see maintenance page |
+| desactivada_por | uuid | User id who disabled page |
+| desactivada_por_nombre | text | User name who disabled page |
+| mensaje | text | Optional maintenance message |
+| updated_at | timestamptz | Last toggle timestamp |
 
 ## Tesorería Tables
 

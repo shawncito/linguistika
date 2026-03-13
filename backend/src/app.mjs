@@ -26,6 +26,7 @@ import activityRouter from './features/activity/activity.routes.mjs';
 import bulkRouter from './features/bulk/bulk.routes.mjs';
 import finanzasRouter from './features/finanzas/finanzas.routes.mjs';
 import tesoreriaRouter from './features/tesoreria/tesoreria.routes.mjs';
+import paginasRouter from './features/paginas/paginas.routes.mjs';
 
 const app = express();
 
@@ -59,6 +60,7 @@ app.use('/api/v1/activity', activityRouter);
 app.use('/api/v1/bulk', bulkRouter);
 app.use('/api/v1/finanzas', finanzasRouter);
 app.use('/api/v1/tesoreria', tesoreriaRouter);
+app.use('/api/v1/paginas-estado', paginasRouter);
 
 // ── Error handler (último) ──────────────────────────────────────────────────
 app.use(errorHandler);

@@ -8,8 +8,18 @@ function parseJsonField(value) {
 }
 
 function normalizeStudent(s) {
+  const grado = s.grado ?? s.nivel ?? null;
+  const nombreEncargado = s.nombre_encargado ?? s.encargado_nombre ?? null;
+  const emailEncargado = s.email_encargado ?? s.encargado_email ?? null;
+  const telefonoEncargado = s.telefono_encargado ?? s.encargado_telefono ?? null;
+
   return {
     ...s,
+    grado,
+    nivel: s.nivel ?? grado,
+    nombre_encargado: nombreEncargado,
+    email_encargado: emailEncargado,
+    telefono_encargado: telefonoEncargado,
     estado: s.estado ? 1 : 0,
     dias: parseJsonField(s.dias),
     dias_turno: parseJsonField(s.dias_turno),
@@ -18,11 +28,60 @@ function normalizeStudent(s) {
   };
 }
 
-function isMissingEdadColumnError(error) {
-  const msg = String(error?.message || '').toLowerCase();
-  return String(error?.code || '') === '42703'
-    || (msg.includes('could not find the') && msg.includes('edad') && msg.includes('column'))
-    || (msg.includes('column') && msg.includes('edad') && msg.includes('does not exist'));
+function getMissingColumnName(error) {
+  const message = String(error?.message || '');
+  const schemaCacheMatch = message.match(/Could not find the '([^']+)' column of '([^']+)'/i);
+  if (schemaCacheMatch?.[1]) return schemaCacheMatch[1];
+
+  const columnOnlyMatch = message.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (columnOnlyMatch?.[1]) return columnOnlyMatch[1];
+
+  return null;
+}
+
+async function insertWithMissingColumnFallback(table, row, maxRetries = 10) {
+  const workingRow = { ...row };
+  for (let i = 0; i < maxRetries; i += 1) {
+    const result = await supabase.from(table).insert(workingRow).select().single();
+    if (!result.error) return result;
+
+    const missingColumn = getMissingColumnName(result.error);
+    if (!missingColumn || !Object.prototype.hasOwnProperty.call(workingRow, missingColumn)) {
+      return result;
+    }
+
+    delete workingRow[missingColumn];
+  }
+
+  return supabase.from(table).insert(workingRow).select().single();
+}
+
+async function updateWithMissingColumnFallback(table, id, row, maxRetries = 10) {
+  const workingRow = { ...row };
+  for (let i = 0; i < maxRetries; i += 1) {
+    const result = await supabase
+      .from(table)
+      .update(workingRow)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (!result.error) return result;
+
+    const missingColumn = getMissingColumnName(result.error);
+    if (!missingColumn || !Object.prototype.hasOwnProperty.call(workingRow, missingColumn)) {
+      return result;
+    }
+
+    delete workingRow[missingColumn];
+  }
+
+  return supabase
+    .from(table)
+    .update(workingRow)
+    .eq('id', id)
+    .select()
+    .single();
 }
 
 export async function findAll() {
@@ -64,9 +123,21 @@ export async function findByNameInBulk(nombre) {
 }
 
 export async function create(payload) {
-  const baseRow = {
+  const grado = payload.grado ?? payload.nivel ?? null;
+  const nombreEncargado = payload.nombre_encargado ?? payload.encargado_nombre ?? null;
+  const emailEncargado = payload.email_encargado ?? payload.encargado_email ?? null;
+  const telefonoEncargado = payload.telefono_encargado ?? payload.encargado_telefono ?? null;
+
+  const row = {
     nombre: payload.nombre,
-    nivel: payload.nivel || null,
+    grado,
+    nivel: grado,
+    nombre_encargado: nombreEncargado,
+    email_encargado: emailEncargado,
+    telefono_encargado: telefonoEncargado,
+    encargado_nombre: nombreEncargado,
+    encargado_email: emailEncargado,
+    encargado_telefono: telefonoEncargado,
     telefono: payload.telefono || null,
     dias: payload.dias ? JSON.stringify(payload.dias) : null,
     dias_turno: payload.dias_turno ? JSON.stringify(payload.dias_turno) : null,
@@ -76,18 +147,11 @@ export async function create(payload) {
     created_by: payload.userId,
   };
 
-  const withEdad = {
-    ...baseRow,
-    edad: payload.edad || null,
-  };
-
-  let { data, error } = await supabase.from('estudiantes').insert(withEdad).select().single();
-
-  if (error && isMissingEdadColumnError(error)) {
-    const retry = await supabase.from('estudiantes').insert(baseRow).select().single();
-    data = retry.data;
-    error = retry.error;
+  if (payload.edad !== undefined) {
+    row.edad = payload.edad || null;
   }
+
+  const { data, error } = await insertWithMissingColumnFallback('estudiantes', row);
 
   if (error) throw error;
   return normalizeStudent(data);
@@ -96,8 +160,33 @@ export async function create(payload) {
 export async function update(id, payload) {
   const updateData = {};
   if (payload.nombre !== undefined) updateData.nombre = payload.nombre;
+
   if (payload.edad !== undefined) updateData.edad = payload.edad;
-  if (payload.nivel !== undefined) updateData.nivel = payload.nivel;
+
+  if (payload.grado !== undefined || payload.nivel !== undefined) {
+    const grado = payload.grado ?? payload.nivel ?? null;
+    updateData.grado = grado;
+    updateData.nivel = grado;
+  }
+
+  if (payload.nombre_encargado !== undefined || payload.encargado_nombre !== undefined) {
+    const value = payload.nombre_encargado ?? payload.encargado_nombre ?? null;
+    updateData.nombre_encargado = value;
+    updateData.encargado_nombre = value;
+  }
+
+  if (payload.email_encargado !== undefined || payload.encargado_email !== undefined) {
+    const value = payload.email_encargado ?? payload.encargado_email ?? null;
+    updateData.email_encargado = value;
+    updateData.encargado_email = value;
+  }
+
+  if (payload.telefono_encargado !== undefined || payload.encargado_telefono !== undefined) {
+    const value = payload.telefono_encargado ?? payload.encargado_telefono ?? null;
+    updateData.telefono_encargado = value;
+    updateData.encargado_telefono = value;
+  }
+
   if (payload.telefono !== undefined) updateData.telefono = payload.telefono || null;
   if (payload.dias !== undefined) updateData.dias = payload.dias ? JSON.stringify(payload.dias) : null;
   if (payload.dias_turno !== undefined) updateData.dias_turno = payload.dias_turno ? JSON.stringify(payload.dias_turno) : null;
@@ -106,24 +195,7 @@ export async function update(id, payload) {
   if (payload.encargado_id !== undefined) updateData.encargado_id = payload.encargado_id;
   updateData.updated_by = payload.userId;
 
-  let { data, error } = await supabase
-    .from('estudiantes')
-    .update(updateData)
-    .eq('id', id)
-    .select()
-    .single();
-
-  if (error && payload.edad !== undefined && isMissingEdadColumnError(error)) {
-    const { edad: _omitEdad, ...fallbackData } = updateData;
-    const retry = await supabase
-      .from('estudiantes')
-      .update(fallbackData)
-      .eq('id', id)
-      .select()
-      .single();
-    data = retry.data;
-    error = retry.error;
-  }
+  const { data, error } = await updateWithMissingColumnFallback('estudiantes', id, updateData);
 
   if (error) throw error;
   return normalizeStudent(data);

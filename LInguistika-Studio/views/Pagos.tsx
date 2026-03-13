@@ -6,6 +6,7 @@ import { estudiantesService } from '../services/api/estudiantesService';
 import { bulkService } from '../services/api/bulkService';
 import { useRealtimeSubscription } from '../hooks/useRealtimeSubscription';
 import { usePersistentState } from '../lib/usePersistentState';
+import { uiConfirm } from '../lib/uiFeedback';
 import { Pago, Tutor, Estudiante, EstadoPago } from '../types';
 import { Button, Card, Badge, Input, Label, Select, Table, TableHeader, TableBody, TableRow, TableHead, TableCell, Dialog } from '../components/UI';
 import { CreditCard, Filter, History, Download, DollarSign, Search, CheckCircle2 } from 'lucide-react';
@@ -773,7 +774,11 @@ const Pagos: React.FC = () => {
         await pagosService.uploadComprobanteMovimiento(creado.id, manualFile);
       }
 
-      const continuar = window.confirm('Movimiento registrado.\n\n¿Desea continuar con la iteración?');
+      const continuar = await uiConfirm({
+        title: 'Movimiento registrado',
+        description: '¿Desea continuar con la iteración?',
+        confirmLabel: 'Continuar',
+      });
 
       setManualFile(null);
       setManualQuery('');

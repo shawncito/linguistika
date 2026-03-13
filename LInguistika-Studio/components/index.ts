@@ -35,3 +35,4 @@ export { ViewModeToggle } from './ViewModeToggle';
 // Modals & notifications
 export { ConfirmDialog } from './ConfirmDialog';
 export { ToastContainer } from './ToastContainer';
+export { MascotMark } from './MascotMark';

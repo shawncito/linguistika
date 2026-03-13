@@ -1,0 +1,46 @@
+MANUAL DE USUARIO - LINGUISTIKA
+Version: 0.5
+Fecha: 13/03/2026
+
+1. INGRESO AL SISTEMA
+- Ingrese su usuario y contrasena en la pantalla de inicio.
+- Si las credenciales son correctas, se abrira el Dashboard.
+
+2. NAVEGACION PRINCIPAL
+- Use la barra superior para ir a:
+  Dashboard, Estudiantes, Tutores, Cursos, Matriculas, Tesoreria y Empleados.
+
+3. DASHBOARD
+- Revise clases del dia, estado de sesiones y recordatorios.
+- Puede marcar sesiones como dadas o cancelarlas segun permisos.
+
+4. GESTION DE ESTUDIANTES Y TUTORES
+- Cree, edite y elimine registros.
+- Use filtros y busqueda para localizar informacion rapidamente.
+
+5. CURSOS Y MATRICULAS
+- Cree cursos y asigne tutor, horario y modalidad.
+- Matricule estudiantes individualmente o por grupo.
+
+6. TESORERIA
+- Registre pagos, revise deudas y saldos a favor.
+- Consulte reportes y movimientos historicos.
+
+7. MENU DE USUARIO (ESQUINA SUPERIOR DERECHA)
+- Toque su nombre para abrir el menu.
+- Opciones disponibles:
+  - Descargar manual de usuario.
+  - Cerrar sesion.
+  - Numero de soporte.
+
+8. SOPORTE
+- Telefono: +506 6126-8302
+- Si detecta errores, reporte:
+  - Pantalla/modulo.
+  - Hora aproximada.
+  - Accion que estaba realizando.
+
+9. RECOMENDACIONES
+- Cierre sesion al terminar.
+- Mantenga datos de contacto actualizados.
+- Verifique fechas y horas antes de guardar.

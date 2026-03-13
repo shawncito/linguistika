@@ -4,6 +4,27 @@ import { Eye, EyeOff, Lock, Mail, X } from 'lucide-react';
 import { api, auth } from '../services/api';
 import { Button, Card, Input, Label, Select } from '../components/UI';
 
+const LOGIN_SUCCESS_FLASH_KEY = 'ui.login.success.flash';
+const LOGIN_SUCCESS_TS_KEY = 'ui.login.success.ts';
+
+const extractFirstName = (user: any, fallbackEmail: string) => {
+  const rawName = String(user?.nombre_completo ?? user?.nombre ?? '').trim();
+  if (rawName) {
+    const [firstName] = rawName.split(/\s+/);
+    if (firstName) return firstName;
+  }
+
+  const rawEmail = String(user?.email ?? fallbackEmail ?? '').trim();
+  const localPart = rawEmail.includes('@') ? rawEmail.split('@')[0] : rawEmail;
+  const sanitized = localPart.replace(/[._-]+/g, ' ').trim();
+  const [firstFromEmail] = sanitized.split(/\s+/);
+  if (firstFromEmail) {
+    return firstFromEmail.charAt(0).toUpperCase() + firstFromEmail.slice(1);
+  }
+
+  return 'de nuevo';
+};
+
 const Login: React.FC = () => {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
@@ -163,6 +184,14 @@ const Login: React.FC = () => {
       const emails = stored ? JSON.parse(stored) : [];
       const updatedEmails = [loginEmail, ...emails.filter((e: string) => e !== loginEmail)].slice(0, 5); // Guardar últimos 5
       localStorage.setItem('saved_emails', JSON.stringify(updatedEmails));
+
+      try {
+        const firstName = extractFirstName(res.user, loginEmail);
+        sessionStorage.setItem(LOGIN_SUCCESS_FLASH_KEY, `Hola ${firstName}, Bienvenido`);
+        sessionStorage.setItem(LOGIN_SUCCESS_TS_KEY, String(Date.now()));
+      } catch {
+        // ignore
+      }
       
       navigate('/', { replace: true });
     } catch (err: any) {

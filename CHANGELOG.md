@@ -1,5 +1,25 @@
 # Changelog - Sistema Linguistika
 
+## [2026-03-13] - Cierre UX: buscador global, tema light, manuales PDF y empaquetado
+
+### 🎯 Resumen
+Se completó una ronda de refinamiento visual y funcional para dejar lista una versión de entrega: búsqueda global operativa desde el header, mejoras de legibilidad en modo claro, contadores de notas tipo notificación, ajuste de timings de feedback y manuales de usuario descargables.
+
+### ✅ Cambios principales incluidos
+- Header: buscador global funcional para Estudiantes, Tutores, Cursos y Matrículas, con ranking, debounce, caché temporal y navegación directa.
+- Dashboard calendario: contador de notas rediseñado a badge circular estilo notificación en cada día.
+- Dashboard detalle del día: contador de notas visible como burbuja de estado junto al bloque de notas del equipo.
+- Tema light: mejoras de contraste para acentos, bordes y anillos en componentes con paleta institucional.
+- Feedback UX: toast de bienvenida con mayor duración para mejor lectura tras login.
+- Manuales: generación y publicación de PDF corto y extenso en `public/manuales/` con descarga directa desde menú de usuario.
+
+### 🧪 Estado técnico validado
+- Build frontend (`vite build`): OK.
+- Integración de cambios UI/TS en App y Dashboard: compilando sin errores.
+
+### 📦 Artefactos de release
+- Preparado para empaquetado desktop Windows (`nsis`, `portable`, `zip`) desde script raíz `desktop:build`.
+
 ## [2026-03-12] - Notas internas, estabilidad de creación y continuidad de sesión
 
 ### 🎯 Resumen

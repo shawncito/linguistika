@@ -1,11 +1,16 @@
 import * as service from './dashboard.service.mjs';
 
 const TUTOR_NOTA_STATES = new Set(['pendiente', 'hecha']);
+const CALENDAR_NOTA_STATES = new Set(['pendiente', 'hecha']);
 
 function toPositiveInt(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.trunc(n);
+}
+
+function isIsoDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim());
 }
 
 function getActorFromRequest(req) {
@@ -144,6 +149,112 @@ export async function deleteTutorNota(req, res, next) {
   try {
     const result = await service.deleteTutorNota({
       tutorId,
+      notaId,
+      actor: getActorFromRequest(req),
+    });
+    return res.json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function listCalendarNotasSummary(req, res, next) {
+  const fechaInicio = String(req.query?.fecha_inicio ?? '').trim();
+  const fechaFin = String(req.query?.fecha_fin ?? '').trim();
+  if (!isIsoDate(fechaInicio) || !isIsoDate(fechaFin)) {
+    return res.status(400).json({ error: 'Se requieren fecha_inicio y fecha_fin en formato YYYY-MM-DD' });
+  }
+  try {
+    return res.json(await service.listCalendarNotasSummary({ fecha_inicio: fechaInicio, fecha_fin: fechaFin }));
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function listCalendarNotas(req, res, next) {
+  const fecha = String(req.params.fecha ?? '').trim();
+  if (!isIsoDate(fecha)) return res.status(400).json({ error: 'Fecha inválida' });
+  try {
+    return res.json(await service.listCalendarNotas(fecha, req.query));
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function createCalendarNota(req, res, next) {
+  const fecha = String(req.params.fecha ?? '').trim();
+  if (!isIsoDate(fecha)) return res.status(400).json({ error: 'Fecha inválida' });
+
+  const mensaje = String(req.body?.mensaje ?? '').trim();
+  if (!mensaje) return res.status(400).json({ error: 'El mensaje es requerido' });
+
+  try {
+    const nota = await service.createCalendarNota({
+      fecha,
+      mensaje,
+      actor: getActorFromRequest(req),
+    });
+    return res.status(201).json(nota);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function updateCalendarNotaTexto(req, res, next) {
+  const fecha = String(req.params.fecha ?? '').trim();
+  const notaId = toPositiveInt(req.params.notaId);
+  if (!isIsoDate(fecha)) return res.status(400).json({ error: 'Fecha inválida' });
+  if (!notaId) return res.status(400).json({ error: 'Nota inválida' });
+
+  const mensaje = String(req.body?.mensaje ?? '').trim();
+  if (!mensaje) return res.status(400).json({ error: 'El mensaje es requerido' });
+
+  try {
+    const nota = await service.updateCalendarNotaTexto({
+      fecha,
+      notaId,
+      mensaje,
+      actor: getActorFromRequest(req),
+    });
+    return res.json(nota);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function setCalendarNotaEstado(req, res, next) {
+  const fecha = String(req.params.fecha ?? '').trim();
+  const notaId = toPositiveInt(req.params.notaId);
+  if (!isIsoDate(fecha)) return res.status(400).json({ error: 'Fecha inválida' });
+  if (!notaId) return res.status(400).json({ error: 'Nota inválida' });
+
+  const estado = String(req.body?.estado ?? '').trim().toLowerCase();
+  if (!CALENDAR_NOTA_STATES.has(estado)) {
+    return res.status(400).json({ error: 'Estado inválido. Use pendiente o hecha' });
+  }
+
+  try {
+    const nota = await service.setCalendarNotaEstado({
+      fecha,
+      notaId,
+      estado,
+      actor: getActorFromRequest(req),
+    });
+    return res.json(nota);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+export async function deleteCalendarNota(req, res, next) {
+  const fecha = String(req.params.fecha ?? '').trim();
+  const notaId = toPositiveInt(req.params.notaId);
+  if (!isIsoDate(fecha)) return res.status(400).json({ error: 'Fecha inválida' });
+  if (!notaId) return res.status(400).json({ error: 'Nota inválida' });
+
+  try {
+    const result = await service.deleteCalendarNota({
+      fecha,
       notaId,
       actor: getActorFromRequest(req),
     });

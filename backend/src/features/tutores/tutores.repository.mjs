@@ -1,6 +1,31 @@
 import { supabase } from '../../shared/config/supabaseClient.mjs';
 import { AppError } from '../../shared/errors/AppError.mjs';
 
+function parseJsonField(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+function normalizeTutor(raw) {
+  if (!raw) return raw;
+
+  const diasHorarios = parseJsonField(raw.dias_horarios);
+  const diasTurno = parseJsonField(raw.dias_turno);
+  const nivelesApto = parseJsonField(raw.niveles_apto);
+
+  return {
+    ...raw,
+    estado: raw.estado ? 1 : 0,
+    dias_horarios: (diasHorarios && typeof diasHorarios === 'object' && !Array.isArray(diasHorarios)) ? diasHorarios : {},
+    dias_turno: (diasTurno && typeof diasTurno === 'object' && !Array.isArray(diasTurno)) ? diasTurno : {},
+    niveles_apto: Array.isArray(nivelesApto)
+      ? nivelesApto
+      : (Array.isArray(raw.niveles_apto) ? raw.niveles_apto : []),
+  };
+}
+
 function normalizeName(value) {
   return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -9,13 +34,69 @@ function escapeLike(value) {
   return String(value ?? '').replace(/[%_]/g, '\\$&');
 }
 
+function getMissingColumnName(error) {
+  const message = String(error?.message || '');
+  const schemaCacheMatch = message.match(/Could not find the '([^']+)' column of '([^']+)'/i);
+  if (schemaCacheMatch?.[1]) return schemaCacheMatch[1];
+
+  const columnOnlyMatch = message.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (columnOnlyMatch?.[1]) return columnOnlyMatch[1];
+
+  return null;
+}
+
+async function insertWithMissingColumnFallback(table, row, maxRetries = 12) {
+  const workingRow = { ...row };
+  for (let i = 0; i < maxRetries; i += 1) {
+    const result = await supabase.from(table).insert(workingRow).select().single();
+    if (!result.error) return result;
+
+    const missingColumn = getMissingColumnName(result.error);
+    if (!missingColumn || !Object.prototype.hasOwnProperty.call(workingRow, missingColumn)) {
+      return result;
+    }
+
+    delete workingRow[missingColumn];
+  }
+
+  return supabase.from(table).insert(workingRow).select().single();
+}
+
+async function updateWithMissingColumnFallback(table, id, row, maxRetries = 12) {
+  const workingRow = { ...row };
+  for (let i = 0; i < maxRetries; i += 1) {
+    const result = await supabase
+      .from(table)
+      .update(workingRow)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (!result.error) return result;
+
+    const missingColumn = getMissingColumnName(result.error);
+    if (!missingColumn || !Object.prototype.hasOwnProperty.call(workingRow, missingColumn)) {
+      return result;
+    }
+
+    delete workingRow[missingColumn];
+  }
+
+  return supabase
+    .from(table)
+    .update(workingRow)
+    .eq('id', id)
+    .select()
+    .single();
+}
+
 export async function findAll() {
   const { data, error } = await supabase
     .from('tutores')
     .select('*')
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data ?? []).map((t) => ({ ...t, estado: t.estado ? 1 : 0 }));
+  return (data ?? []).map(normalizeTutor);
 }
 
 export async function findById(id) {
@@ -26,7 +107,7 @@ export async function findById(id) {
     .maybeSingle();
   if (error) throw error;
   if (!data) throw new AppError('Tutor no encontrado', 404);
-  return { ...data, estado: data.estado ? 1 : 0 };
+  return normalizeTutor(data);
 }
 
 export async function create(payload) {
@@ -45,8 +126,7 @@ export async function create(payload) {
 
   if ((existing ?? []).length > 0) throw new AppError('Ya existe un tutor con ese nombre', 409);
 
-  // Intentar con columna color (migration 023 la añadió)
-  const withColor = {
+  const row = {
     nombre: String(nombre ?? '').trim(),
     email: email || null,
     telefono: telefono || null,
@@ -61,17 +141,10 @@ export async function create(payload) {
     estado: true,
   };
 
-  let { data, error } = await supabase.from('tutores').insert(withColor).select().single();
-
-  if (error && (String(error?.code) === '42703' || String(error?.message || '').includes('color'))) {
-    const { color: _c, ...withoutColor } = withColor;
-    const retry = await supabase.from('tutores').insert(withoutColor).select().single();
-    data = retry.data;
-    error = retry.error;
-  }
+  const { data, error } = await insertWithMissingColumnFallback('tutores', row);
 
   if (error) throw error;
-  return data;
+  return normalizeTutor(data);
 }
 
 export async function update(id, payload) {
@@ -93,15 +166,10 @@ export async function update(id, payload) {
   }
   if (fields.estado !== undefined) updateData.estado = fields.estado === 1 || fields.estado === true;
 
-  const { data, error } = await supabase
-    .from('tutores')
-    .update(updateData)
-    .eq('id', id)
-    .select()
-    .single();
+  const { data, error } = await updateWithMissingColumnFallback('tutores', id, updateData);
 
   if (error) throw error;
-  return { ...data, estado: data.estado ? 1 : 0 };
+  return normalizeTutor(data);
 }
 
 export async function remove(id) {

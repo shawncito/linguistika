@@ -1,11 +1,12 @@
 // Dashboard con calendario interactivo mejorado
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { authService } from '../services/api/authService';
-import { dashboardService } from '../services/api/dashboardService';
+import { dashboardService, type CalendarNotaSummary } from '../services/api/dashboardService';
 import { matriculasService } from '../services/api/matriculasService';
 import { tutoresService } from '../services/api/tutoresService';
 import { estudiantesService } from '../services/api/estudiantesService';
 import { useRealtimeSubscription } from '../hooks/useRealtimeSubscription';
+import { uiConfirm, uiToast } from '../lib/uiFeedback';
 import { Matricula, Curso, Tutor, Estudiante, ResumenTutorEstudiantes, ResumenCursoGrupos } from '../types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Input, Button, Dialog } from '../components/UI';
 import { formatCRC } from '../lib/format';
@@ -96,6 +97,64 @@ interface TutorNotaHistorial {
   meta?: Record<string, any>;
 }
 
+interface CalendarNota {
+  id: number;
+  fecha: string;
+  mensaje: string;
+  estado: 'pendiente' | 'hecha' | 'eliminada';
+  creado_por?: string | null;
+  creado_por_nombre?: string | null;
+  actualizado_por_nombre?: string | null;
+  eliminado_por_nombre?: string | null;
+  hecha_en?: string | null;
+  eliminada_en?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface CalendarNotaHistorial {
+  id: number;
+  nota_id: number;
+  fecha: string;
+  accion: 'crear' | 'editar' | 'marcar_hecha' | 'reabrir' | 'eliminar';
+  mensaje?: string | null;
+  estado?: string | null;
+  actor_name?: string | null;
+  actor_role?: string | null;
+  created_at?: string;
+  meta?: Record<string, any>;
+}
+
+const getMonthDateRange = (monthValue: string) => {
+  const [year, month] = String(monthValue || '').split('-').map(Number);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+    return { start: '', end: '' };
+  }
+  const endDay = new Date(year, month, 0).getDate();
+  return {
+    start: `${year}-${String(month).padStart(2, '0')}-01`,
+    end: `${year}-${String(month).padStart(2, '0')}-${String(endDay).padStart(2, '0')}`,
+  };
+};
+
+const getNoteSortStamp = (item: { updated_at?: string; created_at?: string } | null | undefined) => {
+  return String(item?.updated_at || item?.created_at || '');
+};
+
+const sortByMostRecent = <T extends { updated_at?: string; created_at?: string }>(a: T, b: T) => {
+  return getNoteSortStamp(b).localeCompare(getNoteSortStamp(a));
+};
+
+const toTimeMinutes = (value: string): number | null => {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '—') return null;
+  const [hRaw, mRaw] = raw.split(':');
+  const h = Number(hRaw);
+  const m = Number(mRaw);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return (h * 60) + m;
+};
+
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<Stats | null>(null);
   // Fecha de hoy usando zona horaria de Costa Rica
@@ -131,6 +190,16 @@ const Dashboard: React.FC = () => {
   const [tutorNotaEditId, setTutorNotaEditId] = useState<number | null>(null);
   const [tutorNotaEditText, setTutorNotaEditText] = useState('');
   const [tutorHistorialOpen, setTutorHistorialOpen] = useState(false);
+  const [calendarNotas, setCalendarNotas] = useState<CalendarNota[]>([]);
+  const [calendarNotasHistorial, setCalendarNotasHistorial] = useState<CalendarNotaHistorial[]>([]);
+  const [calendarNotasLoading, setCalendarNotasLoading] = useState(false);
+  const [calendarNotaDraft, setCalendarNotaDraft] = useState('');
+  const [calendarNotaSaving, setCalendarNotaSaving] = useState(false);
+  const [calendarNotaBusy, setCalendarNotaBusy] = useState<Record<number, boolean>>({});
+  const [calendarNotaEditId, setCalendarNotaEditId] = useState<number | null>(null);
+  const [calendarNotaEditText, setCalendarNotaEditText] = useState('');
+  const [calendarHistorialOpen, setCalendarHistorialOpen] = useState(false);
+  const [calendarNotasResumen, setCalendarNotasResumen] = useState<Record<string, CalendarNotaSummary>>({});
   const [programacionSesion, setProgramacionSesion] = useState<{ sesion: SesionDelDia; modo: 'info' | 'programar' } | null>(null);
   const [mensajeWA, setMensajeWA] = useState('');
   const [completandoKeys, setCompletandoKeys] = useState<Record<string, boolean>>({});
@@ -150,7 +219,19 @@ const Dashboard: React.FC = () => {
   const sessionOverridesRef = useRef<Record<string, Partial<SesionDelDia>>>({});
   const generatedByNameRef = useRef<string>('');
   const pdfLogoDataUrlRef = useRef<string>('');
+  const dashboardEntryAtRef = useRef<number>(Date.now());
+  const remindedWaitingKeysRef = useRef<Set<string>>(new Set());
+  const remindedPastPendingKeysRef = useRef<Set<string>>(new Set());
+  const remindedOverdueTodayKeysRef = useRef<Set<string>>(new Set());
+  const teamNotesCardRef = useRef<HTMLDivElement | null>(null);
+  const calendarNoteInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   useEffect(() => { selectedDateRef.current = selectedDate; }, [selectedDate]);
+  useEffect(() => {
+    authService.me()
+      .then(r => setCurrentUserId(String(r?.user?.id ?? '').trim() || null))
+      .catch(() => {});
+  }, []);
   const [metricas, setMetricas] = useState<MetricasFinancieras | null>(null);
   const [metricasDenied, setMetricasDenied] = useState(false);
   const [chartModo, setChartModo] = useState<'real' | 'esperado'>(() => {
@@ -191,6 +272,16 @@ const Dashboard: React.FC = () => {
   }, [calendarDensity]);
 
   useEffect(() => {
+    if (!uiNotice) return;
+    uiToast(
+      uiNotice.message,
+      uiNotice.type === 'error' ? 'error' : uiNotice.type === 'success' ? 'success' : 'info'
+    );
+    const timer = window.setTimeout(() => setUiNotice(null), 0);
+    return () => window.clearTimeout(timer);
+  }, [uiNotice]);
+
+  useEffect(() => {
     const id = window.setInterval(() => setUiTick5s((value) => value + 1), 5000);
     return () => window.clearInterval(id);
   }, []);
@@ -201,6 +292,24 @@ const Dashboard: React.FC = () => {
       return sum + (list?.length || 0);
     }, 0);
   }, [calMes, sesionesDelMes]);
+
+  const selectedDateLongLabel = useMemo(() => {
+    if (!selectedDate) return '';
+    return new Date(selectedDate + 'T00:00:00').toLocaleDateString('es-CR', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+    });
+  }, [selectedDate]);
+
+  const selectedCalendarNoteSummary = calendarNotasResumen[selectedDate] ?? {
+    fecha: selectedDate,
+    total: 0,
+    pendientes: 0,
+    hechas: 0,
+    updated_at: null,
+  };
+  const selectedCalendarNoteCountLabel = selectedCalendarNoteSummary.total > 99 ? '99+' : String(selectedCalendarNoteSummary.total || 0);
 
   // Sesiones de días pasados que NO fueron marcadas como dada ni cancelada
   // Solo incluir sesiones que tienen horario definido (pueden marcarse como dada)
@@ -269,6 +378,92 @@ const Dashboard: React.FC = () => {
   const getSesionesHoyList = useCallback((source: Record<string, SesionDelDia[]>) => {
     return filterOpenSesionesHoy(source[hoy] || []);
   }, [filterOpenSesionesHoy, hoy]);
+
+  const getSessionReminderKey = useCallback((session: SesionDelDia, fechaHint?: string) => {
+    const fecha = String(fechaHint || session.fecha || hoy).slice(0, 10);
+    return `${fecha}|${session.matricula_id}|${String(session.hora_inicio || '')}|${String(session.hora_fin || '')}`;
+  }, [hoy]);
+
+  useEffect(() => {
+    if (loading) return;
+    // Empieza 5s después de entrar al dashboard
+    if (Date.now() - dashboardEntryAtRef.current < 5000) return;
+
+    const waitingToday = sesionesHoy.filter((session) => {
+      if (session.estado_sesion === 'dada' || session.estado_sesion === 'cancelada') return false;
+      return Boolean(session.avisado) && !Boolean(session.confirmado);
+    });
+
+    const waitingNowKeys = new Set(waitingToday.map((session) => getSessionReminderKey(session, hoy)));
+    remindedWaitingKeysRef.current.forEach((key) => {
+      if (!waitingNowKeys.has(key)) remindedWaitingKeysRef.current.delete(key);
+    });
+    const waitingNew = waitingToday.filter((session) => {
+      const key = getSessionReminderKey(session, hoy);
+      if (remindedWaitingKeysRef.current.has(key)) return false;
+      remindedWaitingKeysRef.current.add(key);
+      return true;
+    });
+    if (waitingNew.length > 0) {
+      uiToast(
+        `${waitingNew.length} sesión${waitingNew.length !== 1 ? 'es' : ''} de hoy sigue${waitingNew.length !== 1 ? 'n' : ''} en espera. Se dejará de recordar cuando estén confirmadas.`,
+        'warning',
+        7600
+      );
+    }
+
+    const pastPending = sesionesPendientes.filter((session) => session.estado_sesion !== 'dada' && session.estado_sesion !== 'cancelada');
+    const pastNowKeys = new Set(
+      pastPending.map((session) => {
+        const fecha = String((session as any)._fecha || session.fecha || '').slice(0, 10);
+        return getSessionReminderKey(session, fecha);
+      })
+    );
+    remindedPastPendingKeysRef.current.forEach((key) => {
+      if (!pastNowKeys.has(key)) remindedPastPendingKeysRef.current.delete(key);
+    });
+    const pastNew = pastPending.filter((session) => {
+      const fecha = String((session as any)._fecha || session.fecha || '').slice(0, 10);
+      const key = getSessionReminderKey(session, fecha);
+      if (remindedPastPendingKeysRef.current.has(key)) return false;
+      remindedPastPendingKeysRef.current.add(key);
+      return true;
+    });
+    if (pastNew.length > 0) {
+      uiToast(
+        `${pastNew.length} sesión${pastNew.length !== 1 ? 'es' : ''} de días anteriores sigue${pastNew.length !== 1 ? 'n' : ''} pendiente${pastNew.length !== 1 ? 's' : ''}. Recuerda marcarlas como dadas.`,
+        'warning',
+        7600
+      );
+    }
+
+    const now = new Date();
+    const nowMinutes = (now.getHours() * 60) + now.getMinutes();
+    const overdueToday = sesionesHoy.filter((session) => {
+      if (session.estado_sesion === 'dada' || session.estado_sesion === 'cancelada') return false;
+      const endMinutes = toTimeMinutes(session.hora_fin);
+      if (endMinutes == null) return false;
+      return nowMinutes > endMinutes;
+    });
+
+    const overdueNowKeys = new Set(overdueToday.map((session) => getSessionReminderKey(session, hoy)));
+    remindedOverdueTodayKeysRef.current.forEach((key) => {
+      if (!overdueNowKeys.has(key)) remindedOverdueTodayKeysRef.current.delete(key);
+    });
+    const overdueNew = overdueToday.filter((session) => {
+      const key = getSessionReminderKey(session, hoy);
+      if (remindedOverdueTodayKeysRef.current.has(key)) return false;
+      remindedOverdueTodayKeysRef.current.add(key);
+      return true;
+    });
+    if (overdueNew.length > 0) {
+      uiToast(
+        `${overdueNew.length} sesión${overdueNew.length !== 1 ? 'es' : ''} de hoy ya pasó/pasaron su hora y aún no están marcadas como dadas.`,
+        'warning',
+        8200
+      );
+    }
+  }, [getSessionReminderKey, hoy, loading, sesionesHoy, sesionesPendientes, uiTick5s]);
 
   const applySessionLocalPatch = useCallback((sesion: SesionDelDia, fechaRaw: string, patch: Partial<SesionDelDia>) => {
     const fecha = String(fechaRaw || sesion.fecha || hoy).slice(0, 10);
@@ -367,6 +562,11 @@ const Dashboard: React.FC = () => {
     return error?.response?.data?.error || error?.message || fallback;
   };
 
+  const focusCalendarNotesComposer = useCallback(() => {
+    teamNotesCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window.setTimeout(() => calendarNoteInputRef.current?.focus(), 220);
+  }, []);
+
   const formatNotaDate = (value?: string | null) => {
     if (!value) return '—';
     const date = new Date(value);
@@ -391,6 +591,55 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const cargarCalendarNotasResumen = useCallback(async (monthValue: string, options: { silent?: boolean } = {}) => {
+    const { start, end } = getMonthDateRange(monthValue);
+    if (!start || !end) {
+      setCalendarNotasResumen({});
+      return;
+    }
+
+    try {
+      const result = await dashboardService.getCalendarNotasSummary({ fecha_inicio: start, fecha_fin: end });
+      const summaryMap = result.reduce<Record<string, CalendarNotaSummary>>((acc, item) => {
+        if (item?.fecha) acc[item.fecha] = item;
+        return acc;
+      }, {});
+      setCalendarNotasResumen(summaryMap);
+    } catch (error) {
+      if (!options.silent) {
+        console.error('No se pudo cargar el resumen de notas del calendario', error);
+      }
+    }
+  }, []);
+
+  const cargarCalendarNotas = useCallback(async (fecha: string, options: { silent?: boolean } = {}) => {
+    if (!fecha) return;
+    if (!options.silent) setCalendarNotasLoading(true);
+    try {
+      const result = await dashboardService.getCalendarNotas(fecha, { history_limit: 180 });
+      const notas = [...(result?.notas || [])]
+        .filter((item: any) => item && item.estado !== 'eliminada')
+        .sort((a: any, b: any) => sortByMostRecent(a, b));
+      const historial = [...(result?.historial || [])]
+        .sort((a: any, b: any) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      setCalendarNotas(notas);
+      setCalendarNotasHistorial(historial);
+    } catch (error) {
+      if (!options.silent) {
+        setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudieron cargar las notas del día seleccionado') });
+      }
+    } finally {
+      if (!options.silent) setCalendarNotasLoading(false);
+    }
+  }, []);
+
+  const refreshCalendarNotesUi = useCallback(async (fecha: string, options: { silent?: boolean } = {}) => {
+    await Promise.all([
+      cargarCalendarNotas(fecha, { silent: options.silent }),
+      cargarCalendarNotasResumen(calMes, { silent: true }),
+    ]);
+  }, [calMes, cargarCalendarNotas, cargarCalendarNotasResumen]);
+
   const cargarTutorNotas = useCallback(async (tutorId: number, options: { silent?: boolean } = {}) => {
     if (!tutorId) return;
     if (!options.silent) setTutorNotasLoading(true);
@@ -398,7 +647,7 @@ const Dashboard: React.FC = () => {
       const result = await dashboardService.getTutorNotas(tutorId, { history_limit: 180 });
       const notas = [...(result?.notas || [])]
         .filter((n: any) => n && n.estado !== 'eliminada')
-        .sort((a: any, b: any) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+        .sort((a: any, b: any) => sortByMostRecent(a, b));
       const historial = [...(result?.historial || [])]
         .sort((a: any, b: any) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
       setTutorNotas(notas);
@@ -462,6 +711,7 @@ const Dashboard: React.FC = () => {
     try {
       await dashboardService.setTutorNotaEstado(tutorId, nota.id, { estado: nextState });
       await cargarTutorNotas(tutorId, { silent: true });
+      setUiNotice({ type: 'success', message: nextState === 'hecha' ? 'Nota marcada como hecha.' : 'Nota reabierta.' });
     } catch (error) {
       setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo cambiar el estado de la nota') });
     } finally {
@@ -476,7 +726,13 @@ const Dashboard: React.FC = () => {
   const eliminarTutorNota = useCallback(async (nota: TutorNota) => {
     const tutorId = tutorSeleccionado?.id;
     if (!tutorId || !nota?.id) return;
-    if (!window.confirm('¿Eliminar esta nota? Quedará registrada en el historial.')) return;
+    const ok = await uiConfirm({
+      title: '¿Eliminar esta nota?',
+      description: 'La acción quedará registrada en el historial.',
+      confirmLabel: 'Eliminar nota',
+      danger: true,
+    });
+    if (!ok) return;
 
     setTutorNotaBusy((prev) => ({ ...prev, [nota.id]: true }));
     try {
@@ -497,6 +753,99 @@ const Dashboard: React.FC = () => {
       });
     }
   }, [cargarTutorNotas, tutorNotaEditId, tutorSeleccionado?.id]);
+
+  const crearCalendarNota = useCallback(async () => {
+    const fecha = selectedDate;
+    const mensaje = calendarNotaDraft.trim();
+    if (!fecha || !mensaje || calendarNotaSaving) return;
+
+    setCalendarNotaSaving(true);
+    try {
+      await dashboardService.createCalendarNota(fecha, { mensaje });
+      setCalendarNotaDraft('');
+      await refreshCalendarNotesUi(fecha, { silent: true });
+      setUiNotice({ type: 'success', message: 'Nota del día guardada y compartida con el equipo.' });
+    } catch (error) {
+      setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo crear la nota del día') });
+    } finally {
+      setCalendarNotaSaving(false);
+    }
+  }, [calendarNotaDraft, calendarNotaSaving, refreshCalendarNotesUi, selectedDate]);
+
+  const guardarEdicionCalendarNota = useCallback(async (notaId: number) => {
+    const fecha = selectedDate;
+    const mensaje = calendarNotaEditText.trim();
+    if (!fecha || !notaId || !mensaje) return;
+
+    setCalendarNotaBusy((prev) => ({ ...prev, [notaId]: true }));
+    try {
+      await dashboardService.updateCalendarNota(fecha, notaId, { mensaje });
+      setCalendarNotaEditId(null);
+      setCalendarNotaEditText('');
+      await refreshCalendarNotesUi(fecha, { silent: true });
+      setUiNotice({ type: 'success', message: 'Nota del día actualizada.' });
+    } catch (error) {
+      setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo editar la nota del día') });
+    } finally {
+      setCalendarNotaBusy((prev) => {
+        const next = { ...prev };
+        delete next[notaId];
+        return next;
+      });
+    }
+  }, [calendarNotaEditText, refreshCalendarNotesUi, selectedDate]);
+
+  const cambiarEstadoCalendarNota = useCallback(async (nota: CalendarNota) => {
+    const fecha = selectedDate;
+    if (!fecha || !nota?.id) return;
+    const nextState = nota.estado === 'hecha' ? 'pendiente' : 'hecha';
+
+    setCalendarNotaBusy((prev) => ({ ...prev, [nota.id]: true }));
+    try {
+      await dashboardService.setCalendarNotaEstado(fecha, nota.id, { estado: nextState });
+      await refreshCalendarNotesUi(fecha, { silent: true });
+      setUiNotice({ type: 'success', message: nextState === 'hecha' ? 'Nota del día marcada como hecha.' : 'Nota del día reabierta.' });
+    } catch (error) {
+      setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo cambiar el estado de la nota del día') });
+    } finally {
+      setCalendarNotaBusy((prev) => {
+        const next = { ...prev };
+        delete next[nota.id];
+        return next;
+      });
+    }
+  }, [refreshCalendarNotesUi, selectedDate]);
+
+  const eliminarCalendarNota = useCallback(async (nota: CalendarNota) => {
+    const fecha = selectedDate;
+    if (!fecha || !nota?.id) return;
+    const ok = await uiConfirm({
+      title: '¿Eliminar esta nota del día?',
+      description: 'La acción quedará registrada en el historial del calendario.',
+      confirmLabel: 'Eliminar nota',
+      danger: true,
+    });
+    if (!ok) return;
+
+    setCalendarNotaBusy((prev) => ({ ...prev, [nota.id]: true }));
+    try {
+      await dashboardService.deleteCalendarNota(fecha, nota.id);
+      if (calendarNotaEditId === nota.id) {
+        setCalendarNotaEditId(null);
+        setCalendarNotaEditText('');
+      }
+      await refreshCalendarNotesUi(fecha, { silent: true });
+      setUiNotice({ type: 'success', message: 'Nota del día eliminada.' });
+    } catch (error) {
+      setUiNotice({ type: 'error', message: getErrorMessage(error, 'No se pudo eliminar la nota del día') });
+    } finally {
+      setCalendarNotaBusy((prev) => {
+        const next = { ...prev };
+        delete next[nota.id];
+        return next;
+      });
+    }
+  }, [calendarNotaEditId, refreshCalendarNotesUi, selectedDate]);
 
   const exportCalendarPdf = useCallback(async () => {
     const [year, monthNum] = calMes.split('-').map(Number);
@@ -1155,7 +1504,7 @@ const Dashboard: React.FC = () => {
       const ff = `${String(endY)}-${String(endM).padStart(2, '0')}-${String(endDim).padStart(2, '0')}`;
 
       // ── Lanzar TODAS las llamadas API en paralelo ──
-      const [tutoresAll, estudiantesAll, statsData, metricasResult, matriculasAll, estadosRangoResult, rt, rc] = await Promise.all([
+      const [tutoresAll, estudiantesAll, statsData, metricasResult, matriculasAll, estadosRangoResult, rt, rc, calendarNotasSummaryResult] = await Promise.all([
         tutoresService.getAll().catch(() => [] as Tutor[]),
         estudiantesService.getAll().catch(() => [] as Estudiante[]),
         dashboardService.getStats().catch(() => ({
@@ -1169,6 +1518,7 @@ const Dashboard: React.FC = () => {
         dashboardService.obtenerEstadosClasesRango({ fecha_inicio: fi, fecha_fin: ff }).catch(() => []),
         dashboardService.getResumenTutoresEstudiantes().catch(() => []),
         dashboardService.getResumenCursosGrupos().catch(() => []),
+        dashboardService.getCalendarNotasSummary({ fecha_inicio: fi, fecha_fin: ff }).catch(() => []),
       ]);
 
       // ── Procesar tutores y estudiantes ──
@@ -1390,6 +1740,12 @@ const Dashboard: React.FC = () => {
       // Resúmenes (ya cargados en paralelo)
       setResumenTutores(rt);
       setResumenCursos(rc);
+      setCalendarNotasResumen(
+        (calendarNotasSummaryResult || []).reduce<Record<string, CalendarNotaSummary>>((acc, item) => {
+          if (item?.fecha) acc[item.fecha] = item;
+          return acc;
+        }, {})
+      );
     } catch (err) {
       console.error('Error en dashboard:', err);
     } finally {
@@ -1476,6 +1832,26 @@ const Dashboard: React.FC = () => {
     void cargarTutorNotas(tutorSeleccionado.id);
   }, [cargarTutorNotas, tutorSeleccionado?.id]);
 
+  useEffect(() => {
+    if (!selectedDate) {
+      setCalendarNotas([]);
+      setCalendarNotasHistorial([]);
+      setCalendarNotaDraft('');
+      setCalendarNotaEditId(null);
+      setCalendarNotaEditText('');
+      setCalendarNotaBusy({});
+      setCalendarHistorialOpen(false);
+      setCalendarNotasLoading(false);
+      return;
+    }
+    setCalendarNotaDraft('');
+    setCalendarNotaBusy({});
+    setCalendarNotaEditId(null);
+    setCalendarNotaEditText('');
+    setCalendarHistorialOpen(false);
+    void cargarCalendarNotas(selectedDate);
+  }, [cargarCalendarNotas, selectedDate]);
+
   // Auto-completar sesiones mensuales pendientes de días pasados
   useEffect(() => {
     const mensualPendientes = sesionesPendientes.filter(s => {
@@ -1507,6 +1883,16 @@ const Dashboard: React.FC = () => {
       }
     },
     Boolean(tutorSeleccionado?.id),
+  );
+
+  useRealtimeSubscription(
+    ['calendario_notas', 'calendario_notas_historial'],
+    () => {
+      void Promise.all([
+        cargarCalendarNotas(selectedDateRef.current, { silent: true }),
+        cargarCalendarNotasResumen(calMes, { silent: true }),
+      ]);
+    },
   );
 
   const marcarSesionComoDada = useCallback(async (sesion: SesionDelDia) => {
@@ -1595,26 +1981,6 @@ const Dashboard: React.FC = () => {
     <div className="flex gap-6">
       {/* Contenido principal - 70% */}
       <div className="flex-1 space-y-10">
-        {uiNotice && (
-          <div className={`rounded-2xl border px-4 py-3 text-sm font-semibold flex items-start justify-between gap-4 ${
-            uiNotice.type === 'success'
-              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
-              : uiNotice.type === 'error'
-              ? 'border-red-500/30 bg-red-500/10 text-red-100'
-              : 'border-white/10 bg-white/5 text-slate-200'
-          }`}>
-            <div>{uiNotice.message}</div>
-            <button
-              className="text-slate-300 hover:text-white transition-colors"
-              onClick={() => setUiNotice(null)}
-              aria-label="Cerrar aviso"
-              title="Cerrar"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
         <Dialog
           isOpen={!!confirmMarcarDada}
           onClose={() => setConfirmMarcarDada(null)}
@@ -1637,7 +2003,7 @@ const Dashboard: React.FC = () => {
                 Volver
               </Button>
               <Button
-                className="h-11 bg-emerald-600 hover:bg-emerald-700 text-white"
+                className="h-11 bg-[#00AEEF] hover:bg-[#33BFF3] text-[#051026]"
                 onClick={async () => {
                   if (!confirmMarcarDada) return;
                   const sesion = confirmMarcarDada.sesion;
@@ -1866,7 +2232,7 @@ const Dashboard: React.FC = () => {
                               <div className="flex flex-col items-start gap-1">
                                 <Button
                                   size="sm"
-                                  className={`text-[11px] px-3 h-9 ${puedeMarcarDada ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-white/10 text-slate-400 border border-white/10'}`}
+                                  className={`text-[11px] px-3 h-9 ${puedeMarcarDada ? 'bg-[#00AEEF] hover:bg-[#33BFF3] text-[#051026]' : 'bg-white/10 text-slate-400 border border-white/10'}`}
                                   disabled={!puedeMarcarDada || isCompleting}
                                   onClick={async () => {
                                     if (!puedeMarcarDada) return;
@@ -2021,7 +2387,7 @@ const Dashboard: React.FC = () => {
                                 {!esMensual && (
                                   <Button
                                     size="sm"
-                                    className="text-[11px] px-3 h-9 bg-emerald-600 hover:bg-emerald-700 text-white"
+                                    className="text-[11px] px-3 h-9 bg-[#00AEEF] hover:bg-[#33BFF3] text-[#051026]"
                                     disabled={isCompleting}
                                     onClick={() => {
                                       setConfirmMarcarDada({ sesion: { ...sesion, fecha: sesion._fecha }, sesionKey });
@@ -2093,7 +2459,7 @@ const Dashboard: React.FC = () => {
                   const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
                   saveAs(new Blob([buf], { type: 'application/octet-stream' }), `Calendario_${calMes}.xlsx`);
                 }}
-                className="h-9 px-3 flex items-center gap-1.5 bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs font-bold rounded-md transition-colors"
+                className="h-9 px-3 flex items-center gap-1.5 bg-[#00AEEF]/85 hover:bg-[#33BFF3] text-[#051026] text-xs font-bold rounded-md transition-colors"
                 title="Exportar mes a Excel"
               >
                 <Download className="w-4 h-4" />
@@ -2101,7 +2467,7 @@ const Dashboard: React.FC = () => {
               </button>
               <button
                 onClick={exportCalendarPdf}
-                className="h-9 px-3 flex items-center gap-1.5 bg-red-700/80 hover:bg-red-600 text-white text-xs font-bold rounded-md transition-colors"
+                className="h-9 px-3 flex items-center gap-1.5 bg-[#FFC800]/90 hover:bg-[#FFD84D] text-[#051026] text-xs font-bold rounded-md transition-colors"
                 title="Exportar mes a PDF"
               >
                 <Download className="w-4 h-4" />
@@ -2185,11 +2551,14 @@ const Dashboard: React.FC = () => {
                         const isToday = dateStr === hoy;
                         const isSelected = selectedDate === dateStr;
                         const sesionesEnDia = getVisibleSesionesForDate(dateStr);
+                        const notasDelDia = calendarNotasResumen[dateStr];
                         
                         const hasClasses = sesionesEnDia.length > 0;
+                        const hasCalendarNotes = Boolean(notasDelDia?.total);
                         const diaSemana = getDiaSemana(dateStr);
                         const diaCorto = diaSemana.slice(0, 3);
                         const countLabel = sesionesEnDia.length > 99 ? '99+' : String(sesionesEnDia.length);
+                        const noteCountLabel = (notasDelDia?.total || 0) > 99 ? '99+' : String(notasDelDia?.total || 0);
                         const preview = (() => {
                           if (sesionesEnDia.length <= calendarPreviewCount) return sesionesEnDia;
                           const len = sesionesEnDia.length;
@@ -2216,10 +2585,27 @@ const Dashboard: React.FC = () => {
                                 : isSelected
                                 ? 'bg-gradient-to-br from-[#FFC800]/20 to-[#FFC800]/10 border-[#FFC800] shadow-lg shadow-[#FFC800]/20'
                                 : hasClasses
-                                ? 'bg-white/5 border-white/20 hover:bg-white/10 hover:border-[#00AEEF]/50'
+                                ? `bg-white/5 border-white/20 hover:bg-white/10 hover:border-[#00AEEF]/50 ${hasCalendarNotes ? 'ring-1 ring-[#FFC800]/25 border-[#FFC800]/25' : ''}`
+                                : hasCalendarNotes
+                                ? 'bg-[#FFC800]/8 border-[#FFC800]/25 hover:bg-[#FFC800]/12 hover:border-[#FFC800]/45'
                                 : 'bg-transparent border-white/5 text-slate-600'
                             } text-sm`}
                           >
+                            {hasCalendarNotes && (
+                              <span
+                                className={`absolute -top-1 -left-1 h-6 min-w-6 px-1.5 inline-flex items-center justify-center text-[10px] font-black rounded-full tabular-nums border shadow-lg ${
+                                  isToday
+                                    ? 'bg-[#00AEEF] text-[#051026] border-[#7DDCFF]'
+                                    : notasDelDia?.pendientes
+                                    ? 'bg-[#FFC800] text-[#051026] border-[#FFE082]'
+                                    : 'bg-emerald-400 text-[#042016] border-emerald-200'
+                                }`}
+                                title={`${notasDelDia?.total || 0} nota(s) del equipo en este día`}
+                              >
+                                {noteCountLabel}
+                              </span>
+                            )}
+
                             {hasClasses && (
                               <span
                                 className={`absolute top-1.5 right-1.5 text-[10px] font-black px-1.5 py-0.5 rounded min-w-6 text-center tabular-nums ${
@@ -2701,7 +3087,7 @@ const Dashboard: React.FC = () => {
                       size="sm"
                       className={`h-8 text-[11px] px-3 rounded-lg ${
                         programacionSesion.sesion.confirmado
-                          ? 'bg-emerald-600 text-white'
+                          ? 'bg-[#00AEEF] text-[#051026]'
                           : 'bg-transparent text-slate-300 hover:bg-white/10 border border-transparent'
                       }`}
                       onClick={() => cambiarEstadoSesion(programacionSesion.sesion, true, true)}
@@ -2722,11 +3108,7 @@ const Dashboard: React.FC = () => {
               <div className="flex justify-between items-start">
                 <div>
                   <CardTitle className="text-white text-base">
-                    {new Date(selectedDate + 'T00:00:00').toLocaleDateString('es-CR', {
-                      weekday: 'long',
-                      day: 'numeric',
-                      month: 'long'
-                    })}
+                    {selectedDateLongLabel}
                   </CardTitle>
                   <CardDescription className="text-slate-400 mt-1 text-xs">
                     {(() => {
@@ -2771,6 +3153,46 @@ const Dashboard: React.FC = () => {
                   placeholder="Filtrar (curso/estudiante/tutor)…"
                   className="h-9"
                 />
+              </div>
+
+              <div className="mt-3 rounded-2xl border border-[#FFC800]/20 bg-[#051026]/70 p-3">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-[11px] font-black uppercase tracking-[0.2em] text-[#FFC800]">Notas del equipo para este día</div>
+                      <span
+                        className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-[10px] font-black tabular-nums border shadow ${
+                          selectedCalendarNoteSummary.total === 0
+                            ? 'bg-white/10 text-slate-300 border-white/20'
+                            : selectedCalendarNoteSummary.pendientes > 0
+                            ? 'bg-[#FFC800] text-[#051026] border-[#FFE082]'
+                            : 'bg-emerald-400 text-[#042016] border-emerald-200'
+                        }`}
+                        title={`${selectedCalendarNoteSummary.total} nota(s) en este día`}
+                      >
+                        {selectedCalendarNoteCountLabel}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-sm text-white">
+                      {selectedCalendarNoteSummary.total > 0
+                        ? `${selectedCalendarNoteSummary.total} nota(s) registradas${selectedCalendarNoteSummary.pendientes > 0 ? `, ${selectedCalendarNoteSummary.pendientes} pendiente(s)` : ', todas resueltas'}`
+                        : 'Aún no hay notas colaborativas para este día.'}
+                    </div>
+                    {selectedCalendarNoteSummary.updated_at && (
+                      <div className="mt-1 text-[11px] text-slate-400">
+                        Último movimiento: {formatNotaDate(selectedCalendarNoteSummary.updated_at)}
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    className="bg-[#FFC800] hover:bg-[#FFD84D] text-[#051026] font-black"
+                    onClick={focusCalendarNotesComposer}
+                  >
+                    {selectedCalendarNoteSummary.total > 0 ? 'Agregar otra nota' : 'Agregar primera nota'}
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="pt-4">
@@ -2973,7 +3395,7 @@ const Dashboard: React.FC = () => {
                       size="sm"
                       className={`h-8 text-[11px] px-3 rounded-lg ${
                         programacionSesion.sesion.confirmado
-                          ? 'bg-emerald-600 text-white'
+                          ? 'bg-[#00AEEF] text-[#051026]'
                           : 'bg-transparent text-slate-300 hover:bg-white/10 border border-transparent'
                       }`}
                       onClick={() => cambiarEstadoSesion(programacionSesion.sesion, true, true)}
@@ -3382,185 +3804,387 @@ const Dashboard: React.FC = () => {
           </Card>
         )}
 
+        <div ref={teamNotesCardRef}>
         <Card className="border-white/10 bg-[#0F2445]">
           <CardHeader>
             <CardTitle className="text-lg text-white">Notas Internas del Equipo</CardTitle>
-            <CardDescription className="text-xs text-slate-300">Bitácora colaborativa en tiempo real escrita por empleados sobre este tutor</CardDescription>
+            <CardDescription className="text-xs text-slate-300">Bitácora colaborativa en tiempo real para el día seleccionado y para cada tutor en seguimiento</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {!tutorSeleccionado ? (
-              <div className="text-xs text-slate-400 text-center py-4">Selecciona un tutor para gestionar notas colaborativas.</div>
-            ) : (
-              <>
-                <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
-                  Tutor en seguimiento: <span className="text-white">{tutorSeleccionado.nombre}</span>
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <textarea
-                    value={tutorNotaDraft}
-                    onChange={(e) => setTutorNotaDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        void crearTutorNota();
-                      }
-                    }}
-                    placeholder="Escribe una nota interna del equipo sobre este tutor (Enter para guardar, Shift+Enter para salto de línea)..."
-                    className="w-full min-h-[90px] rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#00AEEF]/50"
-                  />
-                  <div className="flex justify-end">
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      className="bg-[#00AEEF] hover:bg-[#00AEEF]/85 text-[#051026] font-bold"
-                      onClick={() => void crearTutorNota()}
-                      disabled={tutorNotaSaving || !tutorNotaDraft.trim()}
-                    >
-                      {tutorNotaSaving ? 'Guardando...' : 'Guardar nota'}
-                    </Button>
+          <CardContent className="space-y-6">
+            <div className="rounded-2xl border border-[#FFC800]/20 bg-[#051026]/60 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="text-[11px] text-[#FFC800] font-black uppercase tracking-[0.2em]">Notas por fecha seleccionada</div>
+                  <div className="mt-1 text-sm font-bold text-white capitalize">{selectedDateLongLabel || 'Sin fecha seleccionada'}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {selectedCalendarNoteSummary.total > 0
+                      ? `${selectedCalendarNoteSummary.total} nota(s) del equipo para este día.`
+                      : 'Comparte recordatorios, pendientes o contexto que deba ver todo el equipo.'}
                   </div>
                 </div>
+                <div className="flex flex-wrap gap-2">
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-full border border-[#FFC800]/25 bg-[#FFC800]/12 text-[#FFE082]">
+                    Pendientes: {selectedCalendarNoteSummary.pendientes || 0}
+                  </span>
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-full border border-emerald-400/25 bg-emerald-500/12 text-emerald-200">
+                    Hechas: {selectedCalendarNoteSummary.hechas || 0}
+                  </span>
+                </div>
+              </div>
 
-                {tutorNotasLoading ? (
-                  <div className="text-xs text-slate-400">Cargando notas...</div>
-                ) : tutorNotas.length === 0 ? (
-                  <div className="text-xs text-slate-400">Aún no hay notas registradas para este tutor.</div>
-                ) : (
-                  <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
-                    {tutorNotas.map((nota) => {
-                      const busy = Boolean(tutorNotaBusy[nota.id]);
-                      const editing = tutorNotaEditId === nota.id;
-                      const actorName = nota.actualizado_por_nombre || nota.creado_por_nombre || 'Equipo';
-                      return (
-                        <div
-                          key={nota.id}
-                          className={`rounded-xl border p-3 ${nota.estado === 'hecha' ? 'bg-emerald-500/10 border-emerald-400/25' : 'bg-white/5 border-white/10'}`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${nota.estado === 'hecha' ? 'text-emerald-200 border-emerald-400/30 bg-emerald-500/10' : 'text-amber-200 border-amber-400/30 bg-amber-500/10'}`}>
-                              {nota.estado === 'hecha' ? 'Hecha' : 'Pendiente'}
-                            </span>
+              <div className="mt-3 flex flex-col gap-2">
+                <textarea
+                  ref={calendarNoteInputRef}
+                  value={calendarNotaDraft}
+                  onChange={(e) => setCalendarNotaDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void crearCalendarNota();
+                    }
+                  }}
+                  placeholder="Escribe una nota interna para este día del calendario (Enter para guardar, Shift+Enter para salto de línea)..."
+                  className="w-full min-h-[90px] rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#FFC800]/45"
+                />
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    className="bg-[#FFC800] hover:bg-[#FFD84D] text-[#051026] font-black"
+                    onClick={() => void crearCalendarNota()}
+                    disabled={calendarNotaSaving || !calendarNotaDraft.trim()}
+                  >
+                    {calendarNotaSaving ? 'Guardando...' : 'Guardar nota del día'}
+                  </Button>
+                </div>
+              </div>
+
+              {calendarNotasLoading ? (
+                <div className="mt-3 text-xs text-slate-400">Cargando notas del día...</div>
+              ) : calendarNotas.length === 0 ? (
+                <div className="mt-3 text-xs text-slate-400">Aún no hay notas registradas para este día.</div>
+              ) : (
+                <div className="mt-3 space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                  {calendarNotas.map((nota) => {
+                    const busy = Boolean(calendarNotaBusy[nota.id]);
+                    const editing = calendarNotaEditId === nota.id;
+                    const actorName = nota.actualizado_por_nombre || nota.creado_por_nombre || 'Equipo';
+                    const canEdit = nota.estado !== 'hecha' && !!currentUserId && nota.creado_por === currentUserId;
+                    const wasEdited = Boolean(nota.actualizado_por_nombre);
+                    return (
+                      <div
+                        key={nota.id}
+                        className={`rounded-xl border p-3 ${nota.estado === 'hecha' ? 'bg-emerald-500/10 border-emerald-400/25' : 'bg-white/5 border-white/10'}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${nota.estado === 'hecha' ? 'text-emerald-200 border-emerald-400/30 bg-emerald-500/10' : 'text-amber-200 border-amber-400/30 bg-amber-500/10'}`}>
+                            {nota.estado === 'hecha' ? 'Hecha' : 'Pendiente'}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            {wasEdited && (
+                              <span className="text-[9px] font-semibold text-slate-500 italic">editada</span>
+                            )}
                             <span className="text-[11px] text-slate-400">{actorName} · {formatNotaDate(nota.updated_at || nota.created_at)}</span>
                           </div>
+                        </div>
 
-                          {editing ? (
-                            <div className="mt-2 space-y-2">
-                              <textarea
-                                value={tutorNotaEditText}
-                                onChange={(e) => setTutorNotaEditText(e.target.value)}
-                                className="w-full min-h-[80px] rounded-lg border border-white/15 bg-[#0B1B33] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#00AEEF]/50"
-                              />
-                              <div className="flex justify-end gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  onClick={() => {
-                                    setTutorNotaEditId(null);
-                                    setTutorNotaEditText('');
-                                  }}
-                                >
-                                  Cancelar
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="primary"
-                                  className="bg-[#00AEEF] hover:bg-[#00AEEF]/85 text-[#051026] font-bold"
-                                  disabled={busy || !tutorNotaEditText.trim()}
-                                  onClick={() => void guardarEdicionTutorNota(nota.id)}
-                                >
-                                  Guardar
-                                </Button>
-                              </div>
+                        {editing ? (
+                          <div className="mt-2 space-y-2">
+                            <textarea
+                              value={calendarNotaEditText}
+                              onChange={(e) => setCalendarNotaEditText(e.target.value)}
+                              className="w-full min-h-[80px] rounded-lg border border-white/15 bg-[#0B1B33] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#FFC800]/45"
+                            />
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => {
+                                  setCalendarNotaEditId(null);
+                                  setCalendarNotaEditText('');
+                                }}
+                              >
+                                Cancelar
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                className="bg-[#FFC800] hover:bg-[#FFD84D] text-[#051026] font-black"
+                                disabled={busy || !calendarNotaEditText.trim()}
+                                onClick={() => void guardarEdicionCalendarNota(nota.id)}
+                              >
+                                Guardar
+                              </Button>
                             </div>
-                          ) : (
-                            <p className={`mt-2 text-sm whitespace-pre-wrap break-words ${nota.estado === 'hecha' ? 'text-emerald-100 line-through decoration-emerald-300/70' : 'text-slate-100'}`}>
-                              {nota.mensaje}
-                            </p>
-                          )}
+                          </div>
+                        ) : (
+                          <p className={`mt-2 text-sm whitespace-pre-wrap break-words ${nota.estado === 'hecha' ? 'text-emerald-100 line-through decoration-emerald-300/70' : 'text-slate-100'}`}>
+                            {nota.mensaje}
+                          </p>
+                        )}
 
-                          {!editing && (
-                            <div className="mt-3 flex flex-wrap justify-end gap-2">
+                        {!editing && (
+                          <div className="mt-3 flex flex-wrap justify-end gap-2">
+                            {canEdit && (
                               <Button
                                 size="sm"
                                 variant="outline"
                                 disabled={busy}
                                 onClick={() => {
-                                  setTutorNotaEditId(nota.id);
-                                  setTutorNotaEditText(nota.mensaje || '');
+                                  setCalendarNotaEditId(nota.id);
+                                  setCalendarNotaEditText(nota.mensaje || '');
                                 }}
                               >
                                 Editar
                               </Button>
-                              <Button
-                                size="sm"
-                                variant={nota.estado === 'hecha' ? 'secondary' : 'success'}
-                                disabled={busy}
-                                onClick={() => void cambiarEstadoTutorNota(nota)}
-                              >
-                                {nota.estado === 'hecha' ? 'Reabrir' : 'Marcar hecha'}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                disabled={busy}
-                                onClick={() => void eliminarTutorNota(nota)}
-                              >
-                                Borrar
-                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant={nota.estado === 'hecha' ? 'secondary' : 'success'}
+                              disabled={busy}
+                              onClick={() => void cambiarEstadoCalendarNota(nota)}
+                            >
+                              {nota.estado === 'hecha' ? 'Reabrir' : 'Marcar hecha'}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              disabled={busy}
+                              onClick={() => void eliminarCalendarNota(nota)}
+                            >
+                              Borrar
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="pt-3 mt-3 border-t border-white/10">
+                <button
+                  onClick={() => setCalendarHistorialOpen((value) => !value)}
+                  className="text-xs font-bold text-slate-300 hover:text-white transition-colors"
+                >
+                  {calendarHistorialOpen ? 'Ocultar historial del día' : `Ver historial del día (${calendarNotasHistorial.length})`}
+                </button>
+
+                {calendarHistorialOpen && (
+                  <div className="mt-3 space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                    {calendarNotasHistorial.length === 0 ? (
+                      <div className="text-xs text-slate-400">Sin historial registrado para esta fecha.</div>
+                    ) : (
+                      calendarNotasHistorial.map((item) => {
+                        const before = item?.meta?.before;
+                        const after = item?.meta?.after;
+                        return (
+                          <div key={item.id} className="rounded-lg border border-white/10 bg-white/5 p-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-bold text-slate-100">{getNotaAccionLabel(item.accion)}</span>
+                              <span className="text-[10px] text-slate-400">{formatNotaDate(item.created_at)}</span>
                             </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                            <div className="text-[11px] text-slate-300 mt-0.5">
+                              Empleado: {item.actor_name || 'Usuario'}{item.actor_role ? ` (${item.actor_role})` : ''}
+                            </div>
+                            {item.mensaje && (
+                              <div className="text-xs text-slate-200 mt-1 whitespace-pre-wrap break-words">{item.mensaje}</div>
+                            )}
+                            {(before !== undefined || after !== undefined) && (
+                              <div className="mt-1 text-[11px] text-slate-400">
+                                {before !== undefined && before !== null ? `Antes: ${String(before)} ` : ''}
+                                {after !== undefined && after !== null ? `Después: ${String(after)}` : ''}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 )}
+              </div>
+            </div>
 
-                <div className="pt-3 border-t border-white/10">
-                  <button
-                    onClick={() => setTutorHistorialOpen((v) => !v)}
-                    className="text-xs font-bold text-slate-300 hover:text-white transition-colors"
-                  >
-                    {tutorHistorialOpen ? 'Ocultar historial' : `Ver historial (${tutorNotasHistorial.length})`}
-                  </button>
+            <div className="space-y-4 border-t border-white/10 pt-5">
+              <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+                Seguimiento por tutor
+              </div>
 
-                  {tutorHistorialOpen && (
-                    <div className="mt-3 space-y-2 max-h-[240px] overflow-y-auto pr-1">
-                      {tutorNotasHistorial.length === 0 ? (
-                        <div className="text-xs text-slate-400">Sin historial registrado.</div>
-                      ) : (
-                        tutorNotasHistorial.map((item) => {
-                          const before = item?.meta?.before;
-                          const after = item?.meta?.after;
-                          return (
-                            <div key={item.id} className="rounded-lg border border-white/10 bg-white/5 p-2.5">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-[11px] font-bold text-slate-100">{getNotaAccionLabel(item.accion)}</span>
-                                <span className="text-[10px] text-slate-400">{formatNotaDate(item.created_at)}</span>
-                              </div>
-                              <div className="text-[11px] text-slate-300 mt-0.5">
-                                Empleado: {item.actor_name || 'Usuario'}{item.actor_role ? ` (${item.actor_role})` : ''}
-                              </div>
-                              {item.mensaje && (
-                                <div className="text-xs text-slate-200 mt-1 whitespace-pre-wrap break-words">{item.mensaje}</div>
-                              )}
-                              {(before !== undefined || after !== undefined) && (
-                                <div className="mt-1 text-[11px] text-slate-400">
-                                  {before !== undefined && before !== null ? `Antes: ${String(before)} ` : ''}
-                                  {after !== undefined && after !== null ? `Después: ${String(after)}` : ''}
-                                </div>
-                              )}
+              {!tutorSeleccionado ? (
+                <div className="text-xs text-slate-400 text-center py-4">Selecciona un tutor para gestionar notas colaborativas por persona.</div>
+              ) : (
+                <>
+                  <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+                    Tutor en seguimiento: <span className="text-white">{tutorSeleccionado.nombre}</span>
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      value={tutorNotaDraft}
+                      onChange={(e) => setTutorNotaDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          void crearTutorNota();
+                        }
+                      }}
+                      placeholder="Escribe una nota interna del equipo sobre este tutor (Enter para guardar, Shift+Enter para salto de línea)..."
+                      className="w-full min-h-[90px] rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#00AEEF]/50"
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        className="bg-[#00AEEF] hover:bg-[#00AEEF]/85 text-[#051026] font-bold"
+                        onClick={() => void crearTutorNota()}
+                        disabled={tutorNotaSaving || !tutorNotaDraft.trim()}
+                      >
+                        {tutorNotaSaving ? 'Guardando...' : 'Guardar nota'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {tutorNotasLoading ? (
+                    <div className="text-xs text-slate-400">Cargando notas...</div>
+                  ) : tutorNotas.length === 0 ? (
+                    <div className="text-xs text-slate-400">Aún no hay notas registradas para este tutor.</div>
+                  ) : (
+                    <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                      {tutorNotas.map((nota) => {
+                        const busy = Boolean(tutorNotaBusy[nota.id]);
+                        const editing = tutorNotaEditId === nota.id;
+                        const actorName = nota.actualizado_por_nombre || nota.creado_por_nombre || 'Equipo';
+                        return (
+                          <div
+                            key={nota.id}
+                            className={`rounded-xl border p-3 ${nota.estado === 'hecha' ? 'bg-emerald-500/10 border-emerald-400/25' : 'bg-white/5 border-white/10'}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${nota.estado === 'hecha' ? 'text-emerald-200 border-emerald-400/30 bg-emerald-500/10' : 'text-amber-200 border-amber-400/30 bg-amber-500/10'}`}>
+                                {nota.estado === 'hecha' ? 'Hecha' : 'Pendiente'}
+                              </span>
+                              <span className="text-[11px] text-slate-400">{actorName} · {formatNotaDate(nota.updated_at || nota.created_at)}</span>
                             </div>
-                          );
-                        })
-                      )}
+
+                            {editing ? (
+                              <div className="mt-2 space-y-2">
+                                <textarea
+                                  value={tutorNotaEditText}
+                                  onChange={(e) => setTutorNotaEditText(e.target.value)}
+                                  className="w-full min-h-[80px] rounded-lg border border-white/15 bg-[#0B1B33] px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#00AEEF]/50"
+                                />
+                                <div className="flex justify-end gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => {
+                                      setTutorNotaEditId(null);
+                                      setTutorNotaEditText('');
+                                    }}
+                                  >
+                                    Cancelar
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="primary"
+                                    className="bg-[#00AEEF] hover:bg-[#00AEEF]/85 text-[#051026] font-bold"
+                                    disabled={busy || !tutorNotaEditText.trim()}
+                                    onClick={() => void guardarEdicionTutorNota(nota.id)}
+                                  >
+                                    Guardar
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className={`mt-2 text-sm whitespace-pre-wrap break-words ${nota.estado === 'hecha' ? 'text-emerald-100 line-through decoration-emerald-300/70' : 'text-slate-100'}`}>
+                                {nota.mensaje}
+                              </p>
+                            )}
+
+                            {!editing && (
+                              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setTutorNotaEditId(nota.id);
+                                    setTutorNotaEditText(nota.mensaje || '');
+                                  }}
+                                >
+                                  Editar
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant={nota.estado === 'hecha' ? 'secondary' : 'success'}
+                                  disabled={busy}
+                                  onClick={() => void cambiarEstadoTutorNota(nota)}
+                                >
+                                  {nota.estado === 'hecha' ? 'Reabrir' : 'Marcar hecha'}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  disabled={busy}
+                                  onClick={() => void eliminarTutorNota(nota)}
+                                >
+                                  Borrar
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
-                </div>
-              </>
-            )}
+
+                  <div className="pt-3 border-t border-white/10">
+                    <button
+                      onClick={() => setTutorHistorialOpen((v) => !v)}
+                      className="text-xs font-bold text-slate-300 hover:text-white transition-colors"
+                    >
+                      {tutorHistorialOpen ? 'Ocultar historial' : `Ver historial (${tutorNotasHistorial.length})`}
+                    </button>
+
+                    {tutorHistorialOpen && (
+                      <div className="mt-3 space-y-2 max-h-[240px] overflow-y-auto pr-1">
+                        {tutorNotasHistorial.length === 0 ? (
+                          <div className="text-xs text-slate-400">Sin historial registrado.</div>
+                        ) : (
+                          tutorNotasHistorial.map((item) => {
+                            const before = item?.meta?.before;
+                            const after = item?.meta?.after;
+                            return (
+                              <div key={item.id} className="rounded-lg border border-white/10 bg-white/5 p-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] font-bold text-slate-100">{getNotaAccionLabel(item.accion)}</span>
+                                  <span className="text-[10px] text-slate-400">{formatNotaDate(item.created_at)}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-300 mt-0.5">
+                                  Empleado: {item.actor_name || 'Usuario'}{item.actor_role ? ` (${item.actor_role})` : ''}
+                                </div>
+                                {item.mensaje && (
+                                  <div className="text-xs text-slate-200 mt-1 whitespace-pre-wrap break-words">{item.mensaje}</div>
+                                )}
+                                {(before !== undefined || after !== undefined) && (
+                                  <div className="mt-1 text-[11px] text-slate-400">
+                                    {before !== undefined && before !== null ? `Antes: ${String(before)} ` : ''}
+                                    {after !== undefined && after !== null ? `Después: ${String(after)}` : ''}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </CardContent>
         </Card>
+        </div>
 
       </aside>
     </div>

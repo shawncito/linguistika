@@ -38,4 +38,12 @@ router.patch('/tutores/:tutorId/notas/:notaId', requireRoles(EMPLOYEE_ROLES), ct
 router.patch('/tutores/:tutorId/notas/:notaId/estado', requireRoles(EMPLOYEE_ROLES), ctrl.setTutorNotaEstado);
 router.delete('/tutores/:tutorId/notas/:notaId', requireRoles(EMPLOYEE_ROLES), ctrl.deleteTutorNota);
 
+// Notas colaborativas por fecha del calendario
+router.get('/calendario/notas-resumen', requireRoles(EMPLOYEE_ROLES), ctrl.listCalendarNotasSummary);
+router.get('/calendario/:fecha/notas', requireRoles(EMPLOYEE_ROLES), ctrl.listCalendarNotas);
+router.post('/calendario/:fecha/notas', requireRoles(EMPLOYEE_ROLES), ctrl.createCalendarNota);
+router.patch('/calendario/:fecha/notas/:notaId', requireRoles(EMPLOYEE_ROLES), ctrl.updateCalendarNotaTexto);
+router.patch('/calendario/:fecha/notas/:notaId/estado', requireRoles(EMPLOYEE_ROLES), ctrl.setCalendarNotaEstado);
+router.delete('/calendario/:fecha/notas/:notaId', requireRoles(EMPLOYEE_ROLES), ctrl.deleteCalendarNota);
+
 export default router;

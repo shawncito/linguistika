@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useLocation } from "react-router-dom";
 import { usePersistentState } from "../lib/usePersistentState";
+import { uiConfirm } from "../lib/uiFeedback";
 import { useTutores } from "../hooks";
 import { tutoresService } from "../services/api/tutoresService";
 import { Tutor } from "../types";
@@ -31,6 +32,9 @@ const sortDiaEntries = <T,>(dias_horarios: Record<string, T> = {}) =>
   Object.entries(dias_horarios).sort((a, b) => DIAS_SEMANA.indexOf(a[0]) - DIAS_SEMANA.indexOf(b[0]));
 const getErrorMessage = (error: any) =>
   error?.response?.data?.message || error?.response?.data?.error || error?.message || "Error al guardar";
+const showActionAlert = (message: string) => {
+  window.alert(message);
+};
 const toWhatsAppUrl = (telefono?: string | null) => {
   if (!telefono) return "";
   const digits = telefono.replace(/[^\d+]/g, "");
@@ -278,8 +282,10 @@ const Tutores: React.FC = () => {
 
       if (editingId) {
         await updateTutor(editingId, dataToSubmit);
+        showActionAlert("Tutor actualizado correctamente.");
       } else {
         await createTutor(dataToSubmit);
+        showActionAlert("Tutor creado correctamente.");
       }
 
       setShowModal(false);
@@ -327,14 +333,30 @@ const Tutores: React.FC = () => {
   };
 
   const handleDelete = async (id: number) => {
-    if (window.confirm("Estas seguro de eliminar este tutor?")) {
+    const ok = await uiConfirm({
+      title: '¿Eliminar este tutor?',
+      description: 'Esta acción no se puede deshacer.',
+      confirmLabel: 'Eliminar tutor',
+      danger: true,
+    });
+    if (!ok) return;
+
+    try {
       await deleteTutor(id);
+      showActionAlert("Tutor eliminado correctamente.");
+    } catch (error) {
+      setErrors({ submit: getErrorMessage(error) });
     }
   };
 
   const toggleEstado = async (tutor: Tutor) => {
-    const nuevoEstado = tutor.estado === 1 ? 0 : 1;
-    await updateTutor(tutor.id, { estado: nuevoEstado });
+    try {
+      const nuevoEstado = tutor.estado === 1 ? 0 : 1;
+      await updateTutor(tutor.id, { estado: nuevoEstado });
+      showActionAlert(nuevoEstado === 1 ? "Tutor activado correctamente." : "Tutor inactivado correctamente.");
+    } catch (error) {
+      setErrors({ submit: getErrorMessage(error) });
+    }
   };
 
   if (loading) {
@@ -412,7 +434,6 @@ const Tutores: React.FC = () => {
                 <TableIcon className="w-4 h-4" /> Tabla
               </Button>
               <Button
-                size="sm"
                 onClick={() => setViewMode("tarjetas")}
                 className={`gap-2 font-bold transition-all ${viewMode === "tarjetas"
                   ? "bg-[#00AEEF] hover:bg-[#00AEEF]/80 text-[#051026]"
@@ -531,7 +552,7 @@ const Tutores: React.FC = () => {
                         {selectedTutor.telefono && (
                           <Button
                             size="sm"
-                            className="mt-2 bg-[#25D366]/20 text-[#25D366] border border-[#25D366]/40 hover:bg-[#25D366]/30"
+                            className="mt-2 bg-[#00AEEF]/20 text-[#7DDCFF] border border-[#00AEEF]/40 hover:bg-[#00AEEF]/30"
                             onClick={() => {
                               const url = toWhatsAppUrl(selectedTutor.telefono);
                               if (url) window.open(url, "_blank");
@@ -626,7 +647,7 @@ const Tutores: React.FC = () => {
                               </button>
                               <button
                                 onClick={() => { handleDelete(tutor.id); setMenuOpen(null); }}
-                                className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-rose-500/10 flex items-center gap-2"
+                                className="w-full text-left px-4 py-2 text-sm text-[#FFC800] hover:bg-[#FFC800]/10 flex items-center gap-2"
                               >
                                 <Trash2 className="w-4 h-4" />
                                 Eliminar
@@ -689,8 +710,8 @@ const Tutores: React.FC = () => {
                           size="sm"
                           onClick={() => toggleEstado(tutor)}
                           className={`w-full gap-2 font-bold border ${tutor.estado === 1
-                            ? "bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50"
-                            : "bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50"}`}
+                            ? "bg-[#00AEEF]/20 hover:bg-[#00AEEF]/30 border-[#00AEEF]/45 text-[#C9F2FF]"
+                            : "bg-[#FFC800]/15 hover:bg-[#FFC800]/25 border-[#FFC800]/45 text-[#FFE89A]"}`}
                         >
                           {tutor.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                           {tutor.estado === 1 ? "Activo" : "Inactivo"}
@@ -699,7 +720,7 @@ const Tutores: React.FC = () => {
                         {tutor.telefono && (
                           <Button
                             size="sm"
-                            className="w-full bg-[#25D366]/20 text-[#25D366] border border-[#25D366]/40 hover:bg-[#25D366]/30"
+                            className="w-full bg-[#00AEEF]/20 text-[#7DDCFF] border border-[#00AEEF]/40 hover:bg-[#00AEEF]/30"
                             onClick={() => {
                               const url = toWhatsAppUrl(tutor.telefono);
                               if (url) window.open(url, "_blank");
@@ -755,7 +776,7 @@ const Tutores: React.FC = () => {
                           <div className="flex justify-end gap-2">
                             <Button size="sm" variant="ghost" onClick={() => { setSelectedTutor(tutor); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
                             <Button size="sm" variant="ghost" onClick={() => handleEdit(tutor)} className="text-blue-700">Editar</Button>
-                            <Button size="sm" variant="ghost" onClick={() => handleDelete(tutor.id)} className="text-red-600">Eliminar</Button>
+                            <Button size="sm" variant="ghost" onClick={() => handleDelete(tutor.id)} className="text-[#FFC800] hover:text-[#FFD84D]">Eliminar</Button>
                           </div>
                         </TableCell>
                       </TableRow>

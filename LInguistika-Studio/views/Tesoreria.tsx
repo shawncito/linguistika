@@ -129,6 +129,10 @@ type SelectedEstudianteDetalle = {
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
+const showActionAlert = (message: string) => {
+  window.alert(message);
+};
+
 const lastDayOfMonthISO = (mesYYYYMM: string) => {
   const raw = String(mesYYYYMM || '').trim();
   if (!/^\d{4}-\d{2}$/.test(raw)) return '';
@@ -402,6 +406,8 @@ const Tesoreria: React.FC = () => {
         loadPendientesPorEstudiante(),
         loadGrupos(),
       ]);
+
+      showActionAlert('Cobro grupal registrado correctamente.');
 
       // Cerrar modal en 2 segundos
       setTimeout(() => {
@@ -948,6 +954,7 @@ const Tesoreria: React.FC = () => {
         // noop
       }
       setPagoOpen(false);
+      showActionAlert('Pago de encargado registrado correctamente.');
     } catch (err: any) {
       alert(err?.response?.data?.error || err?.message || 'Error registrando pago');
     } finally {
@@ -1038,6 +1045,7 @@ const Tesoreria: React.FC = () => {
       setTutorObligacionesSeleccionadas([]);
       setTutorPagoDetallesOpen(false);
       setTutorPagoOpen(false);
+      showActionAlert('Pago a tutor registrado correctamente.');
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Error pagando tutor';
       const closedMatch = String(msg).match(/Periodo cerrado:[^\n]*fecha\s*<=\s*(\d{4}-\d{2}-\d{2})/i);
@@ -1456,7 +1464,7 @@ const Tesoreria: React.FC = () => {
                         {selectedEnc.estado === 'deuda' && (
                           <Button 
                             variant="primary" 
-                            className="h-10 bg-red-600 hover:bg-red-700"
+                            className="h-10 bg-[#FFC800] hover:bg-[#FFD84D] text-[#051026]"
                             onClick={() => openPago(selectedEnc)}
                           >
                             Pagar

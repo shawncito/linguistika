@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { usePersistentState } from '../lib/usePersistentState';
+import { uiConfirm } from '../lib/uiFeedback';
 import { useCursos } from '../hooks';
 import { bulkService } from '../services/api/bulkService';
 import { Curso, Tutor } from '../types';
@@ -144,6 +145,10 @@ const formatRange = (inicio?: string | null, fin?: string | null) =>
 
 const getErrorMessage = (error: any) =>
   error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Error al guardar curso';
+
+const showActionAlert = (message: string) => {
+  window.alert(message);
+};
 
 type BulkCursosResult = {
   ok: boolean;
@@ -514,8 +519,10 @@ const Cursos: React.FC = () => {
 
       if (editingId) {
         await updateCurso(editingId, dataToSubmit);
+        showActionAlert('Curso actualizado correctamente.');
       } else {
         await createCurso(dataToSubmit);
+        showActionAlert('Curso creado correctamente.');
       }
 
       setShowModal(false);
@@ -558,6 +565,7 @@ const Cursos: React.FC = () => {
       if (res?.created > 0) {
         refresh();
       }
+      showActionAlert(`Carga masiva completada. Creados: ${res?.created ?? 0}. Fallidos: ${res?.failed ?? 0}.`);
     } catch (e: any) {
       setBulkResult({ ok: false, failures: [{ rowNumber: 0, nombre: null, error: getErrorMessage(e) }] });
     } finally {
@@ -617,48 +625,67 @@ const Cursos: React.FC = () => {
   };
 
   const handleDelete = async (id: number) => {
-    if (window.confirm('¿Estás seguro de eliminar este curso?')) {
-      try {
-        await deleteCurso(id);
-      } catch (e: any) {
-        const data = e?.response?.data;
-        const blockers = data?.blockers;
-        const parts: string[] = [];
-        if (blockers?.matriculas_grupo) parts.push(`Grupos: ${blockers.matriculas_grupo}`);
-        if (blockers?.matriculas) parts.push(`Matrículas: ${blockers.matriculas}`);
-        if (blockers?.clases) parts.push(`Clases: ${blockers.clases}`);
-        if (blockers?.movimientos_financieros) parts.push(`Movimientos: ${blockers.movimientos_financieros}`);
+    const ok = await uiConfirm({
+      title: '¿Eliminar este curso?',
+      description: 'Esta acción no se puede deshacer.',
+      confirmLabel: 'Eliminar curso',
+      danger: true,
+    });
+    if (!ok) return;
 
-        const msg =
-          data?.error
-          || data?.message
-          || (parts.length ? `No se puede eliminar. ${parts.join(' · ')}` : '')
-          || e?.message
-          || 'No se pudo eliminar el curso';
+    try {
+      await deleteCurso(id);
+      showActionAlert('Curso eliminado correctamente.');
+    } catch (e: any) {
+      const data = e?.response?.data;
+      const blockers = data?.blockers;
+      const parts: string[] = [];
+      if (blockers?.matriculas_grupo) parts.push(`Grupos: ${blockers.matriculas_grupo}`);
+      if (blockers?.matriculas) parts.push(`Matrículas: ${blockers.matriculas}`);
+      if (blockers?.clases) parts.push(`Clases: ${blockers.clases}`);
+      if (blockers?.movimientos_financieros) parts.push(`Movimientos: ${blockers.movimientos_financieros}`);
 
-        // Si el backend reporta dependencias, ofrecer borrado en cascada (grupos + matrículas)
-        if ((e?.response?.status === 409) && blockers && (blockers.matriculas_grupo || blockers.matriculas)) {
-          const confirmMsg = `${msg}\n\n¿Deseas eliminar automáticamente esas dependencias (grupos/matrículas) y luego borrar el curso? Esto es PERMANENTE.`;
-          if (window.confirm(confirmMsg)) {
-            try {
-              await deleteCurso(id, true);
-              return;
-            } catch (e2: any) {
-              const data2 = e2?.response?.data;
-              window.alert(data2?.error || data2?.message || e2?.message || 'No se pudo eliminar el curso con cascada');
-              return;
-            }
+      const msg =
+        data?.error
+        || data?.message
+        || (parts.length ? `No se puede eliminar. ${parts.join(' · ')}` : '')
+        || e?.message
+        || 'No se pudo eliminar el curso';
+
+      // Si el backend reporta dependencias, ofrecer borrado en cascada (grupos + matrículas)
+      if ((e?.response?.status === 409) && blockers && (blockers.matriculas_grupo || blockers.matriculas)) {
+        const cascadeOk = await uiConfirm({
+          title: 'El curso tiene dependencias',
+          description: `${msg} ¿Deseas eliminar automáticamente grupos/matrículas y luego borrar el curso? Esta acción es permanente.`,
+          confirmLabel: 'Eliminar en cascada',
+          danger: true,
+        });
+
+        if (cascadeOk) {
+          try {
+            await deleteCurso(id, true);
+            showActionAlert('Curso y dependencias eliminados correctamente.');
+            return;
+          } catch (e2: any) {
+            const data2 = e2?.response?.data;
+            window.alert(data2?.error || data2?.message || e2?.message || 'No se pudo eliminar el curso con cascada');
+            return;
           }
         }
-
-        window.alert(msg);
       }
+
+      window.alert(msg);
     }
   };
 
   const toggleEstado = async (curso: Curso) => {
-    const nuevoEstado = curso.estado === 1 ? 0 : 1;
-    await updateCurso(curso.id, { estado: nuevoEstado });
+    try {
+      const nuevoEstado = curso.estado === 1 ? 0 : 1;
+      await updateCurso(curso.id, { estado: nuevoEstado });
+      showActionAlert(nuevoEstado === 1 ? 'Curso activado correctamente.' : 'Curso inactivado correctamente.');
+    } catch (e: any) {
+      window.alert(getErrorMessage(e));
+    }
   };
 
   if (loading) return (
@@ -1607,7 +1634,7 @@ const Cursos: React.FC = () => {
                       </button>
                       <button
                         onClick={() => { handleDelete(curso.id); setMenuOpen(null); }}
-                        className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-rose-500/10 flex items-center gap-2"
+                        className="w-full text-left px-4 py-2 text-sm text-[#FFC800] hover:bg-[#FFC800]/10 flex items-center gap-2"
                       >
                         <Trash2 className="w-4 h-4" />
                         Eliminar
@@ -1705,8 +1732,8 @@ const Cursos: React.FC = () => {
                   size="sm"
                   onClick={() => toggleEstado(curso)}
                   className={`w-full gap-2 font-bold border ${curso.estado === 1 
-                    ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50' 
-                    : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+                    ? 'bg-[#00AEEF]/20 hover:bg-[#00AEEF]/30 border-[#00AEEF]/45 text-[#C9F2FF]' 
+                    : 'bg-[#FFC800]/15 hover:bg-[#FFC800]/25 border-[#FFC800]/45 text-[#FFE89A]'}`}
                 >
                   {curso.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                   {curso.estado === 1 ? 'Activo' : 'Inactivo'}
@@ -1758,8 +1785,8 @@ const Cursos: React.FC = () => {
                           size="sm"
                           onClick={() => toggleEstado(curso)}
                           className={`gap-2 border ${curso.estado === 1
-                            ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
-                            : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+                            ? 'bg-[#00AEEF]/20 hover:bg-[#00AEEF]/30 border-[#00AEEF]/45 text-[#C9F2FF]'
+                            : 'bg-[#FFC800]/15 hover:bg-[#FFC800]/25 border-[#FFC800]/45 text-[#FFE89A]'}`}
                         >
                           {curso.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                           {curso.estado === 1 ? 'Activo' : 'Inactivo'}
@@ -1772,7 +1799,7 @@ const Cursos: React.FC = () => {
                         <div className="flex justify-end gap-2">
                           <Button size="sm" variant="ghost" onClick={() => { setSelectedCurso(curso); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
                           <Button size="sm" variant="ghost" onClick={() => handleEdit(curso)} className="text-blue-700">Editar</Button>
-                          <Button size="sm" variant="ghost" onClick={() => handleDelete(curso.id)} className="text-red-600">Eliminar</Button>
+                          <Button size="sm" variant="ghost" onClick={() => handleDelete(curso.id)} className="text-[#FFC800] hover:text-[#FFD84D]">Eliminar</Button>
                         </div>
                       </TableCell>
                     </TableRow>

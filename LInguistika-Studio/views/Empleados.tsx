@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../services/api';
+import { uiConfirm } from '../lib/uiFeedback';
+import { paginasService } from '../services/api/paginasService';
 import { useRealtimeSubscription } from '../hooks/useRealtimeSubscription';
 import {
   Badge,
@@ -34,6 +36,20 @@ type EmpleadoRow = {
   updated_at?: string;
 };
 
+type PaginaAdminRow = {
+  slug: string;
+  nombre: string;
+  activa: boolean;
+  desactivada_por: string | null;
+  desactivada_por_nombre: string | null;
+  mensaje: string | null;
+  updated_at: string;
+};
+
+const showActionAlert = (message: string) => {
+  window.alert(message);
+};
+
 const Empleados: React.FC = () => {
   const [me, setMe] = useState<any>(null);
   const [loadingMe, setLoadingMe] = useState(true);
@@ -56,6 +72,10 @@ const Empleados: React.FC = () => {
   const [editEstado, setEditEstado] = useState(true);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const [paginas, setPaginas] = useState<PaginaAdminRow[]>([]);
+  const [loadingPaginas, setLoadingPaginas] = useState(true);
+  const [togglingSlug, setTogglingSlug] = useState<string | null>(null);
 
   const esAdmin = useMemo(() => (me?.rol ?? me?.user?.rol) === 'admin', [me]);
 
@@ -84,6 +104,19 @@ const Empleados: React.FC = () => {
     }
   };
 
+  const cargarPaginas = async () => {
+    if (!esAdmin) return;
+    setLoadingPaginas(true);
+    try {
+      const data = await api.admin.listarPaginas();
+      setPaginas(data as PaginaAdminRow[]);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'No se pudo cargar el estado de páginas');
+    } finally {
+      setLoadingPaginas(false);
+    }
+  };
+
   useEffect(() => {
     // Cargar perfil y empleados en paralelo
     const init = async () => {
@@ -97,12 +130,15 @@ const Empleados: React.FC = () => {
         const isAdmin = (meRes.user?.rol ?? meRes.user?.user?.rol) === 'admin';
         if (isAdmin) {
           setEmpleados(empRes as EmpleadoRow[]);
+          const paginasRes = await api.admin.listarPaginas().catch(() => []);
+          setPaginas(paginasRes as PaginaAdminRow[]);
         }
       } catch (e: any) {
         setError(e?.response?.data?.error || 'No se pudo cargar datos');
       } finally {
         setLoadingMe(false);
         setLoadingList(false);
+        setLoadingPaginas(false);
       }
     };
     init();
@@ -132,6 +168,7 @@ const Empleados: React.FC = () => {
       setTelefono('');
 
       await cargarEmpleados();
+      showActionAlert('Empleado creado correctamente.');
     } catch (e: any) {
       setError(e?.response?.data?.error || 'No se pudo crear el empleado');
     } finally {
@@ -165,6 +202,7 @@ const Empleados: React.FC = () => {
       });
       setEditingId(null);
       await cargarEmpleados();
+      showActionAlert('Empleado actualizado correctamente.');
     } catch (e: any) {
       setError(e?.response?.data?.error || 'No se pudo actualizar el empleado');
     } finally {
@@ -173,7 +211,12 @@ const Empleados: React.FC = () => {
   };
 
   const deleteEmpleado = async (u: EmpleadoRow) => {
-    const ok = window.confirm('¿Seguro que deseas borrar esta cuenta? Esta acción elimina el usuario y su acceso.');
+    const ok = await uiConfirm({
+      title: '¿Eliminar esta cuenta?',
+      description: 'Esta acción elimina el usuario y su acceso.',
+      confirmLabel: 'Eliminar cuenta',
+      danger: true,
+    });
     if (!ok) return;
 
     setDeletingId(u.id);
@@ -181,10 +224,30 @@ const Empleados: React.FC = () => {
     try {
       await api.admin.eliminarEmpleado(u.id);
       await cargarEmpleados();
+      showActionAlert('Empleado eliminado correctamente.');
     } catch (e: any) {
       setError(e?.response?.data?.error || 'No se pudo borrar el empleado');
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const togglePagina = async (p: PaginaAdminRow) => {
+    setTogglingSlug(p.slug);
+    setError(null);
+    try {
+      const nextActiva = !p.activa;
+      await api.admin.togglePagina(p.slug, {
+        activa: nextActiva,
+        mensaje: nextActiva ? null : 'Tika está trabajando en mejoras de esta página.',
+      });
+      paginasService.invalidate();
+      await cargarPaginas();
+      showActionAlert(`Página ${p.nombre} ${nextActiva ? 'activada' : 'desactivada'} correctamente.`);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'No se pudo actualizar la página');
+    } finally {
+      setTogglingSlug(null);
     }
   };
 
@@ -367,6 +430,65 @@ const Empleados: React.FC = () => {
               ))}
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Control de páginas</CardTitle>
+          <CardDescription>
+            Activa o desactiva módulos para usuarios no admin. Si una página está desactivada, verán la pantalla de mantenimiento de Tika.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loadingPaginas ? (
+            <div className="text-sm text-slate-300">Cargando páginas…</div>
+          ) : paginas.length === 0 ? (
+            <div className="text-sm text-slate-400">No hay páginas configuradas en mantenimiento.</div>
+          ) : (
+            <div className="space-y-3">
+              {paginas.map((p) => {
+                const disabled = togglingSlug === p.slug;
+                return (
+                  <div
+                    key={p.slug}
+                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <div className="font-bold text-white">{p.nombre}</div>
+                        <Badge variant={p.activa ? 'success' : 'warning'}>{p.activa ? 'Activa' : 'Mantenimiento'}</Badge>
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        slug: <span className="font-mono">{p.slug}</span>
+                        {!p.activa && p.desactivada_por_nombre ? ` · desactivada por ${p.desactivada_por_nombre}` : ''}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={p.activa}
+                      disabled={disabled}
+                      onClick={() => togglePagina(p)}
+                      className={`relative inline-flex h-8 w-16 items-center rounded-full border transition-all ${
+                        p.activa
+                          ? 'bg-emerald-500/25 border-emerald-300/40'
+                          : 'bg-amber-500/25 border-amber-300/40'
+                      } ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:scale-[1.02]'}`}
+                      title={p.activa ? 'Desactivar página' : 'Activar página'}
+                    >
+                      <span
+                        className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition-transform ${
+                          p.activa ? 'translate-x-9' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

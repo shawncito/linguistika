@@ -2,8 +2,14 @@ import * as repo from './cursos.repository.mjs';
 import { AppError } from '../../shared/errors/AppError.mjs';
 import {
   canAssignTutorToCourse,
-  validateTutorCourseSchedule,
 } from '../../shared/utils/scheduleValidator.mjs';
+
+function normalizeTutorId(rawTutorId) {
+  if (rawTutorId === undefined || rawTutorId === null || rawTutorId === '') return null;
+  const parsed = Number(rawTutorId);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
 
 function scheduleOverlaps(a, b) {
   // a y b: { dias_horario: string[], hora_inicio: string, hora_fin: string }
@@ -33,53 +39,60 @@ export function getById(id) {
 export async function create(body, userId) {
   const nombre = String(body.nombre ?? '').trim();
   if (!nombre) throw new AppError('Campo requerido: nombre', 400);
-  if (!body.tutor_id) throw new AppError('Campo requerido: tutor_id', 400);
+  const tutorId = normalizeTutorId(body.tutor_id);
 
   // Duplicado de nombre
   const existing = await repo.findByName(nombre);
   if (existing.length > 0) throw new AppError('Ya existe un curso con ese nombre', 409);
 
-  // Validar tutor
-  const tutor = await repo.findTutorById(body.tutor_id);
-  if (!tutor) throw new AppError('Tutor no encontrado', 404);
+  if (tutorId) {
+    // Validar tutor
+    const tutor = await repo.findTutorById(tutorId);
+    if (!tutor) throw new AppError('Tutor no encontrado', 404);
 
-  // Aptitud del tutor
-  const aptResult = canAssignTutorToCourse(tutor, body, { throwError: false });
-  if (!aptResult.valid) throw new AppError(aptResult.reason, 400);
+    // Aptitud del tutor
+    const aptResult = canAssignTutorToCourse(tutor, body, { throwError: false });
+    if (!aptResult.valid) throw new AppError(aptResult.reason, 400);
 
-  // Conflictos de horario del tutor
-  const otrosCursos = await repo.getAllCursosForTutor(body.tutor_id);
-  for (const otro of otrosCursos) {
-    if (scheduleOverlaps(body, otro)) {
-      throw new AppError(
-        `El tutor ya tiene el curso "${otro.nombre}" en ese horario`,
-        409
-      );
+    // Conflictos de horario del tutor
+    const otrosCursos = await repo.getAllCursosForTutor(tutorId);
+    for (const otro of otrosCursos) {
+      if (scheduleOverlaps(body, otro)) {
+        throw new AppError(
+          `El tutor ya tiene el curso "${otro.nombre}" en ese horario`,
+          409
+        );
+      }
     }
   }
 
-  return repo.create({ ...body, nombre, userId });
+  return repo.create({ ...body, nombre, tutor_id: tutorId, userId });
 }
 
 export async function update(id, body, userId) {
   const curso = await repo.findById(id);
+  const hasTutorInBody = Object.prototype.hasOwnProperty.call(body, 'tutor_id');
+  const tutorId = hasTutorInBody ? normalizeTutorId(body.tutor_id) : normalizeTutorId(curso.tutor_id);
+  const shouldValidateTutor = !!tutorId;
+  const hasScheduleUpdate = !!(body.dias_horario || body.hora_inicio || body.hora_fin);
+  const hasTutorOrLevelUpdate = hasTutorInBody || body.nivel !== undefined;
 
-  if (body.tutor_id || body.dias_horario || body.hora_inicio || body.hora_fin) {
-    const tutorId = body.tutor_id ?? curso.tutor_id;
+  if (shouldValidateTutor && (hasTutorInBody || hasScheduleUpdate || body.nivel !== undefined)) {
     const tutor = await repo.findTutorById(tutorId);
     if (!tutor) throw new AppError('Tutor no encontrado', 404);
 
     const cursoActualizado = {
       ...curso,
       ...body,
+      tutor_id: tutorId,
     };
 
-    if (body.tutor_id || body.nivel) {
+    if (hasTutorOrLevelUpdate) {
       const aptResult = canAssignTutorToCourse(tutor, cursoActualizado, { throwError: false });
       if (!aptResult.valid) throw new AppError(aptResult.reason, 400);
     }
 
-    if (body.dias_horario || body.hora_inicio || body.hora_fin) {
+    if (hasScheduleUpdate || hasTutorInBody) {
       const otrosCursos = await repo.getAllCursosForTutor(tutorId, id);
       for (const otro of otrosCursos) {
         if (scheduleOverlaps(cursoActualizado, otro)) {
@@ -92,7 +105,12 @@ export async function update(id, body, userId) {
     }
   }
 
-  return repo.update(id, { ...body, userId });
+  const payload = { ...body, userId };
+  if (hasTutorInBody) {
+    payload.tutor_id = tutorId;
+  }
+
+  return repo.update(id, payload);
 }
 
 export async function remove(id, force = false) {

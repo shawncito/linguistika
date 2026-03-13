@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { usePersistentState } from '../lib/usePersistentState';
+import { uiConfirm } from '../lib/uiFeedback';
 import { useEstudiantes } from '../hooks';
 import { estudiantesService } from '../services/api/estudiantesService';
 import { bulkService } from '../services/api/bulkService';
@@ -33,6 +34,10 @@ const GRADO_COLORES: Record<string, string> = {
 
 const getErrorMessage = (error: any) =>
   error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Error al guardar estudiante';
+
+const showActionAlert = (message: string) => {
+  window.alert(message);
+};
 
 const hexToRgba = (hex: string, alpha: number) => {
   const normalized = hex.replace('#', '');
@@ -367,6 +372,7 @@ const Estudiantes: React.FC = () => {
       const [bulkData, gruposData] = await Promise.all([bulkService.listEstudiantesBulk(), bulkService.listGrupos()]);
       setBulkEstudiantes(bulkData as any);
       setBulkGrupos(gruposData as any);
+      showActionAlert('Archivo procesado correctamente. Revisa los resultados en la bandeja correspondiente.');
     } catch (e: any) {
       setBulkMsg(e?.response?.data?.error || 'No se pudo procesar el archivo');
     } finally {
@@ -403,22 +409,39 @@ const Estudiantes: React.FC = () => {
       const bulkData = await bulkService.listEstudiantesBulk();
       setBulkEstudiantes(bulkData as any);
       setBulkEditOpen(false);
+      showActionAlert('Estudiante de bandeja actualizado correctamente.');
     } catch (e: any) {
       setBulkEditErr(e?.response?.data?.error || 'No se pudo actualizar');
     }
   };
 
   const deleteBulk = async (id: number) => {
-    if (!window.confirm('¿Eliminar este estudiante? (Se quitará de cualquier grupo)')) return;
-    await bulkService.deleteEstudianteBulk(id);
-    const bulkData = await bulkService.listEstudiantesBulk();
-    setBulkEstudiantes(bulkData as any);
+    const ok = await uiConfirm({
+      title: '¿Eliminar este estudiante?',
+      description: 'Se quitará de cualquier grupo asignado.',
+      confirmLabel: 'Eliminar',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await bulkService.deleteEstudianteBulk(id);
+      const bulkData = await bulkService.listEstudiantesBulk();
+      setBulkEstudiantes(bulkData as any);
+      showActionAlert('Estudiante de bandeja eliminado correctamente.');
+    } catch (e: any) {
+      window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo eliminar el estudiante de bandeja');
+    }
   };
 
   const toggleBulkEstado = async (s: BulkEstudiante) => {
-    const nuevo = !(s.estado === true || s.estado === 1);
-    await bulkService.updateEstudianteBulk(s.id, { estado: nuevo });
-    setBulkEstudiantes((prev) => prev.map((x) => (x.id === s.id ? { ...x, estado: nuevo } : x)));
+    try {
+      const nuevo = !(s.estado === true || s.estado === 1);
+      await bulkService.updateEstudianteBulk(s.id, { estado: nuevo });
+      setBulkEstudiantes((prev) => prev.map((x) => (x.id === s.id ? { ...x, estado: nuevo } : x)));
+      showActionAlert(nuevo ? 'Estudiante de bandeja activado correctamente.' : 'Estudiante de bandeja inactivado correctamente.');
+    } catch (e: any) {
+      window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo actualizar el estado');
+    }
   };
 
   const ensureCatalogos = async () => {
@@ -451,6 +474,7 @@ const Estudiantes: React.FC = () => {
       setGrupoCreateMsg('Grupo creado.');
       setGrupoForm({ nombre_grupo: '', curso_id: '', tutor_id: '', turno: '', cantidad_estudiantes_esperados: '' });
       setBandeja('grupos');
+      showActionAlert('Grupo creado correctamente.');
     } catch (e: any) {
       setGrupoCreateMsg(e?.response?.data?.error || 'No se pudo crear el grupo');
     } finally {
@@ -484,6 +508,7 @@ const Estudiantes: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrors({});
     const newErrors: Record<string, string> = {};
 
     const creatingBulkInGrupo = !editingId && !!formData.grupo_id;
@@ -495,10 +520,12 @@ const Estudiantes: React.FC = () => {
     if (formData.telefono_encargado && !validatePhone(formData.telefono_encargado)) {
       newErrors.telefono_encargado = 'Teléfono inválido';
     }
-    if (!creatingBulkInGrupo && !formData.grado) newErrors.grado = 'Selecciona un grado';
 
     if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
+      setErrors({
+        ...newErrors,
+        submit: 'Revisa los campos marcados en rojo e intenta de nuevo.',
+      });
       return;
     }
 
@@ -518,6 +545,7 @@ const Estudiantes: React.FC = () => {
         resetForm();
         await Promise.all([refresh(), loadBulkData()]);
         setBandeja('grupos');
+        showActionAlert('Estudiante agregado correctamente al grupo seleccionado.');
         return;
       }
 
@@ -529,15 +557,17 @@ const Estudiantes: React.FC = () => {
         telefono: null,
         email_encargado: formData.email_encargado.trim() || null,
         telefono_encargado: formData.telefono_encargado.trim() || null,
-        grado: formData.grado,
+        grado: formData.grado || null,
         dias: formData.dias.length > 0 ? formData.dias : null,
         dias_turno: Object.keys(formData.dias_turno).length > 0 ? formData.dias_turno : null
       };
 
       if (editingId) {
         await updateEstudiante(editingId, dataToSubmit);
+        showActionAlert('Estudiante actualizado correctamente.');
       } else {
         await createEstudiante(dataToSubmit);
+        showActionAlert('Estudiante creado correctamente.');
       }
 
       setShowModal(false);
@@ -578,14 +608,30 @@ const Estudiantes: React.FC = () => {
   };
 
   const handleDelete = async (id: number) => {
-    if (window.confirm('¿Estás seguro de eliminar este estudiante?')) {
+    const ok = await uiConfirm({
+      title: '¿Eliminar este estudiante?',
+      description: 'Esta acción no se puede deshacer.',
+      confirmLabel: 'Eliminar estudiante',
+      danger: true,
+    });
+    if (!ok) return;
+
+    try {
       await deleteEstudiante(id);
+      showActionAlert('Estudiante eliminado correctamente.');
+    } catch (error) {
+      setErrors({ submit: getErrorMessage(error) });
     }
   };
 
   const toggleEstado = async (est: Estudiante) => {
-    const nuevoEstado = est.estado === 1 ? 0 : 1;
-    await updateEstudiante(est.id, { estado: nuevoEstado });
+    try {
+      const nuevoEstado = est.estado === 1 ? 0 : 1;
+      await updateEstudiante(est.id, { estado: nuevoEstado });
+      showActionAlert(nuevoEstado === 1 ? 'Estudiante activado correctamente.' : 'Estudiante inactivado correctamente.');
+    } catch (error) {
+      setErrors({ submit: getErrorMessage(error) });
+    }
   };
 
   const getGradoColor = (grado?: string | null) => {
@@ -797,6 +843,7 @@ const Estudiantes: React.FC = () => {
       refresh();
       setGrupoSelectedToAdd([]);
       setGrupoSelectedToAddNormales([]);
+      showActionAlert('Estudiantes agregados correctamente al grupo.');
     } catch (e: any) {
       window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo agregar al grupo');
     }
@@ -808,6 +855,7 @@ const Estudiantes: React.FC = () => {
       const [gruposData, bulkData] = await Promise.all([bulkService.listGrupos(), bulkService.listEstudiantesBulk()]);
       setBulkGrupos(gruposData as any);
       setBulkEstudiantes(bulkData as any);
+      showActionAlert('Estudiante quitado correctamente del grupo.');
     } catch (e: any) {
       window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo quitar del grupo');
     }
@@ -819,6 +867,7 @@ const Estudiantes: React.FC = () => {
       const [gruposData] = await Promise.all([bulkService.listGrupos()]);
       setBulkGrupos(gruposData as any);
       refresh();
+      showActionAlert('Estudiante quitado correctamente del grupo.');
     } catch (e: any) {
       window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo quitar del grupo');
     }
@@ -826,7 +875,13 @@ const Estudiantes: React.FC = () => {
 
   const deleteGrupo = async () => {
     if (!grupoAdminId) return;
-    if (!window.confirm('¿Eliminar este grupo? Se desasignarán estudiantes y se quitará el vínculo en finanzas (si aplica).')) return;
+    const ok = await uiConfirm({
+      title: '¿Eliminar este grupo?',
+      description: 'Se desasignarán estudiantes y se quitará el vínculo en finanzas (si aplica).',
+      confirmLabel: 'Eliminar grupo',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await bulkService.deleteGrupo(String(grupoAdminId));
       const [gruposData, bulkData] = await Promise.all([
@@ -838,6 +893,7 @@ const Estudiantes: React.FC = () => {
       refresh();
       setGrupoAdminOpen(false);
       setGrupoAdminId(null);
+      showActionAlert('Grupo eliminado correctamente.');
     } catch (e: any) {
       window.alert(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'No se pudo eliminar el grupo');
     }
@@ -985,7 +1041,7 @@ const Estudiantes: React.FC = () => {
                     </button>
                     <button
                       onClick={() => { handleDelete(est.id); setMenuOpen(null); }}
-                      className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-rose-500/10 flex items-center gap-2"
+                      className="w-full text-left px-4 py-2 text-sm text-[#FFC800] hover:bg-[#FFC800]/10 flex items-center gap-2"
                     >
                       <Trash2 className="w-4 h-4" />
                       Eliminar
@@ -1002,7 +1058,7 @@ const Estudiantes: React.FC = () => {
                     </button>
                     <button
                       onClick={() => { deleteBulk(est.id); setMenuOpen(null); }}
-                      className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-rose-500/10 flex items-center gap-2"
+                      className="w-full text-left px-4 py-2 text-sm text-[#FFC800] hover:bg-[#FFC800]/10 flex items-center gap-2"
                     >
                       <Trash2 className="w-4 h-4" />
                       Eliminar
@@ -1056,8 +1112,8 @@ const Estudiantes: React.FC = () => {
               return toggleBulkEstado({ id: est.id, nombre: est.nombre, estado: est.estado === 1 } as any);
             }}
             className={`w-full gap-2 border ${est.estado === 1
-              ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
-              : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+              ? 'bg-[#00AEEF]/20 hover:bg-[#00AEEF]/30 border-[#00AEEF]/45 text-[#C9F2FF]'
+              : 'bg-[#FFC800]/15 hover:bg-[#FFC800]/25 border-[#FFC800]/45 text-[#FFE89A]'}`}
           >
             {est.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
             {est.estado === 1 ? 'Activo' : 'Inactivo'}
@@ -1187,7 +1243,7 @@ const Estudiantes: React.FC = () => {
                 size="sm"
                 onClick={() => setGroupByMode((prev) => (prev === 'grado' ? 'none' : 'grado'))}
                 className={`col-span-2 gap-2 font-bold transition-all ${groupByMode === 'grado' 
-                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md' 
+                  ? 'bg-[#00AEEF] hover:bg-[#33BFF3] text-[#051026] shadow-md' 
                   : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
               >
                 <Layers className="w-4 h-4" /> Agrupar por grado
@@ -1196,7 +1252,7 @@ const Estudiantes: React.FC = () => {
                 size="sm"
                 onClick={() => setGroupByMode((prev) => (prev === 'grupo' ? 'none' : 'grupo'))}
                 className={`col-span-2 gap-2 font-bold transition-all ${groupByMode === 'grupo'
-                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md'
+                  ? 'bg-[#00AEEF] hover:bg-[#33BFF3] text-[#051026] shadow-md'
                   : 'bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10'}`}
               >
                 <Users className="w-4 h-4" /> Agrupar por grupo
@@ -1534,8 +1590,8 @@ const Estudiantes: React.FC = () => {
                                     return toggleBulkEstado({ id: est.id, nombre: est.nombre, estado: est.estado === 1 } as any);
                                   }}
                                   className={`gap-2 border ${est.estado === 1
-                                    ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
-                                    : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+                                    ? 'bg-[#00AEEF]/20 hover:bg-[#00AEEF]/30 border-[#00AEEF]/45 text-[#C9F2FF]'
+                                    : 'bg-[#FFC800]/15 hover:bg-[#FFC800]/25 border-[#FFC800]/45 text-[#FFE89A]'}`}
                                 >
                                   {est.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                                   {est.estado === 1 ? 'Activo' : 'Inactivo'}
@@ -1566,12 +1622,12 @@ const Estudiantes: React.FC = () => {
                                       <>
                                         <Button size="sm" variant="ghost" onClick={() => { setSelectedEstudiante(est as any); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
                                         <Button size="sm" variant="ghost" onClick={() => handleEdit(est as any)} className="text-blue-700">Editar</Button>
-                                        <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-red-600">Eliminar</Button>
+                                        <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-[#FFC800] hover:text-[#FFD84D]">Eliminar</Button>
                                       </>
                                     ) : (
                                       <>
                                         <Button size="sm" variant="ghost" onClick={() => openBulkEdit({ id: est.id, nombre: est.nombre, nombre_encargado: est.nombre_encargado ?? null, email_encargado: est.email_encargado ?? null, telefono_encargado: est.telefono_encargado ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any)} className="text-blue-700">Editar</Button>
-                                        <Button size="sm" variant="ghost" onClick={() => deleteBulk(est.id)} className="text-red-600">Eliminar</Button>
+                                        <Button size="sm" variant="ghost" onClick={() => deleteBulk(est.id)} className="text-[#FFC800] hover:text-[#FFD84D]">Eliminar</Button>
                                       </>
                                     )}
                                 </div>
@@ -1631,8 +1687,8 @@ const Estudiantes: React.FC = () => {
                                     return toggleBulkEstado({ id: est.id, nombre: est.nombre, estado: est.estado === 1 } as any);
                                   }}
                                   className={`gap-2 border ${est.estado === 1
-                                    ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
-                                    : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+                                    ? 'bg-[#00AEEF]/20 hover:bg-[#00AEEF]/30 border-[#00AEEF]/45 text-[#C9F2FF]'
+                                    : 'bg-[#FFC800]/15 hover:bg-[#FFC800]/25 border-[#FFC800]/45 text-[#FFE89A]'}`}
                                 >
                                   {est.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                                   {est.estado === 1 ? 'Activo' : 'Inactivo'}
@@ -1663,12 +1719,12 @@ const Estudiantes: React.FC = () => {
                                     <>
                                       <Button size="sm" variant="ghost" onClick={() => { setSelectedEstudiante(est as any); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
                                       <Button size="sm" variant="ghost" onClick={() => handleEdit(est as any)} className="text-blue-700">Editar</Button>
-                                      <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-red-600">Eliminar</Button>
+                                      <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-[#FFC800] hover:text-[#FFD84D]">Eliminar</Button>
                                     </>
                                   ) : (
                                     <>
                                       <Button size="sm" variant="ghost" onClick={() => openBulkEdit({ id: est.id, nombre: est.nombre, nombre_encargado: est.nombre_encargado ?? null, email_encargado: est.email_encargado ?? null, telefono_encargado: est.telefono_encargado ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any)} className="text-blue-700">Editar</Button>
-                                      <Button size="sm" variant="ghost" onClick={() => deleteBulk(est.id)} className="text-red-600">Eliminar</Button>
+                                      <Button size="sm" variant="ghost" onClick={() => deleteBulk(est.id)} className="text-[#FFC800] hover:text-[#FFD84D]">Eliminar</Button>
                                     </>
                                   )}
                                 </div>
@@ -1715,8 +1771,8 @@ const Estudiantes: React.FC = () => {
                                   return toggleBulkEstado({ id: est.id, nombre: est.nombre, estado: est.estado === 1 } as any);
                                 }}
                                 className={`gap-2 border ${est.estado === 1
-                                  ? 'bg-emerald-500/20 hover:bg-emerald-500/25 border-emerald-400/40 text-emerald-50'
-                                  : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/40 text-rose-50'}`}
+                                  ? 'bg-[#00AEEF]/20 hover:bg-[#00AEEF]/30 border-[#00AEEF]/45 text-[#C9F2FF]'
+                                  : 'bg-[#FFC800]/15 hover:bg-[#FFC800]/25 border-[#FFC800]/45 text-[#FFE89A]'}`}
                               >
                                 {est.estado === 1 ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                                 {est.estado === 1 ? 'Activo' : 'Inactivo'}
@@ -1747,12 +1803,12 @@ const Estudiantes: React.FC = () => {
                                   <>
                                     <Button size="sm" variant="ghost" onClick={() => { setSelectedEstudiante(est as any); setDetailOpen(true); }} className="text-slate-700">Detalle</Button>
                                     <Button size="sm" variant="ghost" onClick={() => handleEdit(est as any)} className="text-blue-700">Editar</Button>
-                                    <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-red-600">Eliminar</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => handleDelete(est.id)} className="text-[#FFC800] hover:text-[#FFD84D]">Eliminar</Button>
                                   </>
                                 ) : (
                                   <>
                                     <Button size="sm" variant="ghost" onClick={() => openBulkEdit({ id: est.id, nombre: est.nombre, nombre_encargado: est.nombre_encargado ?? null, email_encargado: est.email_encargado ?? null, telefono_encargado: est.telefono_encargado ?? null, requiere_perfil_completo: !!est.requiere_perfil_completo, estado: est.estado === 1 } as any)} className="text-blue-700">Editar</Button>
-                                    <Button size="sm" variant="ghost" onClick={() => deleteBulk(est.id)} className="text-red-600">Eliminar</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => deleteBulk(est.id)} className="text-[#FFC800] hover:text-[#FFD84D]">Eliminar</Button>
                                   </>
                                 )}
                               </div>
@@ -2477,7 +2533,7 @@ const Estudiantes: React.FC = () => {
 
               {/* Grado */}
               <div>
-                <Label>{(!editingId && formData.grupo_id) ? 'Grado (opcional si va en grupo)' : 'Grado *'}</Label>
+                <Label>Grado (opcional)</Label>
                 <Select 
                   value={formData.grado} 
                   onChange={(e) => setFormData(prev => ({ ...prev, grado: e.target.value }))}

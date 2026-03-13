@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "generate:manuales": "node scripts/generate-user-manuals.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

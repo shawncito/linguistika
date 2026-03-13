@@ -36,6 +36,61 @@ function formatMatricula(m) {
   };
 }
 
+function getMissingColumnName(error) {
+  const message = String(error?.message || '');
+  const schemaCacheMatch = message.match(/Could not find the '([^']+)' column of '([^']+)'/i);
+  if (schemaCacheMatch?.[1]) return schemaCacheMatch[1];
+
+  const columnOnlyMatch = message.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (columnOnlyMatch?.[1]) return columnOnlyMatch[1];
+
+  return null;
+}
+
+async function insertArrayWithMissingColumnFallback(db, table, row, selectClause, maxRetries = 12) {
+  const workingRow = { ...row };
+  for (let i = 0; i < maxRetries; i += 1) {
+    let query = db.from(table).insert([workingRow]);
+    if (selectClause) query = query.select(selectClause);
+    const result = await query;
+
+    if (!result.error) return result;
+
+    const missingColumn = getMissingColumnName(result.error);
+    if (!missingColumn || !Object.prototype.hasOwnProperty.call(workingRow, missingColumn)) {
+      return result;
+    }
+
+    delete workingRow[missingColumn];
+  }
+
+  let finalQuery = db.from(table).insert([workingRow]);
+  if (selectClause) finalQuery = finalQuery.select(selectClause);
+  return finalQuery;
+}
+
+async function updateSingleWithMissingColumnFallback(db, table, id, row, selectClause, maxRetries = 12) {
+  const workingRow = { ...row };
+  for (let i = 0; i < maxRetries; i += 1) {
+    let query = db.from(table).update(workingRow).eq('id', id);
+    if (selectClause) query = query.select(selectClause).single();
+    const result = await query;
+
+    if (!result.error) return result;
+
+    const missingColumn = getMissingColumnName(result.error);
+    if (!missingColumn || !Object.prototype.hasOwnProperty.call(workingRow, missingColumn)) {
+      return result;
+    }
+
+    delete workingRow[missingColumn];
+  }
+
+  let finalQuery = db.from(table).update(workingRow).eq('id', id);
+  if (selectClause) finalQuery = finalQuery.select(selectClause).single();
+  return finalQuery;
+}
+
 export async function findAll(token) {
   const db = getDb(token);
   const { data, error } = await db.from('matriculas').select(SELECT).eq('estado', true).order('created_at', { ascending: false });
@@ -77,14 +132,24 @@ export async function create({ listaEstudiantes, curso_id, tutor_id, es_grupo, g
 
   if (esGrupo) {
     const registro = { estudiante_id: null, estudiante_ids: listaEstudiantes, curso_id, tutor_id, es_grupo: true, grupo_id: grupo_id || randomUUID(), grupo_nombre: grupo_nombre || null, created_by: userId, estado: true };
-    const { data: nueva, error } = await db.from('matriculas').insert([registro]).select('*, cursos:curso_id(nombre), tutores:tutor_id(nombre)');
+    const { data: nueva, error } = await insertArrayWithMissingColumnFallback(
+      db,
+      'matriculas',
+      registro,
+      '*, cursos:curso_id(nombre), tutores:tutor_id(nombre)'
+    );
     if (error) throw error;
     const m = nueva[0];
     const { data: estDets } = await db.from('estudiantes').select('id,nombre').in('id', listaEstudiantes);
     return { ...m, curso_nombre: m.cursos?.nombre, tutor_nombre: m.tutores?.nombre, es_grupo: true, grupo_id: m.grupo_id, grupo_nombre: m.grupo_nombre, estudiante_ids: m.estudiante_ids, estudiantes_detalle: estDets || [] };
   } else {
     const registro = { estudiante_id: listaEstudiantes[0], estudiante_ids: null, curso_id, tutor_id, es_grupo: false, grupo_id: null, grupo_nombre: null, created_by: userId, estado: true };
-    const { data: nueva, error } = await db.from('matriculas').insert([registro]).select('*, estudiantes:estudiante_id(nombre), cursos:curso_id(nombre), tutores:tutor_id(nombre)');
+    const { data: nueva, error } = await insertArrayWithMissingColumnFallback(
+      db,
+      'matriculas',
+      registro,
+      '*, estudiantes:estudiante_id(nombre), cursos:curso_id(nombre), tutores:tutor_id(nombre)'
+    );
     if (error) throw error;
     const m = nueva[0];
     return { ...m, estudiante_nombre: m.estudiantes?.nombre, curso_nombre: m.cursos?.nombre, tutor_nombre: m.tutores?.nombre, es_grupo: false };
@@ -93,7 +158,13 @@ export async function create({ listaEstudiantes, curso_id, tutor_id, es_grupo, g
 
 export async function update(id, fields, userId, token) {
   const db = getDb(token);
-  const { data, error } = await db.from('matriculas').update({ ...fields, updated_by: userId, updated_at: new Date().toISOString() }).eq('id', id).select('*, estudiantes:estudiante_id(nombre), cursos:curso_id(nombre), tutores:tutor_id(nombre)').single();
+  const { data, error } = await updateSingleWithMissingColumnFallback(
+    db,
+    'matriculas',
+    id,
+    { ...fields, updated_by: userId, updated_at: new Date().toISOString() },
+    '*, estudiantes:estudiante_id(nombre), cursos:curso_id(nombre), tutores:tutor_id(nombre)'
+  );
   if (error) throw error;
   return { ...data, estudiante_nombre: data.estudiantes?.nombre, curso_nombre: data.cursos?.nombre, tutor_nombre: data.tutores?.nombre, es_grupo: data.es_grupo, grupo_id: data.grupo_id, grupo_nombre: data.grupo_nombre };
 }
@@ -161,7 +232,12 @@ export async function fromBulkGrupo(matricula_grupo_id, grupo_nombre, userId, to
   if (!uniqueIds.length) throw new AppError('No se pudieron convertir estudiantes del grupo.', 400);
 
   const registro = { estudiante_id: null, estudiante_ids: uniqueIds, curso_id: grupo.curso_id, tutor_id: grupo.tutor_id, es_grupo: true, grupo_id: randomUUID(), grupo_nombre: (grupo_nombre ?? grupo.nombre_grupo) ? String(grupo_nombre ?? grupo.nombre_grupo).trim() : null, created_by: userId, estado: true };
-  const { data: nueva, error: mErr } = await db.from('matriculas').insert([registro]).select('*, cursos:curso_id(nombre), tutores:tutor_id(nombre)');
+  const { data: nueva, error: mErr } = await insertArrayWithMissingColumnFallback(
+    db,
+    'matriculas',
+    registro,
+    '*, cursos:curso_id(nombre), tutores:tutor_id(nombre)'
+  );
   if (mErr) throw mErr;
   const m = (nueva ?? [])[0];
   const { data: estRows } = await db.from('estudiantes').select('id,nombre').in('id', uniqueIds);

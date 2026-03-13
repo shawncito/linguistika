@@ -1,6 +1,16 @@
 // services/api/adminService.ts
 import { httpClient } from './apiClient';
 
+export type PaginaMantenimiento = {
+  slug: string;
+  nombre: string;
+  activa: boolean;
+  desactivada_por: string | null;
+  desactivada_por_nombre: string | null;
+  mensaje: string | null;
+  updated_at: string;
+};
+
 export const adminService = {
   crearEmpleado: async (data: {
     email: string;
@@ -40,5 +50,18 @@ export const adminService = {
   eliminarEmpleado: async (id: string): Promise<{ ok: boolean; id: string }> => {
     const res = await httpClient.delete(`/admin/empleados/${id}`);
     return res.data as any;
+  },
+
+  listarPaginas: async (): Promise<PaginaMantenimiento[]> => {
+    const res = await httpClient.get('/admin/paginas');
+    return res.data as PaginaMantenimiento[];
+  },
+
+  togglePagina: async (
+    slug: string,
+    data: { activa: boolean; mensaje?: string | null }
+  ): Promise<PaginaMantenimiento> => {
+    const res = await httpClient.patch(`/admin/paginas/${slug}`, data);
+    return res.data as PaginaMantenimiento;
   },
 };

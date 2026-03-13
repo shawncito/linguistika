@@ -2,6 +2,14 @@
 import { httpClient } from './apiClient';
 import type { Stats, Clase, ResumenTutorEstudiantes, ResumenCursoGrupos } from '../../types';
 
+export interface CalendarNotaSummary {
+  fecha: string;
+  total: number;
+  pendientes: number;
+  hechas: number;
+  updated_at?: string | null;
+}
+
 export const dashboardService = {
   getStats: async (): Promise<Stats> => {
     const res = await httpClient.get('/dashboard/estadisticas/general');
@@ -132,6 +140,50 @@ export const dashboardService = {
 
   deleteTutorNota: async (tutorId: number, notaId: number): Promise<any> => {
     const res = await httpClient.delete(`/dashboard/tutores/${tutorId}/notas/${notaId}`);
+    return res.data as any;
+  },
+
+  getCalendarNotasSummary: async (params: {
+    fecha_inicio: string;
+    fecha_fin: string;
+  }): Promise<CalendarNotaSummary[]> => {
+    const res = await httpClient.get('/dashboard/calendario/notas-resumen', { params });
+    const data = Array.isArray(res.data) ? res.data : [];
+    return data.map((item: any) => ({
+      fecha: String(item?.fecha || ''),
+      total: Number(item?.total || 0),
+      pendientes: Number(item?.pendientes || 0),
+      hechas: Number(item?.hechas || 0),
+      updated_at: item?.updated_at ?? null,
+    }));
+  },
+
+  getCalendarNotas: async (fecha: string, params?: { history_limit?: number }): Promise<{ notas: any[]; historial: any[] }> => {
+    const res = await httpClient.get(`/dashboard/calendario/${fecha}/notas`, { params });
+    const data = res.data as any;
+    return {
+      notas: Array.isArray(data?.notas) ? data.notas : [],
+      historial: Array.isArray(data?.historial) ? data.historial : [],
+    };
+  },
+
+  createCalendarNota: async (fecha: string, payload: { mensaje: string }): Promise<any> => {
+    const res = await httpClient.post(`/dashboard/calendario/${fecha}/notas`, payload);
+    return res.data as any;
+  },
+
+  updateCalendarNota: async (fecha: string, notaId: number, payload: { mensaje: string }): Promise<any> => {
+    const res = await httpClient.patch(`/dashboard/calendario/${fecha}/notas/${notaId}`, payload);
+    return res.data as any;
+  },
+
+  setCalendarNotaEstado: async (fecha: string, notaId: number, payload: { estado: 'pendiente' | 'hecha' }): Promise<any> => {
+    const res = await httpClient.patch(`/dashboard/calendario/${fecha}/notas/${notaId}/estado`, payload);
+    return res.data as any;
+  },
+
+  deleteCalendarNota: async (fecha: string, notaId: number): Promise<any> => {
+    const res = await httpClient.delete(`/dashboard/calendario/${fecha}/notas/${notaId}`);
     return res.data as any;
   },
 };

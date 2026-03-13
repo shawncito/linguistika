@@ -4,6 +4,62 @@ import { AppError } from '../../shared/errors/AppError.mjs';
 // DB stores estado as boolean; frontend expects 0/1
 const normalizeCurso = (c) => c ? { ...c, estado: c.estado ? 1 : 0 } : c;
 
+function getMissingColumnName(error) {
+  const message = String(error?.message || '');
+  const schemaCacheMatch = message.match(/Could not find the '([^']+)' column of '([^']+)'/i);
+  if (schemaCacheMatch?.[1]) return schemaCacheMatch[1];
+
+  const columnOnlyMatch = message.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (columnOnlyMatch?.[1]) return columnOnlyMatch[1];
+
+  return null;
+}
+
+async function insertWithMissingColumnFallback(table, row, maxRetries = 15) {
+  const workingRow = { ...row };
+  for (let i = 0; i < maxRetries; i += 1) {
+    const result = await supabase.from(table).insert(workingRow).select().single();
+    if (!result.error) return result;
+
+    const missingColumn = getMissingColumnName(result.error);
+    if (!missingColumn || !Object.prototype.hasOwnProperty.call(workingRow, missingColumn)) {
+      return result;
+    }
+
+    delete workingRow[missingColumn];
+  }
+
+  return supabase.from(table).insert(workingRow).select().single();
+}
+
+async function updateWithMissingColumnFallback(table, id, row, maxRetries = 15) {
+  const workingRow = { ...row };
+  for (let i = 0; i < maxRetries; i += 1) {
+    const result = await supabase
+      .from(table)
+      .update(workingRow)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (!result.error) return result;
+
+    const missingColumn = getMissingColumnName(result.error);
+    if (!missingColumn || !Object.prototype.hasOwnProperty.call(workingRow, missingColumn)) {
+      return result;
+    }
+
+    delete workingRow[missingColumn];
+  }
+
+  return supabase
+    .from(table)
+    .update(workingRow)
+    .eq('id', id)
+    .select()
+    .single();
+}
+
 export async function findAll() {
   const { data, error } = await supabase
     .from('cursos')
@@ -66,7 +122,7 @@ export async function create(payload) {
     created_by: payload.userId,
   };
 
-  const { data, error } = await supabase.from('cursos').insert(row).select().single();
+  const { data, error } = await insertWithMissingColumnFallback('cursos', row);
   if (error) throw error;
   return normalizeCurso(data);
 }
@@ -94,16 +150,11 @@ export async function update(id, payload) {
   }
   if (payload.estado !== undefined) updateData.estado = payload.estado === 1 || payload.estado === true;
 
-  const { data, error } = await supabase
-    .from('cursos')
-    .update(updateData)
-    .eq('id', id)
-    .select()
-    .single();
+  const { data, error } = await updateWithMissingColumnFallback('cursos', id, updateData);
   if (error) throw error;
 
   // Propagar tutor_id a matrículas activas del curso (complementa el trigger DB)
-  if (payload.tutor_id !== undefined) {
+  if (payload.tutor_id !== undefined && payload.tutor_id !== null) {
     await supabase
       .from('matriculas')
       .update({ tutor_id: payload.tutor_id })
@@ -124,7 +175,8 @@ export async function countMatriculas(cursoId) {
   const { count } = await supabase
     .from('matriculas')
     .select('*', { count: 'exact', head: true })
-    .eq('curso_id', cursoId);
+    .eq('curso_id', cursoId)
+    .eq('estado', true);
   return count ?? 0;
 }
 

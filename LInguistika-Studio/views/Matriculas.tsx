@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { usePersistentState } from '../lib/usePersistentState';
+import { uiConfirm } from '../lib/uiFeedback';
 import { useMatriculas, useRealtimeSubscription } from '../hooks';
 import { estudiantesService } from '../services/api/estudiantesService';
 import { cursosService } from '../services/api/cursosService';
@@ -24,8 +25,43 @@ const DIA_A_IDX: Record<string, number> = {
   'Sábado': 6,
 };
 
+const DIA_CANON_BY_NORM: Record<string, string> = {
+  domingo: 'Domingo',
+  dom: 'Domingo',
+  lunes: 'Lunes',
+  lun: 'Lunes',
+  martes: 'Martes',
+  mar: 'Martes',
+  miercoles: 'Miércoles',
+  mie: 'Miércoles',
+  jueves: 'Jueves',
+  jue: 'Jueves',
+  viernes: 'Viernes',
+  vie: 'Viernes',
+  sabado: 'Sábado',
+  sab: 'Sábado',
+};
+
+const normalizeDiaKey = (value: unknown): string => {
+  if (value == null) return '';
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+};
+
+const toCanonicalDia = (value: unknown): string | null => {
+  const norm = normalizeDiaKey(value);
+  return DIA_CANON_BY_NORM[norm] || null;
+};
+
 const getErrorMessage = (error: any) =>
   error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Error al guardar matrícula';
+
+const showActionAlert = (message: string) => {
+  window.alert(message);
+};
 
 const getBulkGrupoStudents = (bulkGrupoDetalle: any): any[] => {
   const raw = bulkGrupoDetalle?.estudiantes;
@@ -93,6 +129,7 @@ const Matriculas: React.FC = () => {
     curso_id: 0,
     tutor_id: 0,
     es_grupo: false,
+    grupo_id: '' as string,
     grupo_nombre: '' as string | '',
     estudiante_ids: [] as number[],
     grupo_origen: 'manual' as 'manual' | 'excel',
@@ -150,24 +187,26 @@ const Matriculas: React.FC = () => {
   useRealtimeSubscription(['estudiantes', 'cursos', 'tutores'], loadCatalogos);
 
   const handleSelectChange = (field: string, value: any) => {
-    const newFormData = { ...formData, [field]: parseInt(value) } as any;
-    setFormData(newFormData);
-    
-    // Si se selecciona un curso, obtener el tutor_id del curso
-    if (field === 'curso_id' || newFormData.curso_id) {
-      const cursoSeleccionado = cursos.find(c => c.id === newFormData.curso_id);
-      if (cursoSeleccionado && cursoSeleccionado.tutor_id) {
-        newFormData.tutor_id = cursoSeleccionado.tutor_id;
-        setFormData(newFormData);
+    const parsed = parseInt(value, 10) || 0;
+    setFormData((prev) => {
+      const next = { ...prev, [field]: parsed } as typeof prev;
+
+      // Si cambia el curso, reflejar tutor asignado (o limpiar si no tiene)
+      if (field === 'curso_id') {
+        const cursoSeleccionado = cursos.find((c) => c.id === parsed);
+        next.tutor_id = cursoSeleccionado?.tutor_id ? Number(cursoSeleccionado.tutor_id) : 0;
       }
-    }
+
+      return next;
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrors({});
 
     // Modo: crear matrícula desde grupo existente
-    if (formData.es_grupo && formData.grupo_origen === 'excel') {
+    if (!editingId && formData.es_grupo && formData.grupo_origen === 'excel') {
       if (!formData.bulk_grupo_id) return alert('Selecciona un grupo importado.');
 
       // Mini-confirm antes de crear
@@ -183,6 +222,7 @@ const Matriculas: React.FC = () => {
       try {
         setBulkConfirmLoading(true);
         await createFromBulkGrupo(formData.bulk_grupo_id, formData.grupo_nombre || null);
+        showActionAlert('Matrícula grupal creada correctamente desde grupo importado.');
         resetForm();
         return;
       } catch (error) {
@@ -242,6 +282,7 @@ const Matriculas: React.FC = () => {
         curso_id: formData.curso_id,
         tutor_id: tutorId,
         es_grupo: true,
+        grupo_id: formData.grupo_id || undefined,
         grupo_nombre: formData.grupo_nombre || null,
       } : {
         estudiante_id: formData.estudiante_id,
@@ -250,8 +291,13 @@ const Matriculas: React.FC = () => {
         es_grupo: false,
         grupo_nombre: null,
       };
-      if (editingId) await updateMatricula(editingId, payload);
-      else await createMatricula(payload);
+      if (editingId) {
+        await updateMatricula(editingId, payload);
+        showActionAlert('Matrícula actualizada correctamente.');
+      } else {
+        await createMatricula(payload);
+        showActionAlert(formData.es_grupo ? 'Matrícula grupal creada correctamente.' : 'Matrícula creada correctamente.');
+      }
       resetForm();
     } catch (error) {
       setErrors({ submit: getErrorMessage(error) });
@@ -259,14 +305,33 @@ const Matriculas: React.FC = () => {
   };
 
   const handleEdit = (matricula: Matricula) => {
+    const studentsFromList = Array.isArray((matricula as any).students)
+      ? (matricula as any).students
+      : Array.isArray((matricula as any).estudiantes_detalle)
+      ? (matricula as any).estudiantes_detalle
+      : [];
+
+    const studentsFromIds = Array.isArray((matricula as any).estudiante_ids)
+      ? (matricula as any).estudiante_ids.map((id: number) => ({ id }))
+      : [];
+
+    const mergedStudentIds = Array.from(
+      new Set(
+        [...studentsFromList, ...studentsFromIds]
+          .map((s: any) => Number(s?.id))
+          .filter((id: number) => Number.isFinite(id) && id > 0)
+      )
+    );
+
     setEditingId(matricula.id);
     setFormData({
       estudiante_id: matricula.estudiante_id,
       curso_id: matricula.curso_id,
       tutor_id: matricula.tutor_id,
       es_grupo: matricula.es_grupo === true,
+      grupo_id: matricula.grupo_id || '',
       grupo_nombre: matricula.grupo_nombre || '',
-      estudiante_ids: [],
+      estudiante_ids: mergedStudentIds,
       grupo_origen: 'manual',
       bulk_grupo_id: '',
     });
@@ -274,12 +339,19 @@ const Matriculas: React.FC = () => {
   };
 
   const handleCancel = async (id: number) => {
-    if (window.confirm('¿Confirmas que deseas cancelar esta matrícula?')) {
-      try {
-        await deleteMatricula(id);
-      } catch (error) {
-        alert('Error al cancelar la matrícula');
-      }
+    const ok = await uiConfirm({
+      title: '¿Cancelar esta matrícula?',
+      description: 'El registro quedará inactivo.',
+      confirmLabel: 'Cancelar matrícula',
+      danger: true,
+    });
+    if (!ok) return;
+
+    try {
+      await deleteMatricula(id);
+      showActionAlert('Matrícula cancelada correctamente.');
+    } catch (error) {
+      window.alert('Error al cancelar la matrícula');
     }
   };
 
@@ -290,6 +362,7 @@ const Matriculas: React.FC = () => {
       curso_id: 0,
       tutor_id: 0,
       es_grupo: false,
+      grupo_id: '',
       grupo_nombre: '',
       estudiante_ids: [],
       grupo_origen: 'manual',
@@ -495,8 +568,8 @@ const Matriculas: React.FC = () => {
 
   // Fechas exactas del mes actual por día de semana
   const renderFechasMes = (m: Matricula) => {
-    const schedule = m.curso_dias_schedule as any;
-    const turnos = m.curso_dias_turno as any;
+    const scheduleRaw = parseMaybeJSON(m.curso_dias_schedule as any);
+    const turnosRaw = parseMaybeJSON(m.curso_dias_turno as any);
 
     const now = new Date();
     const y = now.getFullYear();
@@ -517,24 +590,45 @@ const Matriculas: React.FC = () => {
       return fechas;
     };
 
-    if (schedule && Object.keys(schedule).length > 0) {
-      const diasConFechas = Object.keys(schedule).filter(dia => {
-        const fechas = fechasPorDia(dia);
-        return fechas.length > 0; // Solo mostrar si tiene fechas en este mes
+    const scheduleByDay = new Map<string, { hora_inicio?: string; hora_fin?: string; turno?: string }>();
+    if (Array.isArray(scheduleRaw)) {
+      scheduleRaw.forEach((row: any) => {
+        const dia = toCanonicalDia(row?.dia || row?.dia_semana || row?.day);
+        if (!dia) return;
+        scheduleByDay.set(dia, {
+          hora_inicio: row?.hora_inicio || row?.horaInicio || row?.start,
+          hora_fin: row?.hora_fin || row?.horaFin || row?.end,
+          turno: row?.turno,
+        });
       });
+    } else if (scheduleRaw && typeof scheduleRaw === 'object') {
+      Object.entries(scheduleRaw as Record<string, any>).forEach(([diaRaw, info]) => {
+        const dia = toCanonicalDia(diaRaw) || toCanonicalDia(info?.dia || info?.dia_semana || info?.day);
+        if (!dia || !info || typeof info !== 'object') return;
+        scheduleByDay.set(dia, {
+          hora_inicio: info?.hora_inicio || info?.horaInicio || info?.start,
+          hora_fin: info?.hora_fin || info?.horaFin || info?.end,
+          turno: info?.turno,
+        });
+      });
+    }
 
-      if (diasConFechas.length === 0) return null;
+    const scheduleRows = Array.from(scheduleByDay.entries())
+      .map(([dia, info]) => ({ dia, fechas: fechasPorDia(dia), info }))
+      .filter((row) => row.fechas.length > 0);
 
+    if (scheduleRows.length > 0) {
       return (
         <div className="mt-3 space-y-1">
-          {diasConFechas.map((dia) => {
-            const fechas = fechasPorDia(dia);
-            const info = schedule[dia];
+          {scheduleRows.map(({ dia, fechas, info }) => {
+            const hi = info?.hora_inicio || '';
+            const hf = info?.hora_fin || '';
+            const labelHorario = hi || hf ? `${hi}${hi && hf ? ' - ' : ''}${hf}` : info?.turno || 'Horario pendiente';
             return (
               <div key={dia} className="text-xs text-slate-300 flex items-center justify-between">
                 <span className="font-bold text-white">{dia.slice(0,3)}</span>
                 <span className="text-slate-400">{fechas.join(', ')}</span>
-                <span className="font-semibold text-slate-200">{info?.hora_inicio} - {info?.hora_fin}</span>
+                <span className="font-semibold text-slate-200">{labelHorario}</span>
               </div>
             );
           })}
@@ -542,27 +636,31 @@ const Matriculas: React.FC = () => {
       );
     }
 
-    if (turnos && Object.keys(turnos).length > 0) {
-      const diasConFechas = Object.keys(turnos).filter(dia => {
-        const fechas = fechasPorDia(dia);
-        return fechas.length > 0; // Solo mostrar si tiene fechas en este mes
+    const turnosByDay = new Map<string, string>();
+    if (turnosRaw && typeof turnosRaw === 'object' && !Array.isArray(turnosRaw)) {
+      Object.entries(turnosRaw as Record<string, any>).forEach(([diaRaw, turnoRaw]) => {
+        const dia = toCanonicalDia(diaRaw);
+        if (!dia) return;
+        const turno = String(turnoRaw || '').trim();
+        if (!turno) return;
+        turnosByDay.set(dia, turno);
       });
+    }
 
-      if (diasConFechas.length === 0) return null;
+    const turnoRows = Array.from(turnosByDay.entries())
+      .map(([dia, turno]) => ({ dia, fechas: fechasPorDia(dia), turno }))
+      .filter((row) => row.fechas.length > 0);
 
+    if (turnoRows.length > 0) {
       return (
         <div className="mt-3 space-y-1">
-          {diasConFechas.map((dia) => {
-            const fechas = fechasPorDia(dia);
-            const turno = turnos[dia];
-            return (
-              <div key={dia} className="text-xs text-slate-300 flex items-center justify-between">
-                <span className="font-bold text-white">{dia.slice(0,3)}</span>
-                <span className="text-slate-400">{fechas.join(', ')}</span>
-                <span className="font-semibold text-slate-200">{turno}</span>
-              </div>
-            );
-          })}
+          {turnoRows.map(({ dia, fechas, turno }) => (
+            <div key={dia} className="text-xs text-slate-300 flex items-center justify-between">
+              <span className="font-bold text-white">{dia.slice(0,3)}</span>
+              <span className="text-slate-400">{fechas.join(', ')}</span>
+              <span className="font-semibold text-slate-200">{turno}</span>
+            </div>
+          ))}
         </div>
       );
     }
@@ -783,7 +881,7 @@ const Matriculas: React.FC = () => {
                         variant="destructive" 
                         size="icon" 
                         onClick={() => handleCancel(m.id)} 
-                        className="h-9 w-9 bg-red-700 hover:bg-red-800 text-white border-0"
+                        className="h-9 w-9 bg-[#FFC800] hover:bg-[#FFD84D] text-[#051026] border-0"
                       >
                         <XCircle className="w-4 h-4" />
                       </Button>
@@ -905,7 +1003,7 @@ const Matriculas: React.FC = () => {
                     variant="destructive" 
                     size="icon" 
                     onClick={(e) => { e.stopPropagation(); handleCancel(m.id); }} 
-                    className="h-9 w-9 bg-red-700 hover:bg-red-800 text-white border-0"
+                    className="h-9 w-9 bg-[#FFC800] hover:bg-[#FFD84D] text-[#051026] border-0"
                   >
                     <XCircle className="w-4 h-4" />
                   </Button>
@@ -980,10 +1078,14 @@ const Matriculas: React.FC = () => {
                           }));
                         }}
                         className="mt-2"
+                        disabled={!!editingId}
                       >
                         <option value="manual">Seleccionar alumnos manualmente</option>
                         <option value="excel">Usar grupo existente</option>
                       </Select>
+                      {editingId && (
+                        <p className="text-xs text-slate-300 mt-2">El origen del grupo no se puede cambiar durante la edición.</p>
+                      )}
                     </div>
 
                     {formData.grupo_origen === 'excel' && (
@@ -1226,6 +1328,7 @@ const Matriculas: React.FC = () => {
                         try {
                           setBulkConfirmLoading(true);
                           await createFromBulkGrupo(bulkConfirmPayload.bulkId, bulkConfirmPayload.grupoNombre ?? null);
+                          showActionAlert('Matrícula grupal creada correctamente desde grupo importado.');
                           resetForm();
                         } catch (error) {
                           setErrors({ submit: getErrorMessage(error) });

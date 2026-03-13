@@ -3,11 +3,18 @@ import { supabase, supabaseAdmin } from '../../shared/config/supabaseClient.mjs'
 const diasSemanaES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const notasDb = supabaseAdmin ?? supabase;
 const TUTOR_NOTA_STATES = new Set(['pendiente', 'hecha']);
+const CALENDAR_NOTA_STATES = new Set(['pendiente', 'hecha']);
 
 function sanitizeTutorNoteMessage(value) {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
   if (!text) throw new Error('El mensaje de la nota es requerido');
   return text.slice(0, 5000);
+}
+
+function sanitizeCalendarNoteDate(value) {
+  const text = String(value ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new Error('Fecha inválida');
+  return text;
 }
 
 function summarizeNoteText(text) {
@@ -77,6 +84,71 @@ async function registrarActividadTutorNota({
       });
   } catch (error) {
     console.warn('TutorNotas activity log error:', error?.message || error);
+  }
+}
+
+async function registrarHistorialCalendarNota({
+  notaId,
+  fecha,
+  accion,
+  mensaje,
+  estado,
+  actor,
+  meta,
+}) {
+  const { error } = await notasDb
+    .from('calendario_notas_historial')
+    .insert({
+      nota_id: Number(notaId),
+      fecha: sanitizeCalendarNoteDate(fecha),
+      accion,
+      mensaje,
+      estado: estado ?? null,
+      actor_user_id: actor?.userId ?? null,
+      actor_name: actor?.name ?? actor?.email ?? null,
+      actor_role: actor?.role ?? null,
+      meta: meta ?? {},
+    });
+  if (error) throw error;
+}
+
+async function registrarActividadCalendarNota({
+  action,
+  summary,
+  fecha,
+  noteId,
+  actor,
+  meta,
+}) {
+  if (!supabaseAdmin) return;
+  const fechaKey = sanitizeCalendarNoteDate(fecha);
+  const route = `/api/v1/dashboard/calendario/${fechaKey}/notas${noteId ? `/${noteId}` : ''}`;
+  const method = action === 'create' ? 'POST' : action === 'delete' ? 'DELETE' : 'PATCH';
+  const entityId = noteId ? String(noteId) : fechaKey;
+  try {
+    await supabaseAdmin
+      .from('activity_logs')
+      .insert({
+        actor_user_id: actor?.userId ?? null,
+        actor_email: actor?.email ?? null,
+        actor_role: actor?.role ?? null,
+        actor_name: actor?.name ?? null,
+        action,
+        summary,
+        entity_type: 'calendario_nota',
+        entity_id: entityId,
+        method,
+        route,
+        status: 200,
+        request_id: null,
+        meta: {
+          fecha: fechaKey,
+          nota_id: noteId ? Number(noteId) : null,
+          ...(meta || {}),
+        },
+      });
+  } catch (error) {
+    console.warn('CalendarNotas activity log error:', error?.message || error);
   }
 }
 
@@ -715,6 +787,289 @@ export async function deleteTutorNota({ tutorId, notaId, actor }) {
       action: 'delete',
       summary: `Eliminó nota interna #${notaIdNum} del tutor #${tutorIdNum}`,
       tutorId: tutorIdNum,
+      noteId: notaIdNum,
+      actor,
+      meta: { mensaje: current.mensaje },
+    });
+  }
+
+  return { ok: true, nota_id: notaIdNum };
+}
+
+export async function listCalendarNotasSummary({ fechaInicio, fechaFin }) {
+  const start = sanitizeCalendarNoteDate(fechaInicio);
+  const end = sanitizeCalendarNoteDate(fechaFin);
+  if (start > end) throw new Error('Rango de fechas inválido');
+
+  const { data, error } = await notasDb
+    .from('calendario_notas')
+    .select('fecha,estado,updated_at')
+    .gte('fecha', start)
+    .lte('fecha', end)
+    .neq('estado', 'eliminada')
+    .order('fecha', { ascending: true });
+  if (error) throw error;
+
+  const summaryMap = new Map();
+  for (const row of data ?? []) {
+    const fecha = String(row?.fecha || '').slice(0, 10);
+    if (!fecha) continue;
+    const current = summaryMap.get(fecha) || {
+      fecha,
+      total: 0,
+      pendientes: 0,
+      hechas: 0,
+      updated_at: null,
+    };
+    current.total += 1;
+    if (row?.estado === 'hecha') current.hechas += 1;
+    else current.pendientes += 1;
+
+    const updatedAt = row?.updated_at ? String(row.updated_at) : null;
+    if (updatedAt && (!current.updated_at || updatedAt > current.updated_at)) {
+      current.updated_at = updatedAt;
+    }
+    summaryMap.set(fecha, current);
+  }
+
+  return Array.from(summaryMap.values()).sort((a, b) => a.fecha.localeCompare(b.fecha));
+}
+
+export async function listCalendarNotas(fecha, { historyLimit = 120 } = {}) {
+  const fechaKey = sanitizeCalendarNoteDate(fecha);
+  const limit = Number.isFinite(Number(historyLimit))
+    ? Math.min(Math.max(Number(historyLimit), 20), 300)
+    : 120;
+
+  const [notasRes, historialRes] = await Promise.all([
+    notasDb
+      .from('calendario_notas')
+      .select('id,fecha,mensaje,estado,creado_por,creado_por_nombre,actualizado_por,actualizado_por_nombre,eliminado_por,eliminado_por_nombre,hecha_en,eliminada_en,created_at,updated_at')
+      .eq('fecha', fechaKey)
+      .neq('estado', 'eliminada')
+      .order('created_at', { ascending: true }),
+    notasDb
+      .from('calendario_notas_historial')
+      .select('id,nota_id,fecha,accion,mensaje,estado,actor_user_id,actor_name,actor_role,created_at,meta')
+      .eq('fecha', fechaKey)
+      .order('created_at', { ascending: false })
+      .limit(limit),
+  ]);
+
+  if (notasRes.error) throw notasRes.error;
+  if (historialRes.error) throw historialRes.error;
+
+  return {
+    notas: notasRes.data ?? [],
+    historial: historialRes.data ?? [],
+  };
+}
+
+export async function createCalendarNota({ fecha, mensaje, actor }) {
+  const fechaKey = sanitizeCalendarNoteDate(fecha);
+  const mensajeClean = sanitizeTutorNoteMessage(mensaje);
+
+  const { data: inserted, error: insertError } = await notasDb
+    .from('calendario_notas')
+    .insert({
+      fecha: fechaKey,
+      mensaje: mensajeClean,
+      estado: 'pendiente',
+      creado_por: actor?.userId ?? null,
+      creado_por_nombre: actor?.name ?? actor?.email ?? null,
+      actualizado_por: actor?.userId ?? null,
+      actualizado_por_nombre: actor?.name ?? actor?.email ?? null,
+      hecha_en: null,
+      eliminada_en: null,
+      updated_at: new Date().toISOString(),
+    })
+    .select('id,fecha,mensaje,estado,creado_por,creado_por_nombre,actualizado_por,actualizado_por_nombre,eliminado_por,eliminado_por_nombre,hecha_en,eliminada_en,created_at,updated_at')
+    .single();
+  if (insertError) throw insertError;
+
+  await registrarHistorialCalendarNota({
+    notaId: inserted.id,
+    fecha: fechaKey,
+    accion: 'crear',
+    mensaje: inserted.mensaje,
+    estado: inserted.estado,
+    actor,
+    meta: { before: null, after: inserted.mensaje },
+  });
+
+  await registrarActividadCalendarNota({
+    action: 'create',
+    summary: `Registró nota interna del calendario para ${fechaKey}: ${summarizeNoteText(inserted.mensaje)}`,
+    fecha: fechaKey,
+    noteId: inserted.id,
+    actor,
+    meta: {
+      estado: inserted.estado,
+      mensaje: inserted.mensaje,
+    },
+  });
+
+  return inserted;
+}
+
+export async function updateCalendarNotaTexto({ fecha, notaId, mensaje, actor }) {
+  const fechaKey = sanitizeCalendarNoteDate(fecha);
+  const notaIdNum = Number(notaId);
+  if (!Number.isFinite(notaIdNum) || notaIdNum <= 0) throw new Error('Nota inválida');
+
+  const mensajeClean = sanitizeTutorNoteMessage(mensaje);
+
+  const { data: current, error: currentError } = await notasDb
+    .from('calendario_notas')
+    .select('id,fecha,mensaje,estado')
+    .eq('id', notaIdNum)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) throw new Error('Nota no encontrada');
+  if (String(current.fecha || '').slice(0, 10) !== fechaKey) throw new Error('La nota no pertenece a la fecha seleccionada');
+  if (current.estado === 'eliminada') throw new Error('No se puede editar una nota eliminada');
+
+  const { data: updated, error: updateError } = await notasDb
+    .from('calendario_notas')
+    .update({
+      mensaje: mensajeClean,
+      actualizado_por: actor?.userId ?? null,
+      actualizado_por_nombre: actor?.name ?? actor?.email ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', notaIdNum)
+    .select('id,fecha,mensaje,estado,creado_por,creado_por_nombre,actualizado_por,actualizado_por_nombre,eliminado_por,eliminado_por_nombre,hecha_en,eliminada_en,created_at,updated_at')
+    .single();
+  if (updateError) throw updateError;
+
+  await registrarHistorialCalendarNota({
+    notaId: notaIdNum,
+    fecha: fechaKey,
+    accion: 'editar',
+    mensaje: updated.mensaje,
+    estado: updated.estado,
+    actor,
+    meta: { before: current.mensaje, after: updated.mensaje },
+  });
+
+  await registrarActividadCalendarNota({
+    action: 'update',
+    summary: `Actualizó nota interna #${notaIdNum} del calendario (${fechaKey})`,
+    fecha: fechaKey,
+    noteId: notaIdNum,
+    actor,
+    meta: {
+      before: current.mensaje,
+      after: updated.mensaje,
+    },
+  });
+
+  return updated;
+}
+
+export async function setCalendarNotaEstado({ fecha, notaId, estado, actor }) {
+  const fechaKey = sanitizeCalendarNoteDate(fecha);
+  const notaIdNum = Number(notaId);
+  const estadoFinal = String(estado || '').trim().toLowerCase();
+  if (!Number.isFinite(notaIdNum) || notaIdNum <= 0) throw new Error('Nota inválida');
+  if (!CALENDAR_NOTA_STATES.has(estadoFinal)) throw new Error('Estado inválido');
+
+  const { data: current, error: currentError } = await notasDb
+    .from('calendario_notas')
+    .select('id,fecha,mensaje,estado')
+    .eq('id', notaIdNum)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) throw new Error('Nota no encontrada');
+  if (String(current.fecha || '').slice(0, 10) !== fechaKey) throw new Error('La nota no pertenece a la fecha seleccionada');
+  if (current.estado === 'eliminada') throw new Error('No se puede actualizar una nota eliminada');
+
+  const accion = estadoFinal === 'hecha' ? 'marcar_hecha' : 'reabrir';
+
+  const { data: updated, error: updateError } = await notasDb
+    .from('calendario_notas')
+    .update({
+      estado: estadoFinal,
+      hecha_en: estadoFinal === 'hecha' ? new Date().toISOString() : null,
+      actualizado_por: actor?.userId ?? null,
+      actualizado_por_nombre: actor?.name ?? actor?.email ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', notaIdNum)
+    .select('id,fecha,mensaje,estado,creado_por,creado_por_nombre,actualizado_por,actualizado_por_nombre,eliminado_por,eliminado_por_nombre,hecha_en,eliminada_en,created_at,updated_at')
+    .single();
+  if (updateError) throw updateError;
+
+  await registrarHistorialCalendarNota({
+    notaId: notaIdNum,
+    fecha: fechaKey,
+    accion,
+    mensaje: updated.mensaje,
+    estado: updated.estado,
+    actor,
+    meta: { before: current.estado, after: updated.estado },
+  });
+
+  await registrarActividadCalendarNota({
+    action: 'update',
+    summary: estadoFinal === 'hecha'
+      ? `Marcó como hecha la nota interna #${notaIdNum} del calendario (${fechaKey})`
+      : `Reabrió la nota interna #${notaIdNum} del calendario (${fechaKey})`,
+    fecha: fechaKey,
+    noteId: notaIdNum,
+    actor,
+    meta: {
+      before: current.estado,
+      after: updated.estado,
+    },
+  });
+
+  return updated;
+}
+
+export async function deleteCalendarNota({ fecha, notaId, actor }) {
+  const fechaKey = sanitizeCalendarNoteDate(fecha);
+  const notaIdNum = Number(notaId);
+  if (!Number.isFinite(notaIdNum) || notaIdNum <= 0) throw new Error('Nota inválida');
+
+  const { data: current, error: currentError } = await notasDb
+    .from('calendario_notas')
+    .select('id,fecha,mensaje,estado')
+    .eq('id', notaIdNum)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) throw new Error('Nota no encontrada');
+  if (String(current.fecha || '').slice(0, 10) !== fechaKey) throw new Error('La nota no pertenece a la fecha seleccionada');
+
+  if (current.estado !== 'eliminada') {
+    const { error: updateError } = await notasDb
+      .from('calendario_notas')
+      .update({
+        estado: 'eliminada',
+        eliminada_en: new Date().toISOString(),
+        eliminado_por: actor?.userId ?? null,
+        eliminado_por_nombre: actor?.name ?? actor?.email ?? null,
+        actualizado_por: actor?.userId ?? null,
+        actualizado_por_nombre: actor?.name ?? actor?.email ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', notaIdNum);
+    if (updateError) throw updateError;
+
+    await registrarHistorialCalendarNota({
+      notaId: notaIdNum,
+      fecha: fechaKey,
+      accion: 'eliminar',
+      mensaje: current.mensaje,
+      estado: 'eliminada',
+      actor,
+      meta: { before: current.estado, after: 'eliminada' },
+    });
+
+    await registrarActividadCalendarNota({
+      action: 'delete',
+      summary: `Eliminó nota interna #${notaIdNum} del calendario (${fechaKey})`,
+      fecha: fechaKey,
       noteId: notaIdNum,
       actor,
       meta: { mensaje: current.mensaje },

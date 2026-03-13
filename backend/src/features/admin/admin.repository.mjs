@@ -1,5 +1,10 @@
 import { supabaseAdmin } from '../../shared/config/supabaseClient.mjs';
 import AppError from '../../shared/errors/AppError.mjs';
+import {
+  buildAdminPaginas,
+  isPaginasTableMissingError,
+  resolvePageName,
+} from '../paginas/paginas.constants.mjs';
 
 function requireAdmin() {
   if (!supabaseAdmin) {
@@ -95,4 +100,47 @@ export async function deleteEmployee(userId) {
   if (delAuthErr) throw new AppError(delAuthErr.message, 400);
 
   return { ok: true, id: userId };
+}
+
+export async function listarPaginasAdmin() {
+  const admin = requireAdmin();
+  const { data, error } = await admin
+    .from('paginas_mantenimiento')
+    .select('slug, nombre, activa, desactivada_por, desactivada_por_nombre, mensaje, updated_at')
+    .order('slug');
+  if (error) {
+    if (isPaginasTableMissingError(error)) {
+      return buildAdminPaginas();
+    }
+    throw error;
+  }
+  return buildAdminPaginas(data ?? []);
+}
+
+export async function togglePaginaAdmin(slug, { activa, desactivada_por, desactivada_por_nombre, mensaje }) {
+  const admin = requireAdmin();
+  const slugNorm = String(slug || '').trim().toLowerCase();
+  if (!slugNorm) throw new AppError('Slug de página inválido', 400);
+
+  const update = {
+    slug: slugNorm,
+    nombre: resolvePageName(slugNorm),
+    activa,
+    updated_at: new Date().toISOString(),
+    desactivada_por: activa ? null : (desactivada_por ?? null),
+    desactivada_por_nombre: activa ? null : (desactivada_por_nombre ?? null),
+    mensaje: activa ? null : (mensaje ?? null),
+  };
+  const { data, error } = await admin
+    .from('paginas_mantenimiento')
+    .upsert(update, { onConflict: 'slug' })
+    .select('slug, nombre, activa, desactivada_por, desactivada_por_nombre, mensaje, updated_at')
+    .single();
+  if (error) {
+    if (isPaginasTableMissingError(error)) {
+      throw new AppError('Falta aplicar la migración 027_paginas_mantenimiento.sql en Supabase para poder guardar cambios de páginas.', 409);
+    }
+    throw new AppError(error.message, 400);
+  }
+  return data;
 }

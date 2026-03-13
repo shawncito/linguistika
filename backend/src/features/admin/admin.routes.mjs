@@ -12,4 +12,7 @@ router.get('/empleados', ctrl.listarEmpleados);
 router.patch('/empleados/:id', ctrl.actualizarEmpleado);
 router.delete('/empleados/:id', ctrl.eliminarEmpleado);
 
+router.get('/paginas', ctrl.listarPaginas);
+router.patch('/paginas/:slug', ctrl.togglePagina);
+
 export default router;
