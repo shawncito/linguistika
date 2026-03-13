@@ -6,7 +6,17 @@ const { pathToFileURL } = require('url');
 const dotenvPath = app.isPackaged
   ? path.join(process.resourcesPath, 'backend', '.env')
   : path.join(__dirname, '..', 'backend', '.env');
-require('dotenv').config({ path: dotenvPath });
+// Carga dotenv desde backend/node_modules para no depender de la raíz del proyecto.
+// En producción, backend es extraResources y tiene sus propias dependencias.
+const dotenvModPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'backend', 'node_modules', 'dotenv')
+  : path.join(__dirname, '..', 'backend', 'node_modules', 'dotenv');
+try {
+  require(dotenvModPath).config({ path: dotenvPath });
+} catch (e) {
+  // Si dotenv no está disponible, se continúa sin variables de entorno del .env
+  console.warn('[main] No se pudo cargar dotenv desde backend/node_modules:', e.message);
+}
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception (Electron main):', err);
